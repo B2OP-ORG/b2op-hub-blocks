@@ -1,50 +1,157 @@
-name: Deploy to GitHub Pages
+name: blocks
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "tsconfig*.json"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
-  group: pages
+  group: blocks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    name: Build blocks app
     runs-on: ubuntu-latest
+    outputs:
+      artifact: blocks-html
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "24"
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
-        run: npm run build -- --base=/${{ github.event.repository.name }}/
+        run: npm run build
 
-      - name: Add .nojekyll
-        run: touch dist/.nojekyll
+      - name: Package HTML
+        run: |
+          tar -C dist -czf blocks-html.tar.gz .
 
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: dist
+          name: blocks-html
+          path: blocks-html.tar.gz
+          retention-days: 14
 
   deploy:
-    needs: build
+    name: Deploy to private server
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    env:
+      BLOCKS_SSH_HOST: ${{ secrets.BLOCKS_SSH_HOST }}
+      BLOCKS_SSH_USER: ${{ secrets.BLOCKS_SSH_USER }}
+      BLOCKS_SSH_PORT: ${{ secrets.BLOCKS_SSH_PORT }}
+      BLOCKS_SSH_KEY: ${{ secrets.BLOCKS_SSH_KEY }}
+      BLOCKS_SSH_KNOWN_HOSTS: ${{ secrets.BLOCKS_SSH_KNOWN_HOSTS }}
+      BLOCKS_REMOTE_DIR: ${{ secrets.BLOCKS_REMOTE_DIR }}
+      BLOCKS_STAGING_DIR: ${{ secrets.BLOCKS_STAGING_DIR }}
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Verify deploy secrets are configured
+        id: gate
+        run: |
+          missing=0
+          for v in BLOCKS_SSH_HOST BLOCKS_SSH_USER BLOCKS_SSH_KEY; do
+            if [ -z "${!v}" ]; then
+              echo "::warning::secret $v not set — skipping upload"
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (for receiver script)
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: deploy
+
+      - name: Download build artifact
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: blocks-html
+          path: .
+
+      - name: Configure SSH
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$BLOCKS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$BLOCKS_SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$BLOCKS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${BLOCKS_SSH_PORT:-22}" -H "$BLOCKS_SSH_HOST" \
+              >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Ensure rsync is installed on the runner
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          if ! command -v rsync >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends rsync
+          fi
+          rsync --version | head -1
+
+      - name: Transfer receiver + tarball (rsync)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          PORT: ${{ secrets.BLOCKS_SSH_PORT }}
+        run: |
+          set -eu
+          PORT="${PORT:-22}"
+          TARGET="${BLOCKS_SSH_USER}@${BLOCKS_SSH_HOST}"
+          REMOTE_DIR="${BLOCKS_REMOTE_DIR:-/var/www/code}"
+          STAGING="${BLOCKS_STAGING_DIR:-/tmp/blocks-upload}"
+          SSH_CMD="ssh -i ~/.ssh/id_deploy -p $PORT -o BatchMode=yes"
+
+          $SSH_CMD "$TARGET" "mkdir -p '$STAGING' && command -v rsync >/dev/null" \
+            || { echo '::error::rsync missing on the blocks server'; exit 1; }
+
+          rsync -avz --checksum --partial \
+            -e "$SSH_CMD" \
+            deploy/receive.sh \
+            "${TARGET}:${STAGING}/receive.sh"
+
+          rsync -avz --partial --info=progress2 \
+            -e "$SSH_CMD" \
+            blocks-html.tar.gz \
+            "${TARGET}:${STAGING}/blocks-html.tar.gz"
+
+          $SSH_CMD "$TARGET" \
+            "chmod +x '$STAGING/receive.sh' && '$STAGING/receive.sh' \
+              --tarball '$STAGING/blocks-html.tar.gz' \
+              --dest '$REMOTE_DIR' \
+              --commit '${{ github.sha }}' \
+              --ref '${{ github.ref_name }}'"
+
+      - name: Wipe key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

@@ -545,17 +545,16 @@ function tryConsumeNeopixelInit(groups: Group[], i: number, ctx: Ctx): { block: 
   const numInputs = valueInput("NUM", initM[2], ctx.vars);
   if (!numInputs) return null;
   return {
-    block: { type: "neopixel_init", fields: { PORT: port, PIN: pin, EXIT_BTN: ctx.neopixelExitBtn }, inputs: numInputs },
+    block: { type: "neopixel_init", fields: { PORT: port, PIN: pin }, inputs: numInputs },
     end: j + 1,
   };
 }
 
-/** Groups whose entire header+body form NeoPixel helper defs / center hook. */
+/** Groups whose entire header+body form NeoPixel helper defs. */
 function isNeopixelHelperGroup(g: Group): boolean {
   const t = g.header.text;
   if (/^def _neopixel_hsv_to_rgb\(/.test(t)) return true;
   if (/^def _neopixel_draw_rainbow\(/.test(t)) return true;
-  if (/^def _neopixel_exit_\w+\(\s*\)\s*:$/.test(t)) return true;
   return false;
 }
 
@@ -621,7 +620,6 @@ interface Ctx {
   portKind: Map<string, DeviceKind>;
   keepRaw: Set<string>;
   vars: Set<string>;
-  neopixelExitBtn: string;
 }
 
 function chunkText(g: Group): string {
@@ -1021,7 +1019,6 @@ export function pythonToBlocks(source: string): Translation {
     portKind: new Map(),
     keepRaw: new Set(),
     vars: new Set(),
-    neopixelExitBtn: "none",
   };
 
   const { groups } = groupAt(lines, 0, lines.length, 0);
@@ -1046,31 +1043,6 @@ export function pythonToBlocks(source: string): Translation {
       }
     }
     strayGroups.push(g);
-  }
-
-  // Pick up exit btn from any `def _neopixel_exit_<btn>():` at module level.
-  for (const g of strayGroups) {
-    const m = /^def _neopixel_exit_(\w+)\(\s*\)\s*:$/.exec(g.header.text);
-    if (m) { ctx.neopixelExitBtn = m[1]; break; }
-  }
-  // If pythonGen absorbed the auto-hook into a user hat, strip the trailing
-  // `hub.ports.X.disable(False)` re-enable lines plus final `hub.exit()` so we
-  // don't materialize spurious `port_enable`/`hub_quit` blocks.
-  const REENABLE_RE = /^hub\.ports\.[A-D]\.disable\(False\)$/;
-  for (const h of buttonHatGroups) {
-    if (h.btn !== ctx.neopixelExitBtn) continue;
-    let k = h.body.length - 1;
-    // Trailing hub.exit()
-    while (k >= 0 && (h.body[k].text === "" || h.body[k].text.startsWith("#"))) k--;
-    if (k < 0 || h.body[k].text !== "hub.exit()") continue;
-    h.body.splice(k, 1);
-    // Preceding re-enable lines
-    for (let j = k - 1; j >= 0; j--) {
-      const line = h.body[j];
-      if (line.text === "" || line.text.startsWith("#")) continue;
-      if (REENABLE_RE.test(line.text)) { h.body.splice(j, 1); continue; }
-      break;
-    }
   }
 
   const btnHatBodyGroups: Group[][] = buttonHatGroups.map((h) => bodyToGroups(h.body));

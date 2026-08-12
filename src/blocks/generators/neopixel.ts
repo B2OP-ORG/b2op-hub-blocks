@@ -1,6 +1,6 @@
 import type { Block } from "blockly";
 import { Order, type PythonGenerator } from "blockly/python";
-import { needsLpf2, registerNeopixelReenable, type Port } from "../setup";
+import { needsLpf2, type Port } from "../setup";
 
 const KEY_MACHINE_IMPORT = "machine_import";
 const KEY_NEOPIXEL_IMPORT = "neopixel_import";
@@ -63,8 +63,6 @@ export function registerNeopixelGenerators(gen: PythonGenerator): void {
     const port = block.getFieldValue("PORT") as Port;
     const pin = block.getFieldValue("PIN");
     const num = val(block, "NUM", "8");
-    const exitBtn = block.getFieldValue("EXIT_BTN") || "center";
-    registerNeopixelReenable(gen, port, exitBtn);
     return [
       `hub.ports.${port}.disable()`,
       `global leds`,

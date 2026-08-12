@@ -265,6 +265,81 @@ class _buttons_module:
         """Reinstall a registry captured by :meth:`_snapshot`."""
         ...
 
+class _pwm_module:
+    """Direct access to the on-board PCA9685 16-channel PWM driver.
+
+    The same chip drives motor H-bridges (Port A/B/C/D), the LCD
+    backlight, and the hub-LED power rail on the LEGO_Hub board — so
+    writing to a channel already claimed by another subsystem will
+    fight with the C-side driver. Free channels vary by board; check
+    the board's ``Board.h`` before use.
+
+    Frequency is a single shared prescaler for all 16 channels; the
+    firmware initialises it to 1 kHz to keep motor PWM inaudible.
+    Changing it from Python affects everything using the chip.
+
+    Duty is 12-bit (``0..MAX_DUTY`` = ``0..4095``).
+    """
+
+    CHANNELS: int
+    """Number of PWM channels on the PCA9685 (16)."""
+    MAX_DUTY: int
+    """Maximum duty value (4095; 12-bit resolution)."""
+
+    def set(self, channel: int, value: int) -> None:
+        """Set channel ``0..15`` to 12-bit duty ``0..4095``."""
+        ...
+    def get(self, channel: int) -> int:
+        """Read back the current 12-bit duty of ``channel``."""
+        ...
+    def on(self, channel: int) -> None:
+        """Drive ``channel`` fully on (equivalent to full-cycle high)."""
+        ...
+    def off(self, channel: int) -> None:
+        """Drive ``channel`` fully off."""
+        ...
+    def frequency(self, hz: float) -> None:
+        """Set the shared prescaler frequency (24..1526 Hz).
+
+        Affects every channel on the chip — use only if you understand
+        what other subsystems depend on the current rate.
+        """
+        ...
+
+class _battery_module:
+    """Battery voltage + charging status.
+
+    Voltage comes from the on-board resistor divider ADC; charging
+    state is decoded from the IP2366's ISTAT (RXD0) and CSTAT (SC16IS750
+    P0) open-drain outputs. Values are refreshed on the C-side hub loop
+    (every ~2 s).
+    """
+
+    UNKNOWN: int
+    """State value: pins not sampled yet, or both LOW (unusual)."""
+    ON_BATTERY: int
+    """State value: no charger present / charger detached."""
+    CHARGING: int
+    """State value: charge current flowing (ISTAT LOW)."""
+    FULLY_CHARGED: int
+    """State value: charger present, charge cycle complete (CSTAT LOW)."""
+
+    def voltage(self) -> int:
+        """Latest pack voltage in millivolts (0 if ADC not configured)."""
+        ...
+    def percent(self) -> int:
+        """Voltage mapped to 0..100 % via the Lpf2 default linear curve."""
+        ...
+    def state(self) -> int:
+        """Current state: one of the module constants above."""
+        ...
+    def charging(self) -> bool:
+        """True when charge current is actively flowing."""
+        ...
+    def fully_charged(self) -> bool:
+        """True when charger is present and the charge cycle has completed."""
+        ...
+
 class _i2c:
     """Shared internal I2C bus (``Wire1`` on the C++ side).
 
@@ -423,6 +498,10 @@ lcd: _lcd_module
 """LCD + LVGL control (see :class:`_lcd_module`)."""
 buttons: _buttons_module
 """Button API (see :class:`_buttons_module`)."""
+battery: _battery_module
+"""Battery voltage + charging status (see :class:`_battery_module`)."""
+pwm: _pwm_module
+"""On-board PCA9685 PWM driver (see :class:`_pwm_module`)."""
 i2c: _i2c
 """Shared internal I2C bus (Grove + on-board devices). See :class:`_i2c`."""
 
@@ -464,6 +543,10 @@ def set_frame_sink(cb: Optional[Callable[[bytes], None]]) -> None:
 
 _HandlerName = Literal["setup", "loop"]
 _Handler = Callable[[], None]
+    
+# Hub shim additions. Appended verbatim to the fw-sourced hub.pyi by
+# scripts/sync-stubs.mjs. Declares symbols that live in the on-device
+# Python shim layer but are not present in the firmware C module stubs.
 
 def on(name: _HandlerName) -> Callable[[_Handler], _Handler]:
     """Event decorator injected by the program runner in ``fs/main.py``.
@@ -474,11 +557,6 @@ def on(name: _HandlerName) -> Callable[[_Handler], _Handler]:
     ``name`` is ``"setup"`` (runs once) or ``"loop"`` (runs each tick).
     """
     ...
-
-# --- shim overlay (scripts/stubs-overlay) ------------------------
-# Hub shim additions. Appended verbatim to the fw-sourced hub.pyi by
-# scripts/sync-stubs.mjs. Declares symbols that live in the on-device
-# Python shim layer but are not present in the firmware C module stubs.
 
 # Sleep for `seconds` (float, seconds). Compatible with `time.sleep`, but
 # calls `hub.buttons.poll()` while waiting so button callbacks still fire.
@@ -492,4 +570,6 @@ def sleep_ms(ms: int) -> None: ...
 # Request the runner to stop the user program. Sets the runner's STOP
 # flag; the main loop exits after the current iteration and any active
 # `hub.sleep`/`hub.sleep_ms` returns early. Does not raise.
-def exit() -> None: ...
+def exit() -> NoReturn: ...
+
+# --- shim overlay (scripts/stubs-overlay) ------------------------

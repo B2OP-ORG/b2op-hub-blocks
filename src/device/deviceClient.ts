@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocol, validatePath, type UploadPolicy } from "./protocol";
+import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 
 export type ConsoleSink = (text: string) => void;
@@ -95,6 +95,14 @@ export class DeviceClient {
 
   async stop(): Promise<void> {
     await this.proto.stop();
+  }
+
+  setProgramEndSink(sink: ProgramEndSink | null): void {
+    this.proto.setProgramEndSink(sink);
+  }
+
+  isProgramRunning(): boolean {
+    return this.proto.isProgramRunning();
   }
 
   async readFile(path: string, opts: { timeoutMs?: number } = {}): Promise<string> {

@@ -17,6 +17,7 @@ interface AppState {
   device: DeviceClient | null;
   connection: ConnectionState;
   connectionError: string | null;
+  running: boolean;
   console: ConsoleEntry[];
   /** JSON snapshot of the last explicitly-saved project. Empty until save. */
   savedSnapshot: string;
@@ -28,6 +29,7 @@ interface AppState {
   updateSettings: (patch: Partial<ProjectSettings>) => void;
   setDevice: (d: DeviceClient | null) => void;
   setConnection: (s: ConnectionState, err?: string) => void;
+  setRunning: (r: boolean) => void;
   appendConsole: (kind: ConsoleEntry["kind"], text: string) => void;
   clearConsole: () => void;
 }
@@ -42,6 +44,7 @@ export const useApp = create<AppState>((set) => ({
   device: null,
   connection: "disconnected",
   connectionError: null,
+  running: false,
   console: [],
   savedSnapshot: JSON.stringify(INITIAL_PROJECT),
   setProject: (project) => set({ project }),
@@ -55,6 +58,7 @@ export const useApp = create<AppState>((set) => ({
   setDevice: (device) => set({ device }),
   setConnection: (connection, err) =>
     set({ connection, connectionError: err ?? null }),
+  setRunning: (running) => set({ running }),
   appendConsole: (kind, text) =>
     set((s) => {
       const next = s.console.length >= MAX_CONSOLE

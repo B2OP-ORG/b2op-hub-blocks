@@ -45,6 +45,11 @@ const dec = new TextDecoder("utf-8", { fatal: false });
 
 export type StdoutSink = (chunk: string) => void;
 export type StderrSink = (chunk: string) => void;
+export interface ProgramEndInfo {
+  ok: boolean;
+  message: string;
+}
+export type ProgramEndSink = (info: ProgramEndInfo) => void;
 
 interface Waiter {
   resolve: (reply: FrameReply) => void;
@@ -74,6 +79,8 @@ export class HubProtocol {
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
   private onStderr: StderrSink | null = null;
+  private onProgramEnd: ProgramEndSink | null = null;
+  private programRunning = false;
   private waiters: Waiter[] = [];
   private state: ParseState = {
     headerBuf: null,
@@ -98,6 +105,10 @@ export class HubProtocol {
       w.reject(new Error("Disposed"));
     }
     this.waiters = [];
+    if (this.programRunning) {
+      this.programRunning = false;
+      this.onProgramEnd?.({ ok: false, message: "disconnected" });
+    }
   }
 
   setStdoutSink(sink: StdoutSink | null): void {
@@ -106,6 +117,14 @@ export class HubProtocol {
 
   setStderrSink(sink: StderrSink | null): void {
     this.onStderr = sink;
+  }
+
+  setProgramEndSink(sink: ProgramEndSink | null): void {
+    this.onProgramEnd = sink;
+  }
+
+  isProgramRunning(): boolean {
+    return this.programRunning;
   }
 
   async ping(timeoutMs = 3000): Promise<void> {    const reply = await this.send(enc.encode("#FR:PING\n"), timeoutMs);
@@ -127,11 +146,18 @@ export class HubProtocol {
   async runProgram(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.send(enc.encode(`#FR:RUN ${path}\n`), timeoutMs);
     if (reply.kind !== "OK") throw new Error(reply.message || "RUN failed");
+    this.programRunning = true;
   }
 
   async stop(timeoutMs = 3000): Promise<void> {
     const reply = await this.send(enc.encode("#FR:STOP\n"), timeoutMs);
     if (reply.kind !== "OK") throw new Error(reply.message || "STOP failed");
+    // The runner also emits `OK done <path>` shortly after; that frame is
+    // dropped since programRunning is already false here.
+    if (this.programRunning) {
+      this.programRunning = false;
+      this.onProgramEnd?.({ ok: true, message: "stopped" });
+    }
   }
 
   async upload(path: string, bytes: Uint8Array, timeoutMs = 3000): Promise<void> {
@@ -252,8 +278,20 @@ export class HubProtocol {
     const kind = spaceIdx >= 0 ? header.slice(0, spaceIdx) : header;
     const rest = spaceIdx >= 0 ? header.slice(spaceIdx + 1) : "";
     if (kind === "OK") {
+      // Program lifecycle: `OK done <path>` arrives after the runner returns.
+      if (this.programRunning && rest.startsWith("done ")) {
+        this.programRunning = false;
+        this.onProgramEnd?.({ ok: true, message: rest });
+        return;
+      }
       this.resolveNext({ kind: "OK", message: rest });
     } else if (kind === "ERR") {
+      // Unsolicited ERR while a program is running = traceback from the runner.
+      if (this.programRunning && this.waiters.length === 0) {
+        this.programRunning = false;
+        this.onProgramEnd?.({ ok: false, message: rest });
+        return;
+      }
       this.resolveNext({ kind: "ERR", message: rest });
     } else if (kind === "DATA" || kind === "OUT" || kind === "STDERR") {
       const spIdx = rest.indexOf(" ");

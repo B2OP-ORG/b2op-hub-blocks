@@ -9,7 +9,7 @@ import { saveLastDeviceName } from "../project/storage";
 import { newPythonProject } from "../project/format";
 
 export function DeviceBar() {
-  const { device, connection, connectionError, setDevice, setConnection, appendConsole, project, pythonPreview } = useApp();
+  const { device, connection, connectionError, running, setDevice, setConnection, setRunning, appendConsole, project, pythonPreview } = useApp();
   const loadProject = useApp((s) => s.loadProject);
   const [busy, setBusy] = useState(false);
   const dark = project.type === "python";
@@ -28,11 +28,17 @@ export function DeviceBar() {
       transport.onDisconnect(() => {
         setConnection("disconnected");
         setDevice(null);
+        setRunning(false);
         appendConsole("info", "[device disconnected]\n");
       });
       await client.connect();
+      client.setProgramEndSink((info) => {
+        setRunning(false);
+        appendConsole(info.ok ? "info" : "err", `[program ${info.ok ? "ended" : "error"}${info.message ? ": " + info.message : ""}]\n`);
+      });
       setDevice(client);
       setConnection("connected");
+      setRunning(false);
       saveLastDeviceName(transport.info.name);
       appendConsole("info", `[connected: ${transport.info.name}]\n`);
     } catch (e) {
@@ -53,6 +59,7 @@ export function DeviceBar() {
       await device.disconnect();
       setDevice(null);
       setConnection("disconnected");
+      setRunning(false);
     } finally {
       setBusy(false);
     }
@@ -73,6 +80,7 @@ export function DeviceBar() {
         autoRun: true,
         onStdout: (t) => appendConsole("out", t),
       });
+      setRunning(true);
     } catch (e) {
       appendConsole("err", `[run failed: ${(e as Error).message}]\n`);
     } finally {
@@ -82,11 +90,15 @@ export function DeviceBar() {
 
   const stop = async () => {
     if (!device) return;
+    setBusy(true);
     try {
       await device.stop();
+      setRunning(false);
       appendConsole("info", "[stop]\n");
     } catch (e) {
       appendConsole("err", `[stop failed: ${(e as Error).message}]\n`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -127,6 +139,7 @@ export function DeviceBar() {
         autoRun: project.settings.autoRunAfterUpload,
         onStdout: (t) => appendConsole("out", t),
       });
+      if (project.settings.autoRunAfterUpload) setRunning(true);
       appendConsole("info", `[upload OK: ${path} (${bytes.length}B)]\n`);
     } catch (e) {
       appendConsole("err", `[upload failed: ${(e as Error).message}]\n`);
@@ -135,7 +148,11 @@ export function DeviceBar() {
     }
   };
 
-  const status = connection === "connected" ? `Connected` : connection === "connecting" ? "Connecting…" : connection === "error" ? `Error: ${connectionError}` : "Disconnected";
+  const status = connection === "connected"
+    ? (running ? "Connected · Running" : "Connected · Idle")
+    : connection === "connecting" ? "Connecting…"
+    : connection === "error" ? `Error: ${connectionError}`
+    : "Disconnected";
 
   const barBg = dark ? "#0b1216" : "#e0eff4";
   const barBorder = dark ? "#164e63" : "#b6dbe4";
@@ -150,6 +167,9 @@ export function DeviceBar() {
     borderRadius: 6,
     fontWeight: 600,
   };
+
+  const disabledStyle = (base: React.CSSProperties, disabled: boolean): React.CSSProperties =>
+    disabled ? { ...base, opacity: 0.45, cursor: "not-allowed" } : base;
 
   const primaryBtn: React.CSSProperties = {
     ...btnStyle,
@@ -172,15 +192,18 @@ export function DeviceBar() {
     border: dark ? "1px solid #1a5a30" : "1px solid #a9dcbc",
   };
 
-  const badgeBg = (kind: "ok" | "err" | "idle") =>
+  const badgeBg = (kind: "ok" | "err" | "idle" | "run") =>
     dark
-      ? kind === "ok" ? "#0f3e21" : kind === "err" ? "#4a1414" : "#111a20"
-      : kind === "ok" ? "#d7f2e0" : kind === "err" ? "#f9d7d7" : "#dff2f8";
-  const badgeFg = (kind: "ok" | "err" | "idle") =>
+      ? kind === "ok" ? "#0f3e21" : kind === "err" ? "#4a1414" : kind === "run" ? "#3a2a05" : "#111a20"
+      : kind === "ok" ? "#d7f2e0" : kind === "err" ? "#f9d7d7" : kind === "run" ? "#fff2c4" : "#dff2f8";
+  const badgeFg = (kind: "ok" | "err" | "idle" | "run") =>
     dark
-      ? kind === "ok" ? "#a9dcbc" : kind === "err" ? "#ffb0b0" : "#dff5fb"
-      : kind === "ok" ? "#0f5e2f" : kind === "err" ? "#8a1c1c" : "#0b3b48";
-  const kind: "ok" | "err" | "idle" = connection === "connected" ? "ok" : connection === "error" ? "err" : "idle";
+      ? kind === "ok" ? "#a9dcbc" : kind === "err" ? "#ffb0b0" : kind === "run" ? "#ffd166" : "#dff5fb"
+      : kind === "ok" ? "#0f5e2f" : kind === "err" ? "#8a1c1c" : kind === "run" ? "#8a5a00" : "#0b3b48";
+  const kind: "ok" | "err" | "idle" | "run" =
+    connection === "connected"
+      ? (running ? "run" : "ok")
+      : connection === "error" ? "err" : "idle";
 
   return (
     <div style={{ display: "flex", gap: 8, padding: "6px 14px", background: barBg, color: barText, alignItems: "center", borderBottom: `1px solid ${barBorder}` }}>
@@ -198,11 +221,53 @@ export function DeviceBar() {
         </>
       ) : (
         <>
-          <button type="button" style={btnStyle} disabled={busy} onClick={disconnect}>Disconnect</button>
-          <button type="button" style={successBtn} disabled={busy} onClick={run}>Run</button>
-          <button type="button" style={dangerBtn} disabled={busy} onClick={stop}>Stop</button>
-          <button type="button" style={primaryBtn} disabled={busy} onClick={upload}>Upload</button>
-          <button type="button" style={btnStyle} disabled={busy} onClick={loadFromDevice} title="Read a .py file from the device">Load</button>
+          <button
+            type="button"
+            style={disabledStyle(btnStyle, busy)}
+            disabled={busy}
+            onClick={disconnect}
+          >
+            Disconnect
+          </button>
+          <button
+            type="button"
+            style={disabledStyle(successBtn, busy || running)}
+            disabled={busy || running}
+            onClick={run}
+            title={running ? "A program is already running — stop it first" : ""}
+          >
+            Run
+          </button>
+          <button
+            type="button"
+            style={disabledStyle(dangerBtn, busy || !running)}
+            disabled={busy || !running}
+            onClick={stop}
+            title={!running ? "No program running" : ""}
+          >
+            Stop
+          </button>
+          {!running && (
+            <>
+              <button
+                type="button"
+                style={disabledStyle(primaryBtn, busy)}
+                disabled={busy}
+                onClick={upload}
+              >
+                Upload
+              </button>
+              <button
+                type="button"
+                style={disabledStyle(btnStyle, busy)}
+                disabled={busy}
+                onClick={loadFromDevice}
+                title="Read a .py file from the device"
+              >
+                Load
+              </button>
+            </>
+          )}
         </>
       )}
       <span

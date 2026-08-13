@@ -71,8 +71,20 @@ export class BleTransport implements Transport {
   }
 
   write(chunk: Uint8Array): Promise<void> {
+    return this.doWrite(chunk, /*fast=*/ false);
+  }
+
+  writeFast(chunk: Uint8Array): Promise<void> {
+    return this.doWrite(chunk, /*fast=*/ true);
+  }
+
+  private doWrite(chunk: Uint8Array, fast: boolean): Promise<void> {
     if (!this.rxChar) throw new TransportError("Not connected");
     const rx = this.rxChar;
+    // writeValueWithoutResponse is a real speedup: browser can queue multiple
+    // writes per BLE conn interval, whereas writeValueWithResponse serializes
+    // one write per interval. Caller must have app-layer integrity checking
+    // (payload length verified by device) since silent drops are possible.
     for (let offset = 0; offset < chunk.length; offset += this.chunkSize) {
       const slice = chunk.subarray(offset, offset + this.chunkSize);
       this.writeQueue = this.writeQueue.then(async () => {
@@ -80,12 +92,13 @@ export class BleTransport implements Transport {
         const buf = new Uint8Array(slice.byteLength);
         buf.set(slice);
         try {
-          // Use with-response for reliability. writeValueWithoutResponse can
-          // silently drop chunks on Linux/BlueZ when MTU or flow-control state
-          // isn't ideal.
-          await rx.writeValueWithResponse(buf);
+          if (fast) {
+            await rx.writeValueWithoutResponse(buf);
+          } else {
+            await rx.writeValueWithResponse(buf);
+          }
         } catch (e) {
-          console.error("[ble] write failed at offset", offset, "len", slice.byteLength, e);
+          console.error("[ble] write failed at offset", offset, "len", slice.byteLength, "fast=", fast, e);
           throw e;
         }
       });

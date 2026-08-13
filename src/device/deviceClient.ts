@@ -54,12 +54,23 @@ export class DeviceClient {
       }
     }
     if (pinged && this.transport.setChunkSize) {
-      try {
-        const mtu = await this.proto.mtu(1500);
-        // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
-        this.transport.setChunkSize(mtu - 3);
-      } catch {
-        // Handshake optional — device without MTU support keeps default chunk.
+      // Device queries `_ble_uart.instance().mtu()`, which reflects the last
+      // ATT MTU exchange. Peripheral triggers the exchange on connect, but it
+      // takes a few conn intervals; a query fired immediately after ping may
+      // still see the default 23. Retry once after a short delay if so.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const mtu = await this.proto.mtu(1500);
+          if (mtu > 23 || attempt === 1) {
+            // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
+            this.transport.setChunkSize(mtu - 3);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 400));
+        } catch {
+          // Handshake optional — device without MTU support keeps default chunk.
+          break;
+        }
       }
     }
   }
@@ -88,8 +99,8 @@ export class DeviceClient {
     this.proto.setStdoutSink(outSink);
     this.proto.setStderrSink(errSink);
     const bytes = new TextEncoder().encode(code);
-    await this.proto.upload(path, bytes, 3000);
-    await this.proto.runProgram(path, opts.timeoutMs ?? 3000);
+    await this.proto.upload(path, bytes);
+    await this.proto.runProgram(path, opts.timeoutMs ?? 15000);
     return { stdout, stderr };
   }
 
@@ -116,7 +127,7 @@ export class DeviceClient {
     const errSink = opts.onStderr ? (t: string) => opts.onStderr!(t) : null;
     this.proto.setStdoutSink(outSink);
     this.proto.setStderrSink(errSink);
-    await this.proto.upload(path, bytes, 3000);
+    await this.proto.upload(path, bytes, 15000, opts.onProgress);
     opts.onProgress?.(bytes.length, bytes.length);
     if (opts.autoRun) {
       await this.proto.runProgram(path);

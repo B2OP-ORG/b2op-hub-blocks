@@ -19,6 +19,14 @@ export interface Transport {
   onDisconnect(cb: () => void): Unsubscribe;
   /** Optional: set max payload per write. BLE uses this after MTU handshake. */
   setChunkSize?(bytes: number): void;
+  /**
+   * Optional fast-path write. On BLE this maps to writeValueWithoutResponse
+   * (fire-and-forget, multiple writes per conn interval, no per-write ack).
+   * Callers must have app-layer integrity checking — silent drops possible
+   * on Linux/BlueZ under flow-control edge cases. Falls back to `write` if
+   * not implemented.
+   */
+  writeFast?(chunk: Uint8Array): Promise<void>;
 }
 
 export class TransportError extends Error {

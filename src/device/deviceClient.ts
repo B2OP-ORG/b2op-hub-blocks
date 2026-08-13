@@ -88,7 +88,7 @@ export class DeviceClient {
     this.proto.setStdoutSink(outSink);
     this.proto.setStderrSink(errSink);
     const bytes = new TextEncoder().encode(code);
-    await this.proto.upload(path, bytes, 3000);
+    await this.proto.upload(path, bytes);
     await this.proto.runProgram(path, opts.timeoutMs ?? 3000);
     return { stdout, stderr };
   }
@@ -116,7 +116,7 @@ export class DeviceClient {
     const errSink = opts.onStderr ? (t: string) => opts.onStderr!(t) : null;
     this.proto.setStdoutSink(outSink);
     this.proto.setStderrSink(errSink);
-    await this.proto.upload(path, bytes, 3000);
+    await this.proto.upload(path, bytes, 15000, opts.onProgress);
     opts.onProgress?.(bytes.length, bytes.length);
     if (opts.autoRun) {
       await this.proto.runProgram(path);

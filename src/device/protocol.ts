@@ -13,7 +13,9 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   #FR:PING\n                             - health check
  *
  * Device → Web:
- *   #FR:OK <msg>\n                         - control success
+ *   #FR:ACK <msg>\n                        - long op accepted (header parsed); resets idle timeout
+ *   #FR:PROGRESS <sent>/<total> <msg>\n    - long op progress; resets idle timeout
+ *   #FR:OK <msg>\n                         - control success (final for long ops)
  *   #FR:ERR <msg>\n                        - control error
  *   #FR:DATA <len>\n<len bytes>            - binary payload (READ)
  *   #FR:OUT <len>\n<len bytes>             - stdout chunk (unsolicited, from sys.stdout)
@@ -51,10 +53,19 @@ export interface ProgramEndInfo {
 }
 export type ProgramEndSink = (info: ProgramEndInfo) => void;
 
+export type ProgressSink = (sent: number, total: number) => void;
+
 interface Waiter {
   resolve: (reply: FrameReply) => void;
   reject: (e: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
+  idleTimeoutMs: number;
+  onProgress?: ProgressSink;
+}
+
+interface SendOptions {
+  timeoutMs: number;
+  onProgress?: ProgressSink;
 }
 
 export interface FrameReply {
@@ -127,7 +138,8 @@ export class HubProtocol {
     return this.programRunning;
   }
 
-  async ping(timeoutMs = 3000): Promise<void> {    const reply = await this.send(enc.encode("#FR:PING\n"), timeoutMs);
+  async ping(timeoutMs = 3000): Promise<void> {
+    const reply = await this.send(enc.encode("#FR:PING\n"), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(reply.message || "PING failed");
   }
 
@@ -136,7 +148,7 @@ export class HubProtocol {
    * Returns the parsed integer, or throws on ERR / malformed reply.
    */
   async mtu(timeoutMs = 3000): Promise<number> {
-    const reply = await this.send(enc.encode("#FR:MTU\n"), timeoutMs);
+    const reply = await this.send(enc.encode("#FR:MTU\n"), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(reply.message || "MTU failed");
     const m = /^MTU=(\d+)$/.exec(reply.message.trim());
     if (!m) throw new Error(`MTU: bad reply "${reply.message}"`);
@@ -144,13 +156,13 @@ export class HubProtocol {
   }
 
   async runProgram(path: string, timeoutMs = 3000): Promise<void> {
-    const reply = await this.send(enc.encode(`#FR:RUN ${path}\n`), timeoutMs);
+    const reply = await this.send(enc.encode(`#FR:RUN ${path}\n`), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(reply.message || "RUN failed");
     this.programRunning = true;
   }
 
   async stop(timeoutMs = 3000): Promise<void> {
-    const reply = await this.send(enc.encode("#FR:STOP\n"), timeoutMs);
+    const reply = await this.send(enc.encode("#FR:STOP\n"), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(reply.message || "STOP failed");
     // The runner also emits `OK done <path>` shortly after; that frame is
     // dropped since programRunning is already false here.
@@ -160,30 +172,40 @@ export class HubProtocol {
     }
   }
 
-  async upload(path: string, bytes: Uint8Array, timeoutMs = 3000): Promise<void> {
+  async upload(
+    path: string,
+    bytes: Uint8Array,
+    idleTimeoutMs = 15000,
+    onProgress?: ProgressSink,
+  ): Promise<void> {
     const header = enc.encode(`#FR:UPLOAD ${path} ${bytes.length}\n`);
     const frame = new Uint8Array(header.length + bytes.length);
     frame.set(header, 0);
     frame.set(bytes, header.length);
-    const reply = await this.send(frame, timeoutMs);
+    const reply = await this.send(frame, { timeoutMs: idleTimeoutMs, onProgress });
     if (reply.kind !== "OK") throw new Error(reply.message || "UPLOAD failed");
   }
 
   async readFile(path: string, timeoutMs = 10000): Promise<Uint8Array> {
-    const reply = await this.send(enc.encode(`#FR:READ ${path}\n`), timeoutMs);
+    const reply = await this.send(enc.encode(`#FR:READ ${path}\n`), { timeoutMs });
     if (reply.kind === "ERR") throw new Error(reply.message);
     if (reply.kind !== "DATA" || !reply.data) throw new Error("READ: expected DATA reply");
     return reply.data;
   }
 
-  private send(frame: Uint8Array, timeoutMs: number): Promise<FrameReply> {
+  private send(frame: Uint8Array, opts: SendOptions): Promise<FrameReply> {
     const p = new Promise<FrameReply>((resolve, reject) => {
-      const w: Waiter = { resolve, reject };
+      const w: Waiter = {
+        resolve,
+        reject,
+        idleTimeoutMs: opts.timeoutMs,
+        onProgress: opts.onProgress,
+      };
       w.timer = setTimeout(() => {
         const idx = this.waiters.indexOf(w);
         if (idx >= 0) this.waiters.splice(idx, 1);
         reject(new Error("protocol timeout"));
-      }, timeoutMs);
+      }, opts.timeoutMs);
       this.waiters.push(w);
     });
     this.sending = this.sending
@@ -199,6 +221,17 @@ export class HubProtocol {
     if (!w) return;
     if (w.timer) clearTimeout(w.timer);
     w.resolve(reply);
+  }
+
+  private resetHeadTimer(): void {
+    const w = this.waiters[0];
+    if (!w) return;
+    if (w.timer) clearTimeout(w.timer);
+    w.timer = setTimeout(() => {
+      const idx = this.waiters.indexOf(w);
+      if (idx >= 0) this.waiters.splice(idx, 1);
+      w.reject(new Error("protocol timeout"));
+    }, w.idleTimeoutMs);
   }
 
   private stdoutTail = new Uint8Array(0);
@@ -277,6 +310,20 @@ export class HubProtocol {
     const spaceIdx = header.indexOf(" ");
     const kind = spaceIdx >= 0 ? header.slice(0, spaceIdx) : header;
     const rest = spaceIdx >= 0 ? header.slice(spaceIdx + 1) : "";
+    if (kind === "ACK") {
+      // Long op accepted; reset the head waiter's idle timer.
+      this.resetHeadTimer();
+      return;
+    }
+    if (kind === "PROGRESS") {
+      this.resetHeadTimer();
+      const w = this.waiters[0];
+      if (w?.onProgress) {
+        const m = /^(\d+)\/(\d+)/.exec(rest);
+        if (m) w.onProgress(parseInt(m[1], 10), parseInt(m[2], 10));
+      }
+      return;
+    }
     if (kind === "OK") {
       // Program lifecycle: `OK done <path>` arrives after the runner returns.
       if (this.programRunning && rest.startsWith("done ")) {

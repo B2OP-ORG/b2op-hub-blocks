@@ -27,7 +27,11 @@ interface PendingUpload {
   remaining: number;
   buf: Uint8Array;
   offset: number;
+  total: number;
+  lastReported: number;
 }
+
+const PROGRESS_EVERY = 2048;
 
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
@@ -78,14 +82,19 @@ export class MockTransport implements Transport {
     let i = 0;
     while (i < chunk.length) {
       if (this.pendingUpload) {
-        const take = Math.min(this.pendingUpload.remaining, chunk.length - i);
-        this.pendingUpload.buf.set(chunk.subarray(i, i + take), this.pendingUpload.offset);
-        this.pendingUpload.offset += take;
-        this.pendingUpload.remaining -= take;
+        const pu = this.pendingUpload;
+        const take = Math.min(pu.remaining, chunk.length - i);
+        pu.buf.set(chunk.subarray(i, i + take), pu.offset);
+        pu.offset += take;
+        pu.remaining -= take;
         i += take;
-        if (this.pendingUpload.remaining === 0) {
-          this.files[this.pendingUpload.path] = this.pendingUpload.buf;
-          const path = this.pendingUpload.path;
+        if (pu.offset - pu.lastReported >= PROGRESS_EVERY && pu.remaining > 0) {
+          pu.lastReported = pu.offset;
+          this.replyProgress(`${pu.offset}/${pu.total} ${pu.path}`);
+        }
+        if (pu.remaining === 0) {
+          this.files[pu.path] = pu.buf;
+          const path = pu.path;
           this.pendingUpload = null;
           this.replyOk(`UPLOAD ${path}`);
         }
@@ -144,10 +153,19 @@ export class MockTransport implements Transport {
         return this.replyErr(`forbidden path: ${path}`);
       }
       if (len === 0) {
+        this.replyAck(`UPLOAD ${path} 0`);
         this.files[path] = new Uint8Array(0);
         return this.replyOk(`UPLOAD ${path}`);
       }
-      this.pendingUpload = { path, remaining: len, buf: new Uint8Array(len), offset: 0 };
+      this.replyAck(`UPLOAD ${path} ${len}`);
+      this.pendingUpload = {
+        path,
+        remaining: len,
+        buf: new Uint8Array(len),
+        offset: 0,
+        total: len,
+        lastReported: 0,
+      };
       return;
     }
     return this.replyErr(`unknown command: ${cmd}`);
@@ -163,6 +181,16 @@ export class MockTransport implements Transport {
 
   private replyOk(msg: string): void {
     const frame = new TextEncoder().encode(`#FR:OK ${msg}\n`);
+    queueMicrotask(() => this.emit(frame));
+  }
+
+  private replyAck(msg: string): void {
+    const frame = new TextEncoder().encode(`#FR:ACK ${msg}\n`);
+    queueMicrotask(() => this.emit(frame));
+  }
+
+  private replyProgress(msg: string): void {
+    const frame = new TextEncoder().encode(`#FR:PROGRESS ${msg}\n`);
     queueMicrotask(() => this.emit(frame));
   }
 

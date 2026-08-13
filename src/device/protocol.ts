@@ -178,23 +178,12 @@ export class HubProtocol {
     idleTimeoutMs = 15000,
     onProgress?: ProgressSink,
   ): Promise<void> {
+    // Reliable path only. A writeValueWithoutResponse fast path was tried and
+    // produced silently reordered/duplicated chunks on Linux/BlueZ (device saw
+    // the correct byte count but scrambled content). Web Bluetooth spec does
+    // not guarantee ordering across separate WriteWithoutResponse calls; a
+    // fast path needs app-layer sequence numbers to be safe.
     const header = enc.encode(`#FR:UPLOAD ${path} ${bytes.length}\n`);
-    // Prefer the transport fast path for the payload (BLE: writeWithoutResponse
-    // = many writes per conn interval instead of one). Header stays on the
-    // reliable path so a dropped header can't leave the device parsing garbage.
-    // Device-side app-layer integrity: _read_exact reads exactly bytes.length
-    // and _ok fires only after full write; silent drops surface as ERR/timeout,
-    // caller retries with-response.
-    const fastWrite = this.transport.writeFast?.bind(this.transport);
-    if (fastWrite && bytes.length > 0) {
-      try {
-        const reply = await this.sendSplit(header, bytes, { timeoutMs: idleTimeoutMs, onProgress }, fastWrite);
-        if (reply.kind === "OK") return;
-        // Fall through to reliable retry on ERR.
-      } catch {
-        // Fall through on timeout.
-      }
-    }
     const frame = new Uint8Array(header.length + bytes.length);
     frame.set(header, 0);
     frame.set(bytes, header.length);
@@ -228,37 +217,6 @@ export class HubProtocol {
       .then(() => this.transport.write(frame))
       .catch((e) => {
         console.error("[protocol] transport.write failed", e);
-      });
-    return p;
-  }
-
-  /** Send header on the reliable path, body on the fast path. Waiter registered
-   * before either write so early replies aren't lost. */
-  private sendSplit(
-    header: Uint8Array,
-    body: Uint8Array,
-    opts: SendOptions,
-    fastWrite: (chunk: Uint8Array) => Promise<void>,
-  ): Promise<FrameReply> {
-    const p = new Promise<FrameReply>((resolve, reject) => {
-      const w: Waiter = {
-        resolve,
-        reject,
-        idleTimeoutMs: opts.timeoutMs,
-        onProgress: opts.onProgress,
-      };
-      w.timer = setTimeout(() => {
-        const idx = this.waiters.indexOf(w);
-        if (idx >= 0) this.waiters.splice(idx, 1);
-        reject(new Error("protocol timeout"));
-      }, opts.timeoutMs);
-      this.waiters.push(w);
-    });
-    this.sending = this.sending
-      .then(() => this.transport.write(header))
-      .then(() => fastWrite(body))
-      .catch((e) => {
-        console.error("[protocol] split write failed", e);
       });
     return p;
   }

@@ -47,7 +47,7 @@ export class BleTransport implements Transport {
     const device = await navigator.bluetooth.requestDevice({
       filters: [
         // { services: [NUS_SERVICE] },
-        { namePrefix: "LEGO" },
+        { namePrefix: "B2OP" },
         { namePrefix: "Hub" },
       ],
       optionalServices: [NUS_SERVICE],

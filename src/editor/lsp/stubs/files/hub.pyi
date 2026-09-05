@@ -11,6 +11,7 @@ from lpf2.local import port as _local_port
 from lpf2.devices import hub_led as _hub_led
 from lpf2.devices import accelerometer as _accelerometer
 from lpf2.devices import gyroscope as _gyroscope
+from machine import SDCard
 from typing import Iterable, NoReturn, Optional, Union
 
 class _vec3:
@@ -190,6 +191,66 @@ class _lcd_module:
         """Send an arbitrary command + optional data payload. For probing panels."""
         ...
 
+class _video_module:
+    """MJPEG-in-AVI video player on the 160x128 ST7735 LCD.
+
+    Suspends LVGL during playback and resumes it when done.
+    Paths must be absolute (e.g. ``/sd/clip.avi``).
+    """
+
+    def play(self, path: str, *, block: bool = True) -> None:
+        """Play an MJPEG-in-AVI file (video only; audio chunks skipped).
+
+        If ``block=False`` returns immediately; call :meth:`is_finished`
+        to poll for completion.
+        """
+        ...
+
+    def play_av(self, path: str, *, block: bool = True) -> None:
+        """Play an MJPEG-in-AVI file with embedded PCM audio via NS4168.
+
+        Only available on boards that have an NS4168 amplifier; on others
+        the audio track is silently ignored.
+        If ``block=False`` returns immediately.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Abort playback. Blocks until the player task has exited."""
+        ...
+
+    def is_finished(self) -> bool:
+        """Return ``True`` when no playback is in progress."""
+        ...
+
+
+class _audio_module:
+    """Raw-PCM audio player via NS4168 I2S Class-D amplifier.
+
+    Only present on boards where ``hub.board.HAS_NS4168 == 1``.
+    Paths must be absolute (e.g. ``/sd/sound.pcm``).
+    """
+
+    def play(self, path: str, rate: int, bits: int, channels: int,
+             *, block: bool = True) -> None:
+        """Stream a raw PCM file to the NS4168.
+
+        ``rate``: sample rate in Hz (e.g. 44100).
+        ``bits``: bit depth per sample (8, 16, 24, or 32).
+        ``channels``: 1 = mono, 2 = stereo.
+        If ``block=False`` returns immediately.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Abort playback. Blocks until the player task has exited."""
+        ...
+
+    def is_finished(self) -> bool:
+        """Return ``True`` when no playback is in progress."""
+        ...
+
+
 from typing import Callable, Literal, Optional, overload
 
 _ButtonName = Literal["center", "up", "down", "left", "right"]
@@ -266,44 +327,31 @@ class _buttons_module:
         ...
 
 class _pwm_module:
-    """Direct access to the on-board PCA9685 16-channel PWM driver.
+    """Generic PWM driver accessed via logical pins.
 
-    The same chip drives motor H-bridges (Port A/B/C/D), the LCD
-    backlight, and the hub-LED power rail on the LEGO_Hub board — so
-    writing to a channel already claimed by another subsystem will
-    fight with the C-side driver. Free channels vary by board; check
-    the board's ``Board.h`` before use.
-
-    Frequency is a single shared prescaler for all 16 channels; the
-    firmware initialises it to 1 kHz to keep motor PWM inaudible.
-    Changing it from Python affects everything using the chip.
+    Takes logical-pin values from ``hub.board`` constants (e.g.
+    ``hub.board.LCD_BACKLIGHT_PIN``). The driver dispatches ESP32 pins
+    to LEDC and PCA9685 pins to the chip driver transparently.
 
     Duty is 12-bit (``0..MAX_DUTY`` = ``0..4095``).
     """
 
-    CHANNELS: int
-    """Number of PWM channels on the PCA9685 (16)."""
     MAX_DUTY: int
     """Maximum duty value (4095; 12-bit resolution)."""
 
-    def set(self, channel: int, value: int) -> None:
-        """Set channel ``0..15`` to 12-bit duty ``0..4095``."""
-        ...
-    def get(self, channel: int) -> int:
-        """Read back the current 12-bit duty of ``channel``."""
-        ...
-    def on(self, channel: int) -> None:
-        """Drive ``channel`` fully on (equivalent to full-cycle high)."""
-        ...
-    def off(self, channel: int) -> None:
-        """Drive ``channel`` fully off."""
-        ...
-    def frequency(self, hz: float) -> None:
-        """Set the shared prescaler frequency (24..1526 Hz).
+    def configure(self, pin: int, freq_hz: int) -> None:
+        """Configure ``pin`` for PWM at ``freq_hz`` Hz.
 
-        Affects every channel on the chip — use only if you understand
-        what other subsystems depend on the current rate.
+        Must be called before :meth:`set` or :meth:`off` on a pin.
+        For PCA9685 pins the prescaler is chip-wide; changing it
+        affects all other PCA9685 channels.
         """
+        ...
+    def set(self, pin: int, duty: int) -> None:
+        """Set ``pin`` to 12-bit ``duty`` (``0..MAX_DUTY``)."""
+        ...
+    def off(self, pin: int) -> None:
+        """Drive ``pin`` fully off (zero duty)."""
         ...
 
 class _battery_module:
@@ -418,67 +466,155 @@ class _i2c:
         ...
 
 class _board_module:
-    """Board-specific pin/config constants (SD card etc.)."""
+    """1:1 mirror of the board's ``Board.h`` via ``BOARD_INT_EXPORTS`` /
+    ``BOARD_STR_EXPORTS``. All integer constants are encoded as logical
+    pins (``MAKE_PIN``) or logical buses (``MAKE_BUS``); use
+    ``hub.board.*`` values with ``hub.pwm`` / ``hub.i2c`` directly.
+    Attributes set to ``0`` / ``PIN_NONE`` on this board are still
+    present but meaningless.
+    """
+    # Identity
+    BOARD_NAME: str
+    BOARD_VERSION: str
+
+    # I2C buses
+    HAS_I2C0: int
+    I2C0_SDA_PIN: int
+    I2C0_SCL_PIN: int
+    I2C0_FREQ: int
+
+    # SPI buses
+    HAS_SPI2: int
+    SPI2_SCK_PIN: int
+    SPI2_MISO_PIN: int
+    SPI2_MOSI_PIN: int
+    SPI2_FREQ: int
+    HAS_SPI3: int
+    SPI3_SCK_PIN: int
+    SPI3_MOSI_PIN: int
+    SPI3_MISO_PIN: int
+    SPI3_FREQ: int
+
+    # UART buses
+    HAS_UART0: int
+    HAS_UART1: int
+    HAS_UART2: int
+
+    # PCA9685
+    HAS_PCA9685: int
+    PCA9685_BUS: int
+    PCA9685_I2C_ADDR: int
+    PCA9685_FREQ_HZ: int
+
+    # SC16IS750
+    HAS_SC16IS750: int
+    SC16IS750_BUS: int
+    SC16IS750_SPI_FREQ: int
+    SC16IS750_CS_PIN: int
+    SC16IS750_IRQ_PIN: int
+    SC16IS750_CRYSTAL_FREQ: int
+    SC16IS750_TX_DISABLE_PIN: int
+
+    # BNO085
+    HAS_BNO085: int
+    BNO085_BUS: int
+    BNO085_I2C_ADDR: int
+    BNO085_INT_PIN: int
+
+    # LSM6DSL
+    HAS_LSM6DSL: int
+
+    # ST7735
+    HAS_ST7735: int
+    LCD_BUS: int
+    LCD_SPI_FREQ: int
+
+    # MCPWM
+    HAS_MCPWM: int
+
+    # Power
+    HAS_POWER: int
+    POWER_ON_PIN: int
+
+    # Buttons
+    HAS_BUTTONS: int
+    BUTTON_PWR_PIN: int
+    BUTTON_UP_PIN: int
+    BUTTON_LEFT_PIN: int
+    BUTTON_DOWN_PIN: int
+    BUTTON_RIGHT_PIN: int
+
+    # LCD
+    HAS_LCD: int
+    LCD_DC_PIN: int
+    LCD_TE_PIN: int
+    LCD_RST_PIN: int
+    LCD_CS_PIN: int
+    LCD_BACKLIGHT_PIN: int
+
+    # IMU
+    HAS_IMU: int
+    IMU_TYPE: int
+    IMU_INT_PIN: int
+
+    # RGB LED
+    HAS_RGB_LED: int
+    RGB_LED_TYPE: int
+    RGB_LED_COUNT: int
+    RGB_LED_DATA_PIN: int
+
+    # Battery / charger
+    HAS_BATTERY_MONITOR: int
+    BATT_ADC_PIN: int
+    BATT_STAT_PIN: int
+    HAS_CHARGER: int
+    CHG_EN_PIN: int
+    CHG_STAT_PIN: int
+
+    # LPF2 ports
+    HAS_PORT_A: int
+    PORT_A_UART_BUS: int
+    PORT_A_ID1_PIN: int
+    PORT_A_ID2_PIN: int
+    PORT_A_PWM1_PIN: int
+    PORT_A_PWM2_PIN: int
+
+    HAS_PORT_B: int
+    PORT_B_UART_BUS: int
+    PORT_B_ID1_PIN: int
+    PORT_B_ID2_PIN: int
+    PORT_B_PWM1_PIN: int
+    PORT_B_PWM2_PIN: int
+
+    HAS_PORT_C: int
+    PORT_C_UART_BUS: int
+    PORT_C_ID1_PIN: int
+    PORT_C_ID2_PIN: int
+    PORT_C_PWM1_PIN: int
+    PORT_C_PWM2_PIN: int
+
+    HAS_PORT_D: int
+    PORT_D_UART_BUS: int
+    PORT_D_ID1_PIN: int
+    PORT_D_ID2_PIN: int
+    PORT_D_PWM1_PIN: int
+    PORT_D_PWM2_PIN: int
+
+    # SD card
+    HAS_SD_CARD: int
     SD_MODE: int
-    """SD-card interface mode selected by the board (SPI vs SDMMC)."""
     SD_SLOT: int
-    """SDMMC slot number."""
-    SD_CS: int
-    """SD chip-select pin (SPI mode)."""
-    SD_SCK: int
-    """SD clock pin (SPI mode)."""
-    SD_MOSI: int
-    """SD MOSI pin (SPI mode)."""
-    SD_MISO: int
-    """SD MISO pin (SPI mode)."""
     SD_WIDTH: int
-    """SDMMC bus width (1 or 4)."""
-    SD_CLK: int
-    """SDMMC clock pin."""
-    SD_CMD: int
-    """SDMMC command pin."""
-    SD_D0: int
-    """SDMMC data-line 0."""
-    SD_D1: int
-    """SDMMC data-line 1 (4-bit mode)."""
-    SD_D2: int
-    """SDMMC data-line 2 (4-bit mode)."""
-    SD_D3: int
-    """SDMMC data-line 3 (4-bit mode)."""
-
-    PORT_A_ID_1: int
-    """Port A ID1 pin (LPF2 identification / analog-ID line 1)."""
-    PORT_A_ID_2: int
-    """Port A ID2 pin (LPF2 identification / analog-ID line 2)."""
-    PORT_B_ID_1: int
-    """Port B ID1 pin."""
-    PORT_B_ID_2: int
-    """Port B ID2 pin."""
-    PORT_C_ID_1: int
-    """Port C ID1 pin."""
-    PORT_C_ID_2: int
-    """Port C ID2 pin."""
-    PORT_D_ID_1: int
-    """Port D ID1 pin."""
-    PORT_D_ID_2: int
-    """Port D ID2 pin."""
-
-    PORT_A_PWM_1: int
-    """Port A H-bridge PWM channel 1 (M1)."""
-    PORT_A_PWM_2: int
-    """Port A H-bridge PWM channel 2 (M2)."""
-    PORT_B_PWM_1: int
-    """Port B H-bridge PWM channel 1."""
-    PORT_B_PWM_2: int
-    """Port B H-bridge PWM channel 2."""
-    PORT_C_PWM_1: int
-    """Port C H-bridge PWM channel 1."""
-    PORT_C_PWM_2: int
-    """Port C H-bridge PWM channel 2."""
-    PORT_D_PWM_1: int
-    """Port D H-bridge PWM channel 1."""
-    PORT_D_PWM_2: int
-    """Port D H-bridge PWM channel 2."""
+    SD_CLK_PIN: int
+    SD_CMD_PIN: int
+    SD_D0_PIN: int
+    SD_D1_PIN: int
+    SD_D2_PIN: int
+    SD_D3_PIN: int
+    SD_SCK_PIN: int
+    SD_MISO_PIN: int
+    SD_MOSI_PIN: int
+    SD_CS_PIN: int
 
 ports: _ports_module
 """Hub ports (see :class:`_ports_module`)."""
@@ -496,6 +632,10 @@ imu: _imu_module
 """Fused IMU (see :class:`_imu_module`)."""
 lcd: _lcd_module
 """LCD + LVGL control (see :class:`_lcd_module`)."""
+video: _video_module
+"""MJPEG-in-AVI video player (see :class:`_video_module`). Only present when board has an LCD."""
+audio: _audio_module
+"""Raw-PCM audio player via NS4168 I2S amp (see :class:`_audio_module`). Only present when board has NS4168."""
 buttons: _buttons_module
 """Button API (see :class:`_buttons_module`)."""
 battery: _battery_module
@@ -505,8 +645,46 @@ pwm: _pwm_module
 i2c: _i2c
 """Shared internal I2C bus (Grove + on-board devices). See :class:`_i2c`."""
 
+def sd_card() -> Optional[SDCard]:
+    """Return the mounted ``machine.SDCard`` instance, or ``None`` if no SD card is present.
+
+    The card is initialised and mounted at ``/sd`` before ``boot.py`` runs.
+    Returns ``None`` on boards without ``HAS_SD_CARD`` or when mount failed.
+    """
+    ...
+
+def sd_remount() -> None:
+    """Unmount the cached SD card handle and re-mount the SD card at ``/sd``.
+
+    Call after disabling USB MSC so the SDMMC host is freed and can be
+    re-initialised via ``machine.SDCard``.
+    """
+    ...
+
+def usb_msc_mode() -> bool:
+    """Return ``True`` if USB Mass Storage Class is currently active."""
+    ...
+
+def set_usb_msc(enabled: bool) -> None:
+    """Enable or disable USB Mass Storage Class (SD card).
+
+    When enabling, the SDMMC host is opened without a VFS mount so TinyUSB
+    can own the SD card. When disabling, the SDMMC host is released so
+    :func:`sd_remount` can re-mount it via MicroPython.
+    """
+    ...
+
 def powerOff() -> NoReturn:
-    """Turn the hub off immediately. Does not return."""
+    """Turn the hub off immediately. Does not return.
+
+    If the hardware power latch does not hold (e.g. USB power is present),
+    the firmware performs an orderly shutdown: disables LPF2 ports and motor
+    PWM outputs, turns off the LCD backlight, deinitialises BLE and WiFi,
+    signals the MicroPython task to exit (GC runs before the task deletes
+    itself), throttles the CPU to 80 MHz, then enters a low-activity loop
+    that keeps the battery status LED updated. Pressing the right button
+    restarts the firmware.
+    """
     ...
 
 def set_framed_output(enabled: bool) -> None:
@@ -541,35 +719,42 @@ def set_frame_sink(cb: Optional[Callable[[bytes], None]]) -> None:
     """
     ...
 
-_HandlerName = Literal["setup", "loop"]
-_Handler = Callable[[], None]
-    
-# Hub shim additions. Appended verbatim to the fw-sourced hub.pyi by
-# scripts/sync-stubs.mjs. Declares symbols that live in the on-device
-# Python shim layer but are not present in the firmware C module stubs.
+_PollName = Literal["poll"]
+_PollFn = Callable[[], None]
 
-def on(name: _HandlerName) -> Callable[[_Handler], _Handler]:
-    """Event decorator injected by the program runner in ``fs/main.py``.
+@overload
+def on(name: _PollName) -> Callable[[_PollFn], _PollFn]:
+    """Decorator form: ``@hub.on("poll")``."""
+    ...
 
-    Only available when a script is launched from the on-device menu;
-    not present when ``import hub`` runs from ``boot.py`` or the REPL.
+@overload
+def on(name: _PollName, fn: _PollFn) -> _PollFn:
+    """Direct form: ``hub.on("poll", my_fn)``."""
+    ...
 
-    ``name`` is ``"setup"`` (runs once) or ``"loop"`` (runs each tick).
+def on(name: _PollName, fn: Optional[_PollFn] = None) -> Union[Callable[[_PollFn], _PollFn], _PollFn]:
+    """Register a callback for a firmware event. Currently only ``"poll"`` is supported.
+
+    ``"poll"`` callbacks are scheduled on mp_task via ``mp_sched_schedule`` every
+    ~20 ms by the C firmware loop. They run even while a user script is executing.
     """
     ...
 
-# Sleep for `seconds` (float, seconds). Compatible with `time.sleep`, but
-# calls `hub.buttons.poll()` while waiting so button callbacks still fire.
-# Does not run the user `loop()` again — only polls buttons.
-def sleep(seconds: float) -> None: ...
+def exit() -> NoReturn:
+    """Exit the running user script cleanly. Raises SystemExit.
 
-# Sleep for `ms` milliseconds. Compatible with `time.sleep_ms`, but polls
-# hub buttons during the wait (no user `loop()` re-entry).
-def sleep_ms(ms: int) -> None: ...
+    The program runner catches SystemExit and shows the "Done" screen.
+    Safe to call from anywhere — button callbacks, loops, top-level code.
+    """
+    ...
 
-# Request the runner to stop the user program. Sets the runner's STOP
-# flag; the main loop exits after the current iteration and any active
-# `hub.sleep`/`hub.sleep_ms` returns early. Does not raise.
-def exit() -> NoReturn: ...
+def _request_stop() -> None:
+    """Schedule a KeyboardInterrupt on the MicroPython task.
+
+    Used by the protocol STOP frame handler to interrupt a running script
+    from outside (e.g. host sends STOP over USB/BLE). The interrupt fires
+    at the next VM checkpoint; the runner catches it as a clean exit.
+    """
+    ...
 
 # --- shim overlay (scripts/stubs-overlay) ------------------------

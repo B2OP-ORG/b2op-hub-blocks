@@ -152,11 +152,15 @@ def _read_exact(n, timeout_ms=5000, progress_cb=None, progress_every=2048):
     inst = _ble_uart.instance() if _ble_uart is not None else None
     while len(got) < n:
         made_progress = False
-        if _poller.poll(20):
+        # poll(0) = non-blocking peek. 20 ms floor here previously starved
+        # the BLE read path when data was arriving over BLE only.
+        if _poller.poll(0):
+            need = n - len(got)
+            # 512 fits an ATT MTU frame and typical USB CDC bulk packet.
             try:
-                chunk = sys.stdin.buffer.read(min(64, n - len(got)))
+                chunk = sys.stdin.buffer.read(min(512, need))
             except AttributeError:
-                chunk = sys.stdin.read(min(64, n - len(got)))
+                chunk = sys.stdin.read(min(512, need))
                 if isinstance(chunk, str):
                     chunk = chunk.encode("utf-8")
             if chunk:
@@ -174,11 +178,16 @@ def _read_exact(n, timeout_ms=5000, progress_cb=None, progress_every=2048):
                 else:
                     got += chunk
                 made_progress = True
-        if made_progress and progress_cb is not None and len(got) - last_reported >= progress_every:
-            progress_cb(len(got), n)
-            last_reported = len(got)
-        if not made_progress and time.ticks_diff(deadline, time.ticks_ms()) <= 0:
-            return None
+        if made_progress:
+            if progress_cb is not None and len(got) - last_reported >= progress_every:
+                progress_cb(len(got), n)
+                last_reported = len(got)
+        else:
+            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+                return None
+            # Sleep only when nothing arrived, so we don't spin at 100% CPU
+            # yet keep latency low when bytes are flowing.
+            time.sleep_ms(2)
     if progress_cb is not None and last_reported != n:
         progress_cb(n, n)
     return bytes(got)
@@ -240,7 +249,7 @@ def _handle(header):
             return
         _ok("RUN " + path)
         _running = True
-        err = runner.run_program(path, poll_stdin=poll)
+        err = runner.run_program(path)
         _running = False
         if err is None:
             _write(FRAME_MARK + b"OK done " + path.encode("utf-8") + b"\n")
@@ -342,3 +351,4 @@ def poll():
         header = bytes(_buf[_FRAME_LEN:nl_idx]).decode("utf-8", "replace")
         _buf = _buf[nl_idx + 1:]
         _handle(header)
+

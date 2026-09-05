@@ -1,6 +1,6 @@
 # Remote Pyright LSP server
 
-Optional backend for the LEGO-Hub-blocks Python editor. Provides *real*
+Optional backend for the b2op-hub-blocks Python editor. Provides *real*
 Pyright type-checking + IntelliSense over WebSocket. Ships as a tiny bridge
 that spawns `pyright-langserver --stdio` per client.
 

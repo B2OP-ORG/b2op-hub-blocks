@@ -1,16 +1,18 @@
 import type { AnyProject } from "./format";
-import { DEFAULT_SETTINGS } from "./format";
+import { parseProject } from "./format";
 
-const KEY_AUTOSAVE = "lhb.autosave";
-const KEY_LAST_DEVICE = "lhb.lastDeviceName";
+const KEY_AUTOSAVE = "b2op.autosave";
+const KEY_LAST_DEVICE = "b2op.lastDeviceName";
 
 export function loadAutosave(): AnyProject | null {
   try {
     const raw = localStorage.getItem(KEY_AUTOSAVE);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as AnyProject;
-    parsed.settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
-    return parsed;
+    const result = parseProject(JSON.parse(raw));
+    if (!result) return null;
+    // Stale autosaves are silently discarded — user can open old files manually.
+    if (result.stale) return null;
+    return result.project;
   } catch {
     return null;
   }

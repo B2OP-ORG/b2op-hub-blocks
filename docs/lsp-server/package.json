@@ -1,9 +1,9 @@
 {
-  "name": "lego-hub-lsp-server",
-  "version": "0.1.0",
+  "name": "b2op-hub-lsp-server",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Remote Pyright bridge for the LEGO-Hub-blocks Python editor.",
+  "description": "Remote Pyright bridge for the b2op-hub-blocks Python editor.",
   "scripts": {
     "start": "node index.js"
   },

@@ -29,24 +29,17 @@ export const IMU_AXIS = [
   ["roll", "roll"],
 ] as const;
 
-/** Hat / event blocks. Chains under these become setup()/loop() on the hub runner. */
+/** Hat / event blocks. */
 export const EVENT_BLOCKS = [
   {
-    type: "on_setup",
-    message0: "setup",
-    nextStatement: null,
-    colour: 45,
-    tooltip: "Runs once when program starts. Body becomes `def setup()` on device.",
-  },
-  {
-    type: "on_loop",
-    message0: "loop %1 %2",
+    type: "when_program_starts",
+    message0: "when program starts %1 %2",
     args0: [
       { type: "input_dummy" },
       { type: "input_statement", name: "DO" },
     ],
     colour: 45,
-    tooltip: "Runs repeatedly. Body becomes `def loop()` on device. Runner exits when center held 2s.",
+    tooltip: "Runs once when program starts. Use 'repeat while true' inside for a continuous loop.",
   },
   {
     type: "hub_wait",
@@ -56,14 +49,14 @@ export const EVENT_BLOCKS = [
     nextStatement: null,
     colour: 45,
     inputsInline: true,
-    tooltip: "Sleep for SECONDS. Polls hub buttons during the wait so callbacks still fire.",
+    tooltip: "Sleep for SECONDS (calls time.sleep).",
   },
   {
     type: "hub_quit",
     message0: "quit program",
     previousStatement: null,
     colour: 0,
-    tooltip: "Stop the user program. Runner exits after the current loop tick / sleep returns.",
+    tooltip: "Exit the program. Runner shows Done screen.",
   },
 ] as const;
 
@@ -106,14 +99,7 @@ export const HUB_BLOCKS = [
       { type: "input_statement", name: "DO" },
     ],
     colour: 210,
-    tooltip: "Hat. Body runs on rising edge of the selected button. Registered via `hub.buttons.on(name)`; fires inside `hub.buttons.poll()`.",
-  },
-  {
-    type: "hub_button_poll",
-    message0: "poll hub buttons",
-    previousStatement: null,
-    nextStatement: null,
-    colour: 210,
+    tooltip: "Hat. Body runs on rising edge of the selected button. Registered via `hub.buttons.on(name)`; fires automatically from firmware.",
   },
   {
     type: "hub_imu_axis",

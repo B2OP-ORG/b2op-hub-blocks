@@ -2,16 +2,17 @@ import type { Block, Workspace } from "blockly";
 import { pythonGenerator } from "blockly/python";
 import { registerAllBlocks } from "../blocks";
 import { resetSetup } from "../blocks/setup";
+import { PROJECT_FORMAT, PROJECT_VERSION } from "../project/format";
 
 registerAllBlocks();
 
 const DEFS_SEPARATOR = "\n\n\n";
-const SETUP_HAT = "on_setup";
-const LOOP_HAT = "on_loop";
+const PROGRAM_HAT = "when_program_starts";
 const BUTTON_HAT = "on_button_pressed";
 const VALID_BUTTONS = new Set(["center", "up", "down", "left", "right"]);
 const PROC_TYPES = new Set(["procedures_defnoreturn", "procedures_defreturn"]);
-const HUB_ON_IMPORT_KEY = "hub_on_import";
+
+const VERSION_HEADER = `# ${PROJECT_FORMAT} v${PROJECT_VERSION}`;
 
 function indentBody(text: string): string {
   const t = text.replace(/\s+$/, "");
@@ -23,10 +24,13 @@ function indentBody(text: string): string {
 }
 
 /**
- * Emit Python for a workspace. `on_setup` hat body becomes `def setup()`,
- * `on_loop` cap body becomes `def loop()`, both registered via the runner's
- * `@on("setup")` / `@on("loop")` decorators. Procedure defs become top-level
- * `def`s via Blockly's normal definitions_ machinery. Orphan blocks are ignored.
+ * Emit Python for a workspace. All blocks chained under `when_program_starts`
+ * become top-level statements. Button hats become `@hub.buttons.on()` decorated
+ * functions, emitted before the main body. Procedure defs become top-level `def`s
+ * via Blockly's normal definitions_ machinery. Orphan blocks are ignored.
+ *
+ * Output is prefixed with `# b2op-hub-blocks v2.0.0` so pythonToBlocks() can
+ * reject old / external Python gracefully.
  */
 export function workspaceToPython(workspace: Workspace): string {
   resetSetup();
@@ -37,23 +41,17 @@ export function workspaceToPython(workspace: Workspace): string {
     if (PROC_TYPES.has(top.type)) gen.blockToCode(top);
   }
 
-  const setupBodies: string[] = [];
-  const loopBodies: string[] = [];
+  const mainBodies: string[] = [];
   const buttonDefs: string[] = [];
   const buttonCounts: Record<string, number> = {};
+
   for (const top of workspace.getTopBlocks(true)) {
-    if (top.type === SETUP_HAT) {
-      const next: Block | null = top.getNextBlock();
-      if (!next) continue;
-      const code = gen.blockToCode(next);
-      const text = Array.isArray(code) ? code[0] : code;
-      if (text) setupBodies.push(text);
-    } else if (top.type === LOOP_HAT) {
+    if (top.type === PROGRAM_HAT) {
       const child: Block | null = top.getInputTargetBlock("DO");
       if (child) {
         const code = gen.blockToCode(child);
         const text = Array.isArray(code) ? code[0] : code;
-        if (text) loopBodies.push(text);
+        if (text) mainBodies.push(text);
       }
     } else if (top.type === BUTTON_HAT) {
       const btn = top.getFieldValue("BTN");
@@ -68,40 +66,25 @@ export function workspaceToPython(workspace: Workspace): string {
     }
   }
 
-  const emitDefs: string[] = [];
-
-  (gen as unknown as { definitions_: Record<string, string> }).definitions_[HUB_ON_IMPORT_KEY] = "from hub import on";
-
-  if (setupBodies.length) {
-    const joined = setupBodies.join("").replace(/\s+$/, "");
-    emitDefs.push(`@on("setup")\ndef setup():\n${indentBody(joined)}`);
-  }
-  else {
-    emitDefs.push(`@on("setup")\ndef setup():\n    pass`);
-  }
-
-  if (loopBodies.length) {
-    const joined = loopBodies.join("").replace(/\s+$/, "");
-    emitDefs.push(`@on("loop")\ndef loop():\n${indentBody(joined)}`);
-  }
-  else {
-    emitDefs.push(`@on("loop")\ndef loop():\n    pass`);
-  }
-
   if (buttonDefs.length) {
     (gen as unknown as { definitions_: Record<string, string> }).definitions_["hub_lpf2_import"] = "import hub, lpf2";
-    for (const def of buttonDefs) emitDefs.push(def);
   }
 
-  const body = emitDefs.join("\n\n\n").replace(/\s+$/, "");
+  const emitParts: string[] = [];
+  for (const def of buttonDefs) emitParts.push(def);
+  if (mainBodies.length) {
+    emitParts.push(mainBodies.join("").replace(/\s+$/, ""));
+  }
+
+  const body = emitParts.join("\n\n\n").replace(/\s+$/, "");
   const combined = gen.finish("");
   (gen as unknown as { definitions_: Record<string, string> }).definitions_ = {};
 
   const sepIdx = combined.indexOf(DEFS_SEPARATOR);
   const preamble = sepIdx >= 0 ? combined.slice(0, sepIdx) : combined.trimEnd();
 
-  const parts: string[] = [];
+  const parts: string[] = [VERSION_HEADER];
   if (preamble) parts.push(preamble);
   if (body) parts.push(body);
-  return parts.join("\n\n") + (parts.length ? "\n" : "");
+  return parts.join("\n\n") + "\n";
 }

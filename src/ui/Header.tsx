@@ -3,7 +3,7 @@ import * as Blockly from "blockly/core";
 import { useApp } from "../state/store";
 import { downloadProject, pickFile } from "../project/download";
 import type { AnyProject, BlocksProject } from "../project/format";
-import { newBlocksProject, newPythonProject } from "../project/format";
+import { newBlocksProject, newPythonProject, parseProject } from "../project/format";
 import { hasRawBlock, normalizePython, pythonToBlocks } from "../project/pythonToBlocks";
 import { workspaceToPython } from "../codegen/pythonGen";
 
@@ -13,14 +13,11 @@ interface Props {
 
 function blocksProjectFromPython(source: string, title: string, settings: BlocksProject["settings"]): BlocksProject {
   const base = newBlocksProject(title);
-  const { setup, loop, buttonHats, variables } = pythonToBlocks(source);
+  const { main, buttonHats, variables } = pythonToBlocks(source);
   const topBlocks: Record<string, unknown>[] = [];
-  const setupHat: Record<string, unknown> = { type: "on_setup", x: 40, y: 40 };
-  if (setup) setupHat.next = { block: setup };
-  topBlocks.push(setupHat);
-  const loopBlock: Record<string, unknown> = { type: "on_loop", x: 40, y: 160 };
-  if (loop) loopBlock.inputs = { DO: { block: loop } };
-  topBlocks.push(loopBlock);
+  const programHat: Record<string, unknown> = { type: "when_program_starts", x: 40, y: 40 };
+  if (main) programHat.inputs = { DO: { block: main } };
+  topBlocks.push(programHat);
   buttonHats.forEach((h, i) => {
     const b: Record<string, unknown> = {
       type: "on_button_pressed",
@@ -50,8 +47,8 @@ interface TranslationCheck {
 
 function checkTranslation(source: string, title: string, settings: BlocksProject["settings"]): TranslationCheck {
   const project = blocksProjectFromPython(source, title, settings);
-  const { setup, loop } = pythonToBlocks(source);
-  const hasRaw = hasRawBlock(setup) || hasRawBlock(loop);
+  const { main } = pythonToBlocks(source);
+  const hasRaw = hasRawBlock(main);
   const ws = new Blockly.Workspace();
   try {
     Blockly.serialization.workspaces.load(project.workspace as object, ws);
@@ -135,8 +132,16 @@ export function Header({ onOpenSettings }: Props) {
       });
     } else {
       try {
-        const p = JSON.parse(text) as AnyProject;
-        loadProject(p);
+        const raw = JSON.parse(text);
+        const parsed = parseProject(raw);
+        if (!parsed) {
+          alert("Unsupported project format. Only b2op-hub-blocks projects are supported.");
+          return;
+        }
+        if (parsed.stale) {
+          alert("This project was created with an older version. It may not work correctly. Please recreate it using the current blocks.");
+        }
+        loadProject(parsed.project);
       } catch (e) {
         alert("Invalid project file: " + (e as Error).message);
       }
@@ -180,7 +185,7 @@ export function Header({ onOpenSettings }: Props) {
         borderBottom: `1px solid ${headerBorder}`,
       }}
     >
-      <strong style={{ letterSpacing: 0.4 }}>LEGO-Hub-blocks</strong>
+      <strong style={{ letterSpacing: 0.4 }}>b2op-hub-blocks</strong>
       <input
         value={project.title}
         onChange={rename}

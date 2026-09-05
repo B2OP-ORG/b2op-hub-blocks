@@ -7,21 +7,11 @@ beforeEach(() => {
   registerAllBlocks();
 });
 
-/** Wrap a child-block spec inside an `on_setup` hat. */
-function underSetup(next: object): object {
+function underProgramHat(inner: object): object {
   return {
     blocks: {
       languageVersion: 0,
-      blocks: [{ type: "on_setup", next: { block: next } }],
-    },
-  };
-}
-
-function underLoop(inner: object): object {
-  return {
-    blocks: {
-      languageVersion: 0,
-      blocks: [{ type: "on_loop", inputs: { DO: { block: inner } } }],
+      blocks: [{ type: "when_program_starts", inputs: { DO: { block: inner } } }],
     },
   };
 }
@@ -33,11 +23,10 @@ function makeWorkspace(state: object): Blockly.Workspace {
 }
 
 describe("workspaceToPython", () => {
-  it("emits empty output for empty workspace", () => {
+  it("emits only version header for empty workspace", () => {
     const ws = new Blockly.Workspace();
     const py = workspaceToPython(ws);
-    expect(py).toContain("def setup():");
-    expect(py).toContain("def loop():");
+    expect(py.trim()).toBe("# b2op-hub-blocks v2.0.0");
   });
 
   it("ignores blocks not attached to a hat", () => {
@@ -57,53 +46,50 @@ describe("workspaceToPython", () => {
     expect(py).not.toContain("startPower");
   });
 
-  it("wraps setup body in def setup() and adds `from hub import on`", () => {
+  it("emits program body at top level under when_program_starts", () => {
     const ws = makeWorkspace(
-      underSetup({
+      underProgramHat({
         type: "motor_start_power",
         fields: { PORT: "A" },
         inputs: { POWER: { block: { type: "math_number", fields: { NUM: 50 } } } },
       }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toContain("from hub import on");
+    expect(py).toContain("# b2op-hub-blocks v2.0.0");
     expect(py).toContain("import hub, lpf2");
     expect(py).toContain("from lpf2 import devices");
-    expect(py).toContain('@on("setup")');
-    expect(py).toContain("def setup():");
-    expect(py).toContain("    dev_a.startPower(50)");
+    expect(py).toContain("dev_a.startPower(50)");
+    expect(py).not.toContain("def setup():");
+    expect(py).not.toContain('@on("setup")');
   });
 
-  it("wraps loop body in def loop()", () => {
+  it("emits hub.powerOff() at top level", () => {
     const ws = makeWorkspace(
-      underLoop({ type: "hub_poweroff" }),
+      underProgramHat({ type: "hub_poweroff" }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toContain('@on("loop")');
-    expect(py).toContain("def loop():");
-    expect(py).toContain("    hub.powerOff()");
+    expect(py).toContain("hub.powerOff()");
+    expect(py).not.toContain("def loop():");
   });
 
-  it("emits both setup and loop when both hats present", () => {
+  it("emits two when_program_starts bodies concatenated", () => {
     const ws = makeWorkspace({
       blocks: {
         languageVersion: 0,
         blocks: [
-          { type: "on_setup", next: { block: { type: "hub_imu_reset" } } },
-          { type: "on_loop", inputs: { DO: { block: { type: "hub_button_poll" } } } },
+          { type: "when_program_starts", inputs: { DO: { block: { type: "hub_imu_reset" } } } },
+          { type: "when_program_starts", inputs: { DO: { block: { type: "hub_poweroff" } } } },
         ],
       },
     });
     const py = workspaceToPython(ws);
-    expect(py).toContain("def setup():");
-    expect(py).toContain("    hub.imu.reset()");
-    expect(py).toContain("def loop():");
-    expect(py).toContain("    hub.buttons.poll()");
+    expect(py).toContain("hub.imu.reset()");
+    expect(py).toContain("hub.powerOff()");
   });
 
-  it("dedupes device setup across multiple sensor reads in setup", () => {
+  it("dedupes device setup across multiple sensor reads", () => {
     const ws = makeWorkspace(
-      underSetup({
+      underProgramHat({
         type: "text_print",
         inputs: { TEXT: { block: { type: "distance_get", fields: { PORT: "C" } } } },
         next: {
@@ -121,7 +107,7 @@ describe("workspaceToPython", () => {
 
   it("warns on port-kind collision", () => {
     const ws = makeWorkspace(
-      underSetup({
+      underProgramHat({
         type: "text_print",
         inputs: { TEXT: { block: { type: "color_get_color", fields: { PORT: "A" } } } },
         next: {
@@ -136,71 +122,52 @@ describe("workspaceToPython", () => {
     expect(py).toMatch(/# WARN: port A used as color_sensor and distance_sensor/);
   });
 
-  it("appends hub.sleep_ms(0) to while-loop bodies with no sleep", () => {
+  it("emits time.sleep() for hub_wait", () => {
     const ws = makeWorkspace(
-      underLoop({
-        type: "controls_whileUntil",
-        fields: { MODE: "WHILE" },
-        inputs: {
-          BOOL: { block: { type: "logic_boolean", fields: { BOOL: "TRUE" } } },
-          DO: { block: { type: "hub_button_poll" } },
-        },
+      underProgramHat({
+        type: "hub_wait",
+        inputs: { SECONDS: { block: { type: "math_number", fields: { NUM: 1 } } } },
       }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toMatch(/while True:\s*\n\s*hub\.buttons\.poll\(\)\s*\n\s*hub\.sleep_ms\(0\)/);
-  });
-
-  it("appends hub.sleep_ms(0) to for-loop bodies with no sleep", () => {
-    const ws = makeWorkspace(
-      underLoop({
-        type: "controls_repeat_ext",
-        inputs: {
-          TIMES: { block: { type: "math_number", fields: { NUM: 5 } } },
-          DO: { block: { type: "hub_button_poll" } },
-        },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toMatch(/for .* in range\(.*\):\s*\n\s*hub\.buttons\.poll\(\)\s*\n\s*hub\.sleep_ms\(0\)/);
-  });
-
-  it("replaces stray pass with hub.sleep_ms(0) in empty loop body", () => {
-    const ws = makeWorkspace(
-      underLoop({
-        type: "controls_repeat_ext",
-        inputs: {
-          TIMES: { block: { type: "math_number", fields: { NUM: 10 } } },
-        },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toMatch(/for .* in range\(.*\):\s*\n\s*hub\.sleep_ms\(0\)/);
-    expect(py).not.toMatch(/range\(.*\):\s*\n\s*pass/);
-  });
-
-  it("skips extra sleep when loop body already sleeps", () => {
-    const ws = makeWorkspace(
-      underLoop({
-        type: "controls_repeat_ext",
-        inputs: {
-          TIMES: { block: { type: "math_number", fields: { NUM: 10 } } },
-          DO: { block: { type: "hub_wait", inputs: { SECONDS: { block: { type: "math_number", fields: { NUM: 1 } } } } } },
-        },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toMatch(/for .* in range\(.*\):\s*\n\s*hub\.sleep\(1\)\s*\n(?!\s*hub\.sleep_ms)/);
+    expect(py).toContain("time.sleep(1)");
+    expect(py).not.toContain("hub.sleep");
   });
 
   it("emits lpf2.color.RED for color literal block", () => {
     const ws = makeWorkspace(
-      underSetup({
+      underProgramHat({
         type: "text_print",
         inputs: { TEXT: { block: { type: "color_literal", fields: { COLOR: "RED" } } } },
       }),
     );
     const py = workspaceToPython(ws);
     expect(py).toContain("lpf2.color.RED");
+  });
+
+  it("emits hub.led.setColorIdx for hub_led_color", () => {
+    const ws = makeWorkspace(
+      underProgramHat({
+        type: "hub_led_color",
+        fields: { COLOR: "BLUE" },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    expect(py).toContain("hub.led.setColorIdx(lpf2.color.BLUE)");
+  });
+
+  it("emits hub.led.setColor for hub_led_rgb", () => {
+    const ws = makeWorkspace(
+      underProgramHat({
+        type: "hub_led_rgb",
+        inputs: {
+          R: { block: { type: "math_number", fields: { NUM: 255 } } },
+          G: { block: { type: "math_number", fields: { NUM: 0 } } },
+          B: { block: { type: "math_number", fields: { NUM: 128 } } },
+        },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    expect(py).toContain("hub.led.setColor(255, 0, 128)");
   });
 });

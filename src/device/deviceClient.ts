@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink } from "./protocol";
+import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 
 export type ConsoleSink = (text: string) => void;
@@ -39,6 +39,10 @@ export class DeviceClient {
     this.proto = new HubProtocol(transport);
   }
 
+  get boardName(): string { return this.proto.boardName; }
+  get boardVersion(): string { return this.proto.boardVersion; }
+  get protocolVersion(): number { return this.proto.protocolVersion; }
+
   async connect(): Promise<void> {
     await this.transport.connect();
     // Two ping attempts — cold connects sometimes drop the first frame while
@@ -53,30 +57,36 @@ export class DeviceClient {
         // fall through and retry
       }
     }
-    if (pinged && this.transport.setChunkSize) {
-      // Device queries `_ble_uart.instance().mtu()`, which reflects the last
-      // ATT MTU exchange. Peripheral triggers the exchange on connect, but it
-      // takes a few conn intervals; a query fired immediately after ping may
-      // still see the default 23. Retry once after a short delay if so.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const mtu = await this.proto.mtu(1500);
-          if (mtu > 23 || attempt === 1) {
-            // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
-            this.transport.setChunkSize(mtu - 3);
+    if (pinged) {
+      // Fetch board identity (HELLO may have arrived proactively; requestHello
+      // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
+      try { await this.proto.requestHello(3000); } catch { /* non-fatal */ }
+
+      if (this.transport.setChunkSize) {
+        // Device queries `_ble_uart.instance().mtu()`, which reflects the last
+        // ATT MTU exchange. Peripheral triggers the exchange on connect, but it
+        // takes a few conn intervals; a query fired immediately after ping may
+        // still see the default 23. Retry once after a short delay if so.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const mtu = await this.proto.mtu(1500);
+            if (mtu > 23 || attempt === 1) {
+              // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
+              this.transport.setChunkSize(mtu - 3);
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 400));
+          } catch {
+            // Handshake optional — device without MTU support keeps default chunk.
             break;
           }
-          await new Promise((r) => setTimeout(r, 400));
-        } catch {
-          // Handshake optional — device without MTU support keeps default chunk.
-          break;
         }
       }
     }
   }
 
   async disconnect(): Promise<void> {
-    try { await this.proto.stop(3000); } catch { /* noop */ }
+    try { await this.proto.stop(false, 3000); } catch { /* noop */ }
     this.proto.dispose();
     await this.transport.disconnect();
   }
@@ -133,6 +143,22 @@ export class DeviceClient {
       await this.proto.runProgram(path);
     }
     return { path, length: bytes.length };
+  }
+
+  async ls(path: string, opts: { timeoutMs?: number } = {}): Promise<DirEntry[]> {
+    return this.proto.ls(path, opts.timeoutMs ?? 10000);
+  }
+
+  async mv(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
+    return this.proto.mv(src, dst, opts.timeoutMs ?? 10000);
+  }
+
+  async cp(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
+    return this.proto.cp(src, dst, opts.timeoutMs ?? 10000);
+  }
+
+  async rm(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
+    return this.proto.rm(path, opts.timeoutMs ?? 10000);
   }
 }
 

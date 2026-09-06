@@ -86,7 +86,11 @@ export class DeviceClient {
   }
 
   async disconnect(): Promise<void> {
-    try { await this.proto.stop(false, 3000); } catch { /* noop */ }
+    // Skip stop if transport never connected — avoids a 3-second waiter timeout
+    // when disconnect() is called from the error-cleanup path.
+    if (this.transport.connected) {
+      try { await this.proto.stop(false, 3000); } catch { /* noop */ }
+    }
     this.proto.dispose();
     await this.transport.disconnect();
   }

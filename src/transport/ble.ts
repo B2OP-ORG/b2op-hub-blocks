@@ -54,13 +54,34 @@ export class BleTransport implements Transport {
     });
     this.device = device;
     this.info = { name: device.name ?? "BLE device" };
-    device.addEventListener("gattserverdisconnected", this.handleDisconnect);
-    const server = await device.gatt!.connect();
-    const service = await server.getPrimaryService(NUS_SERVICE);
-    this.rxChar = await service.getCharacteristic(NUS_RX);
-    this.txChar = await service.getCharacteristic(NUS_TX);
-    this.txChar.addEventListener("characteristicvaluechanged", this.handleNotify);
-    await this.txChar.startNotifications();
+
+    // Retry GATT setup once. BlueZ caches stale GATT handles after a peripheral
+    // power cycle; the first attempt clears the cache, the second succeeds.
+    // The disconnect listener is intentionally added only after successful setup
+    // so a gatt.disconnect() during the retry doesn't fire UI callbacks.
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const server = await device.gatt!.connect();
+        const service = await server.getPrimaryService(NUS_SERVICE);
+        this.rxChar = await service.getCharacteristic(NUS_RX);
+        this.txChar = await service.getCharacteristic(NUS_TX);
+        this.txChar.addEventListener("characteristicvaluechanged", this.handleNotify);
+        await this.txChar.startNotifications();
+        device.addEventListener("gattserverdisconnected", this.handleDisconnect);
+        return;
+      } catch (e) {
+        lastError = e;
+        if (this.txChar) {
+          this.txChar.removeEventListener("characteristicvaluechanged", this.handleNotify);
+          this.txChar = null;
+        }
+        this.rxChar = null;
+        if (device.gatt?.connected) device.gatt.disconnect();
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    throw lastError;
   }
 
   async disconnect(): Promise<void> {
@@ -85,9 +106,10 @@ export class BleTransport implements Transport {
     // writes per BLE conn interval, whereas writeValueWithResponse serializes
     // one write per interval. Caller must have app-layer integrity checking
     // (payload length verified by device) since silent drops are possible.
+    let result: Promise<void> = this.writeQueue;
     for (let offset = 0; offset < chunk.length; offset += this.chunkSize) {
       const slice = chunk.subarray(offset, offset + this.chunkSize);
-      this.writeQueue = this.writeQueue.then(async () => {
+      const step = result.then(async () => {
         this.writeCount++;
         const buf = new Uint8Array(slice.byteLength);
         buf.set(slice);
@@ -102,8 +124,11 @@ export class BleTransport implements Transport {
           throw e;
         }
       });
+      // writeQueue advances even on error so future writes aren't silently dropped.
+      this.writeQueue = step.catch(() => {});
+      result = step;
     }
-    return this.writeQueue;
+    return result;
   }
 
   onData(cb: DataListener): Unsubscribe {

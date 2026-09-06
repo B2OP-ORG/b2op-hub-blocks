@@ -60,7 +60,7 @@ export const KIND = {
 } as const;
 
 export const FLAGS_NO_ACK = 0x01;
-const SEQ_UNSOLICITED = 0xFF;
+export const SEQ_UNSOLICITED = 0xFF;
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as Blockly from "blockly/core";
 import { useApp } from "../state/store";
 import { downloadProject, pickFile } from "../project/download";
-import type { AnyProject, BlocksProject } from "../project/format";
+import type { BlocksProject } from "../project/format";
 import { newBlocksProject, newPythonProject, parseProject } from "../project/format";
 import { hasRawBlock, normalizePython, pythonToBlocks } from "../project/pythonToBlocks";
 import { workspaceToPython } from "../codegen/pythonGen";

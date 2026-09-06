@@ -5,11 +5,11 @@ import { workspaceToPython } from "../src/codegen/pythonGen";
 
 beforeEach(() => registerAllBlocks());
 
-function underHat(next: object): object {
+function underHat(inner: object): object {
   return {
     blocks: {
       languageVersion: 0,
-      blocks: [{ type: "on_setup", next: { block: next } }],
+      blocks: [{ type: "when_program_starts", inputs: { DO: { block: inner } } }],
     },
   };
 }
@@ -156,12 +156,58 @@ describe("Phase 2 blocks", () => {
     expect(py).toContain("lv.color_hex(0xFFFFFF)");
   });
 
-  it("lvgl_run emits task_handler loop + import time", () => {
-    const ws = makeWorkspace(underHat({ type: "lvgl_run" }));
+  it("lvgl_update_screen emits lv.timer_handler()", () => {
+    const ws = makeWorkspace(underHat({ type: "lvgl_update_screen" }));
     const py = workspaceToPython(ws);
-    expect(py).toContain("import time");
-    expect(py).toContain("lv.task_handler()");
-    expect(py).toContain("time.sleep_ms(5)");
+    expect(py).toContain("lv.timer_handler()");
+    expect(py).not.toContain("task_handler");
+    expect(py).not.toContain("while True");
+  });
+
+  it("auto-injects lv.timer_handler() at end of loop when LVGL used", () => {
+    const ws = makeWorkspace(
+      underHat({
+        type: "controls_whileUntil",
+        fields: { MODE: "WHILE" },
+        inputs: {
+          BOOL: { block: { type: "logic_boolean", fields: { BOOL: "TRUE" } } },
+          DO: { block: { type: "lvgl_clear_screen" } },
+        },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    expect(py).toMatch(/while True:\s*\n\s*_scr\.clean\(\)\s*\n\s*lv\.timer_handler\(\)/);
+  });
+
+  it("skips auto-inject when lvgl_update_screen already present in loop", () => {
+    const ws = makeWorkspace(
+      underHat({
+        type: "controls_whileUntil",
+        fields: { MODE: "WHILE" },
+        inputs: {
+          BOOL: { block: { type: "logic_boolean", fields: { BOOL: "TRUE" } } },
+          DO: { block: { type: "lvgl_update_screen" } },
+        },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    const count = (py.match(/lv\.timer_handler\(\)/g) ?? []).length;
+    expect(count).toBe(1);
+  });
+
+  it("does NOT inject lv.timer_handler() when no LVGL blocks", () => {
+    const ws = makeWorkspace(
+      underHat({
+        type: "controls_whileUntil",
+        fields: { MODE: "WHILE" },
+        inputs: {
+          BOOL: { block: { type: "logic_boolean", fields: { BOOL: "TRUE" } } },
+          DO: { block: { type: "hub_imu_reset" } },
+        },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    expect(py).not.toContain("lv.timer_handler()");
   });
 
   it("coerces lpf2.color.PURPLE to RGB hex in LVGL color slot", () => {

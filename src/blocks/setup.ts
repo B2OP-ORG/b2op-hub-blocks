@@ -58,6 +58,10 @@ export function needsTime(gen: PythonGenerator): void {
   (gen as unknown as { definitions_: Record<string, string> }).definitions_[KEY_TIME_IMPORT] = "import time";
 }
 
+export function isLvglUsed(gen: PythonGenerator): boolean {
+  return KEY_LVGL_IMPORT in (gen as unknown as { definitions_: Record<string, string> }).definitions_;
+}
+
 /**
  * Register a typed-device setup for `port` of `kind`. Idempotent per (port,kind).
  * Second call with a different kind on the same port keeps the first and marks

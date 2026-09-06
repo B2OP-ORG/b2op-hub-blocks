@@ -28,8 +28,7 @@ export interface ButtonHat {
 }
 
 export interface Translation {
-  setup: BlockSpec | undefined;
-  loop: BlockSpec | undefined;
+  main: BlockSpec | undefined;
   buttonHats: ButtonHat[];
   variables: { name: string; id: string }[];
 }
@@ -359,14 +358,13 @@ function numInput(name: string, expr: string) {
 
 function matchStatement(line: string): BlockSpec | null {
   let m: RegExpExecArray | null;
-  if ((m = /^hub\.ports\.LED\.setRgbColorIdx\(lpf2\.color\.([A-Z]+)\)$/.exec(line))) {
+  if ((m = /^hub\.led\.setColorIdx\(lpf2\.color\.([A-Z]+)\)$/.exec(line))) {
     if (COLOR_NAMES.has(m[1])) return { type: "hub_led_color", fields: { COLOR: m[1] } };
   }
-  if ((m = /^hub\.ports\.LED\.setRgbColor\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/.exec(line))) {
+  if ((m = /^hub\.led\.setColor\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/.exec(line))) {
     return { type: "hub_led_rgb", inputs: { ...numInput("R", m[1]), ...numInput("G", m[2]), ...numInput("B", m[3]) } };
   }
-  if (line === "hub.buttons.poll()") return { type: "hub_button_poll" };
-  if ((m = /^hub\.sleep\((-?\d+(?:\.\d+)?)\)$/.exec(line))) {
+  if ((m = /^time\.sleep\((-?\d+(?:\.\d+)?)\)$/.exec(line))) {
     return { type: "hub_wait", inputs: numInput("SECONDS", m[1]) };
   }
   if (line === "hub.imu.reset()") return { type: "hub_imu_reset" };
@@ -512,7 +510,7 @@ function isPreambleBoilerplate(line: string): boolean {
   if (line === "pass") return true;
   if (/^import\s/.test(line)) return true;
   if (/^from\s/.test(line)) return true;
-  if (/^@on\(/.test(line)) return true;
+  if (/^#\s*b2op-hub-blocks\s+v/.test(line)) return true;
   if (line === "hub.lcd.init()") return true;
   if (line === "_scr = lv.screen_active()") return true;
   if (line === "leds = None") return true;
@@ -1013,8 +1011,19 @@ function chain(specs: BlockSpec[]): BlockSpec | undefined {
 // Main entry
 // ---------------------------------------------------------------------------
 
+const VERSION_RE = /^#\s*b2op-hub-blocks\s+v2\.\d+\.\d+\s*$/;
+
 export function pythonToBlocks(source: string): Translation {
   const lines = parseLines(source);
+
+  // Reject Python not tagged as b2op-hub-blocks v2.x — return as opaque raw block.
+  const firstText = lines.find((l) => l.text !== "")?.text ?? "";
+  if (!VERSION_RE.test(firstText)) {
+    const trimmed = source.trim();
+    const main = trimmed ? { type: "raw_python" as const, data: trimmed } : undefined;
+    return { main, buttonHats: [], variables: [] };
+  }
+
   const ctx: Ctx = {
     portKind: new Map(),
     keepRaw: new Set(),
@@ -1023,16 +1032,12 @@ export function pythonToBlocks(source: string): Translation {
 
   const { groups } = groupAt(lines, 0, lines.length, 0);
 
-  const setupGroups: Group[] = [];
-  const loopGroups: Group[] = [];
-  const strayGroups: Group[] = [];
+  const mainGroups: Group[] = [];
   const buttonHatGroups: { btn: string; body: Line[] }[] = [];
   const BTN_DECO = /^@hub\.buttons\.on\(\s*["'](center|up|down|left|right)["']\s*\)$/;
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
     const t = g.header.text;
-    if (t === "def setup():") { setupGroups.push(...bodyToGroups(g.bodyLines)); continue; }
-    if (t === "def loop():") { loopGroups.push(...bodyToGroups(g.bodyLines)); continue; }
     const dm = BTN_DECO.exec(t);
     if (dm) {
       const next = groups[i + 1];
@@ -1042,11 +1047,11 @@ export function pythonToBlocks(source: string): Translation {
         continue;
       }
     }
-    strayGroups.push(g);
+    mainGroups.push(g);
   }
 
   const btnHatBodyGroups: Group[][] = buttonHatGroups.map((h) => bodyToGroups(h.body));
-  const walkable = [...strayGroups, ...setupGroups, ...loopGroups, ...btnHatBodyGroups.flat()];
+  const walkable = [...mainGroups, ...btnHatBodyGroups.flat()];
   const walkGroups = (gs: Group[], visit: (g: Group) => void) => {
     for (const g of gs) {
       visit(g);
@@ -1067,26 +1072,14 @@ export function pythonToBlocks(source: string): Translation {
     if (cd.role === "opaque") for (const p of refs) ctx.keepRaw.add(p);
   });
 
-  const hasHats = setupGroups.length > 0 || loopGroups.length > 0;
-  let setupSpecs: BlockSpec[];
-  let loopSpecs: BlockSpec[];
-  if (hasHats) {
-    setupSpecs = translateGroups(setupGroups, ctx);
-    loopSpecs = translateGroups(loopGroups, ctx);
-    const straySpecs = translateGroups(strayGroups, ctx);
-    setupSpecs = [...straySpecs, ...setupSpecs];
-  } else {
-    setupSpecs = translateGroups(strayGroups, ctx);
-    loopSpecs = [];
-  }
-
+  const mainSpecs = translateGroups(mainGroups, ctx);
   const buttonHats: ButtonHat[] = buttonHatGroups.map((h, i) => ({
     btn: h.btn,
     chain: chain(translateGroups(btnHatBodyGroups[i], ctx)),
   }));
 
   const variables = [...ctx.vars].map((name) => ({ name, id: name }));
-  return { setup: chain(setupSpecs), loop: chain(loopSpecs), buttonHats, variables };
+  return { main: chain(mainSpecs), buttonHats, variables };
 }
 
 function bodyToGroups(bodyLines: Line[]): Group[] {

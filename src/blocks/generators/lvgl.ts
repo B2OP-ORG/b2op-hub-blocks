@@ -1,6 +1,6 @@
 import type { Block } from "blockly";
 import { Order, type PythonGenerator } from "blockly/python";
-import { needsLvgl, needsTime } from "../setup";
+import { needsLvgl } from "../setup";
 
 /** Unique-per-block symbol so multiple widgets can coexist. */
 function widgetVar(prefix: string, block: Block): string {
@@ -111,15 +111,9 @@ export function registerLvglGenerators(gen: PythonGenerator): void {
     ].join("\n");
   };
 
-  gen.forBlock["lvgl_run"] = () => {
+  gen.forBlock["lvgl_update_screen"] = () => {
     needsLvgl(gen);
-    needsTime(gen);
-    return [
-      `while True:`,
-      `    lv.task_handler()`,
-      `    time.sleep_ms(5)`,
-      ``,
-    ].join("\n");
+    return `lv.timer_handler()\n`;
   };
 
   gen.forBlock["lvgl_hex_color"] = (block: Block) => {

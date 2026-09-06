@@ -4,15 +4,17 @@ import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
 import { pythonToBlocks, type BlockSpec } from "../src/project/pythonToBlocks";
 
+const VH = "# b2op-hub-blocks v2.0.0";
+
 function translate(source: string): BlockSpec | undefined {
-  return pythonToBlocks(source).setup;
+  return pythonToBlocks(source).main;
 }
 
 beforeEach(() => registerAllBlocks());
 
 function underHat(chain: BlockSpec | undefined): object {
-  const hat: Record<string, unknown> = { type: "on_setup" };
-  if (chain) hat.next = { block: chain };
+  const hat: Record<string, unknown> = { type: "when_program_starts" };
+  if (chain) hat.inputs = { DO: { block: chain } };
   return { blocks: { languageVersion: 0, blocks: [hat] } };
 }
 
@@ -51,20 +53,26 @@ describe("pythonToBlocks", () => {
     expect(translate("\n\n\n")).toBeUndefined();
   });
 
-  it("skips import preamble", () => {
-    const chain = translate("import hub, lpf2\nfrom lpf2 import devices\n");
+  it("returns raw_python for source without version header", () => {
+    const chain = translate("hub.imu.reset()\n");
+    expect(chain?.type).toBe("raw_python");
+  });
+
+  it("skips import preamble after version header", () => {
+    const src = `${VH}\nimport hub, lpf2\nfrom lpf2 import devices\n`;
+    const chain = translate(src);
     expect(chain).toBeUndefined();
   });
 
   it("recognizes hub_led_color", () => {
-    const src = "import hub, lpf2\n\nhub.ports.LED.setRgbColorIdx(lpf2.color.RED)\n";
+    const src = `${VH}\nimport hub, lpf2\n\nhub.led.setColorIdx(lpf2.color.RED)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("hub_led_color");
     expect(chain?.fields?.COLOR).toBe("RED");
   });
 
   it("recognizes hub_led_rgb with numeric literals", () => {
-    const src = "hub.ports.LED.setRgbColor(10, 20, 30)\n";
+    const src = `${VH}\nhub.led.setColor(10, 20, 30)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("hub_led_rgb");
     expect(chain?.inputs?.R.shadow?.fields?.NUM).toBe("10");
@@ -73,12 +81,12 @@ describe("pythonToBlocks", () => {
   });
 
   it("recognizes bare hub statement blocks", () => {
-    const src = "hub.buttons.poll()\nhub.imu.reset()\nhub.powerOff()\n";
-    expect(chainTypes(translate(src))).toEqual(["hub_button_poll", "hub_imu_reset", "hub_poweroff"]);
+    const src = `${VH}\nhub.imu.reset()\nhub.powerOff()\n`;
+    expect(chainTypes(translate(src))).toEqual(["hub_imu_reset", "hub_poweroff"]);
   });
 
   it("wraps unknown code in a raw_python block", () => {
-    const src = "some_var = compute(other_var)\n";
+    const src = `${VH}\nsome_var = compute(other_var)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("raw_python");
     expect(chain?.data).toBe("some_var = compute(other_var)");
@@ -86,17 +94,19 @@ describe("pythonToBlocks", () => {
 
   it("intersperses raw blocks between recognized ones", () => {
     const src = [
-      "hub.buttons.poll()",
-      "weird_call_no_known_form(1, 2, 3)",
+      VH,
       "hub.imu.reset()",
+      "weird_call_no_known_form(1, 2, 3)",
+      "hub.powerOff()",
       "",
     ].join("\n");
     const types = chainTypes(translate(src));
-    expect(types).toEqual(["hub_button_poll", "raw_python", "hub_imu_reset"]);
+    expect(types).toEqual(["hub_imu_reset", "raw_python", "hub_poweroff"]);
   });
 
   it("recognizes motor block after typed-device setup", () => {
     const src = [
+      VH,
       "import hub, lpf2",
       "from lpf2 import devices",
       "dev_a = hub.ports.A.device()",
@@ -113,6 +123,7 @@ describe("pythonToBlocks", () => {
 
   it("recognizes motor_stop when startPower(0)", () => {
     const src = [
+      VH,
       "dev_b = hub.ports.B.device()",
       "if not isinstance(dev_b, devices.motor):",
       '    raise TypeError("Port B: expected motor")',
@@ -125,6 +136,7 @@ describe("pythonToBlocks", () => {
 
   it("recognizes basic_motor_power via basic_motor kind", () => {
     const src = [
+      VH,
       "dev_c = hub.ports.C.device()",
       "if not isinstance(dev_c, devices.basic_motor):",
       '    raise TypeError("Port C: expected basic_motor")',
@@ -138,6 +150,7 @@ describe("pythonToBlocks", () => {
 
   it("recognizes color_set_light after color_sensor setup", () => {
     const src = [
+      VH,
       "dev_d = hub.ports.D.device()",
       "if not isinstance(dev_d, devices.color_sensor):",
       '    raise TypeError("Port D: expected color_sensor")',
@@ -151,6 +164,7 @@ describe("pythonToBlocks", () => {
 
   it("recognizes distance_set_light (4-arg setLight) after distance_sensor setup", () => {
     const src = [
+      VH,
       "dev_a = hub.ports.A.device()",
       "if not isinstance(dev_a, devices.distance_sensor):",
       '    raise TypeError("Port A: expected distance_sensor")',
@@ -163,6 +177,7 @@ describe("pythonToBlocks", () => {
 
   it("preserves setup group when device also has untranslatable use", () => {
     const src = [
+      VH,
       "dev_a = hub.ports.A.device()",
       "if not isinstance(dev_a, devices.color_sensor):",
       '    raise TypeError("Port A: expected color_sensor")',
@@ -171,7 +186,6 @@ describe("pythonToBlocks", () => {
       "dev_a.setLight(1, 2, 3)",
     ].join("\n");
     const chain = translate(src);
-    // Whole thing collapses into a single raw_python block (all-or-nothing).
     expect(chain?.type).toBe("raw_python");
     expect(chain?.data).toContain("dev_a = hub.ports.A.device()");
     expect(chain?.data).toContain("print(dev_a.getColorIdx())");
@@ -180,6 +194,7 @@ describe("pythonToBlocks", () => {
 
   it("independent ports: keeps raw for one, translates the other", () => {
     const src = [
+      VH,
       // Port A: untranslatable use — must stay raw
       "dev_a = hub.ports.A.device()",
       "if not isinstance(dev_a, devices.color_sensor):",
@@ -198,6 +213,7 @@ describe("pythonToBlocks", () => {
 
   it("recognizes motor_set_acc_time with profile", () => {
     const src = [
+      VH,
       "dev_a = hub.ports.A.device()",
       "if not isinstance(dev_a, devices.motor):",
       '    raise TypeError("Port A: expected motor")',
@@ -210,13 +226,13 @@ describe("pythonToBlocks", () => {
   });
 
   it("recognizes hub_log_level and hub_lcd_backlight", () => {
-    const src = "hub.log.setLevel(2)\nhub.lcd.on()\n";
+    const src = `${VH}\nhub.log.setLevel(2)\nhub.lcd.on()\n`;
     const types = chainTypes(translate(src));
     expect(types).toEqual(["hub_log_level", "hub_lcd_backlight"]);
   });
 
   it("translates simple assignment to variables_set", () => {
-    const src = "x = 42\n";
+    const src = `${VH}\nx = 42\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("variables_set");
     const varField = chain?.fields?.VAR as { id: string };
@@ -225,7 +241,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates print(...) to text_print", () => {
-    const src = 'print("hi")\n';
+    const src = `${VH}\nprint("hi")\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("text_print");
     expect(chain?.inputs?.TEXT.block?.type).toBe("text");
@@ -233,7 +249,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates arithmetic expressions with precedence", () => {
-    const src = "x = 1 + 2 * 3\n";
+    const src = `${VH}\nx = 1 + 2 * 3\n`;
     const chain = translate(src);
     const add = chain?.inputs?.VALUE.block;
     expect(add?.type).toBe("math_arithmetic");
@@ -245,7 +261,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates comparison + boolean ops", () => {
-    const src = "x = a > 0 and b < 10\n";
+    const src = `${VH}\nx = a > 0 and b < 10\n`;
     const chain = translate(src);
     const val = chain?.inputs?.VALUE.block;
     expect(val?.type).toBe("logic_operation");
@@ -256,7 +272,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates not / logic_negate", () => {
-    const src = "x = not True\n";
+    const src = `${VH}\nx = not True\n`;
     const chain = translate(src);
     const val = chain?.inputs?.VALUE.block;
     expect(val?.type).toBe("logic_negate");
@@ -265,7 +281,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates modulo and power", () => {
-    const src = "x = a % b\ny = a ** 2\n";
+    const src = `${VH}\nx = a % b\ny = a ** 2\n`;
     const chain = translate(src);
     expect(chain?.inputs?.VALUE.block?.type).toBe("math_modulo");
     const next = chain?.next?.block;
@@ -275,7 +291,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates list literal", () => {
-    const src = "x = [1, 2, 3]\n";
+    const src = `${VH}\nx = [1, 2, 3]\n`;
     const chain = translate(src);
     const list = chain?.inputs?.VALUE.block;
     expect(list?.type).toBe("lists_create_with");
@@ -285,13 +301,13 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates len() to lists_length", () => {
-    const src = "n = len(items)\n";
+    const src = `${VH}\nn = len(items)\n`;
     const chain = translate(src);
     expect(chain?.inputs?.VALUE.block?.type).toBe("lists_length");
   });
 
   it("translates unary minus via math_single NEG", () => {
-    const src = "x = -a\n";
+    const src = `${VH}\nx = -a\n`;
     const chain = translate(src);
     const val = chain?.inputs?.VALUE.block;
     expect(val?.type).toBe("math_single");
@@ -300,6 +316,7 @@ describe("pythonToBlocks", () => {
 
   it("translates if/elif/else with extraState", () => {
     const src = [
+      VH,
       "if x > 0:",
       "    y = 1",
       "elif x < 0:",
@@ -319,7 +336,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates while loop", () => {
-    const src = "while x < 10:\n    x = x + 1\n";
+    const src = `${VH}\nwhile x < 10:\n    x = x + 1\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("controls_whileUntil");
     expect(chain?.fields?.MODE).toBe("WHILE");
@@ -328,7 +345,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates for range(N) to controls_repeat_ext", () => {
-    const src = "for i in range(5):\n    print(i)\n";
+    const src = `${VH}\nfor i in range(5):\n    print(i)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("controls_repeat_ext");
     expect(chain?.inputs?.TIMES.block?.fields?.NUM).toBe("5");
@@ -336,11 +353,10 @@ describe("pythonToBlocks", () => {
   });
 
   it("translates for range(A, B) to controls_for with inclusive TO", () => {
-    const src = "for i in range(1, 10):\n    print(i)\n";
+    const src = `${VH}\nfor i in range(1, 10):\n    print(i)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("controls_for");
     expect(chain?.inputs?.FROM.block?.fields?.NUM).toBe("1");
-    // TO becomes 10 - 1 arithmetic
     const to = chain?.inputs?.TO.block;
     expect(to?.type).toBe("math_arithmetic");
     expect(to?.fields?.OP).toBe("MINUS");
@@ -349,7 +365,7 @@ describe("pythonToBlocks", () => {
   });
 
   it("declares variables encountered in the source", () => {
-    const src = "x = 5\ny = x + 1\n";
+    const src = `${VH}\nx = 5\ny = x + 1\n`;
     const result = pythonToBlocks(src);
     const varNames = result.variables.map((v) => v.name).sort();
     expect(varNames).toEqual(["x", "y"]);

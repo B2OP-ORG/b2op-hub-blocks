@@ -1,4 +1,4 @@
-// Remote Pyright bridge for the LEGO-Hub-blocks Python editor.
+// Remote Pyright bridge for the b2op-hub-blocks Python editor.
 //
 // The browser client speaks raw JSON-RPC over WebSocket (one JSON object per
 // text frame — see src/editor/lsp/transport.ts). Pyright's language server

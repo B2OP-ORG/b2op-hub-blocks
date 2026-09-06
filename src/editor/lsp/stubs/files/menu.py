@@ -23,20 +23,96 @@ BACKLIGHT_ACTIVE = 150
 BACKLIGHT_DIM = 20
 
 MENU_ITEMS = ["Run program", "Hardware", "Settings", "Power off"]
-HARDWARE_ITEMS = ["About HW", "Calibrate IMU"]
-(STATE_MAIN, STATE_BROWSE, STATE_ABOUT, STATE_SETTINGS,
- STATE_CONFIRM_POWEROFF, STATE_HARDWARE) = range(6)
+HARDWARE_ITEMS = ["Ports", "About", "Calibrate IMU"]
+(STATE_MAIN, STATE_BROWSE, STATE_SETTINGS,
+ STATE_CONFIRM_POWEROFF, STATE_HARDWARE, STATE_USB_MSC) = range(6)
 
 
-def about_hw(parent):
+def _show_about(scr):
+    scr.clean()
+    apply_screen_bg(scr)
+
+    root = lv.obj(scr)
+    root.set_size(SCREEN_W, SCREEN_H)
+    root.center()
+    root.set_style_bg_color(lv.color_hex(COLOR_BG), 0)
+    root.set_style_bg_opa(lv.OPA.COVER, 0)
+    root.set_style_border_width(0, 0)
+    root.set_style_radius(0, 0)
+    root.set_style_pad_all(0, 0)
+    root.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+    root.set_style_pad_row(0, 0)
+    new_header(root, "About")
+
+    body = lv.obj(root)
+    body.set_style_bg_color(lv.color_hex(COLOR_BG), 0)
+    body.set_style_bg_opa(lv.OPA.COVER, 0)
+    body.set_style_border_width(0, 0)
+    body.set_style_radius(0, 0)
+    body.set_width(SCREEN_W)
+    body.set_flex_grow(1)
+    body.set_style_pad_all(6, 0)
+    body.set_scroll_dir(lv.DIR.HOR | lv.DIR.VER)
+
     v = sys.version.split(";")[0]
-    info = "\n".join([
-        "Board: LEGO Hub",
-        "MCU:   ESP32-S3",
-        "MP: " + v,
-        "Free: {} B".format(gc.mem_free()),
-    ])
-    return text_screen(parent, "About HW", info, hint="left/center: back")
+    ports_present = ", ".join(
+        n for n in ("A", "B", "C", "D", "E", "F")
+        if getattr(hub.board, "HAS_PORT_" + n, 0)
+    )
+    try:
+        import uos as _uos
+        _st = _uos.statvfs("/")
+        fs_free  = _st[0] * _st[3] // 1024
+        fs_total = _st[0] * _st[2] // 1024
+        fs_info  = "{}/{} kB".format(fs_free, fs_total)
+    except Exception:
+        fs_info = "n/a"
+
+    lines = [
+        "Board:  {} {}".format(hub.board.BOARD_NAME, hub.board.BOARD_VERSION),
+        "MCU:    ESP32-S3",
+        "MicroPython: {}".format(v),
+        "Heap free: {} B".format(gc.mem_free()),
+        "VFS free: " + fs_info,
+        "Ports: " + (ports_present or "none"),
+    ]
+    try:
+        batt_pct = hub.battery.percent()
+        batt_mv  = hub.battery.voltage()
+        lines.append("Battery: {}% {}mV".format(batt_pct, batt_mv))
+    except Exception:
+        pass
+
+    lbl = lv.label(body)
+    lbl.set_width(512)
+    lbl.set_text("\n".join(lines))
+    lbl.set_style_text_color(lv.color_hex(COLOR_TEXT), 0)
+
+    getters = (hub.buttons.up, hub.buttons.down,
+               hub.buttons.left, hub.buttons.right, hub.buttons.center)
+    while any(g() for g in getters):
+        time.sleep_ms(POLL_MS)
+
+    SCROLL_PX = 12
+    while True:
+        battery.refresh()
+
+        if hub.buttons.center():
+            while hub.buttons.center():
+                time.sleep_ms(POLL_MS)
+            break
+
+        dy = dx = 0
+        if hub.buttons.up():    dy =  SCROLL_PX
+        if hub.buttons.down():  dy = -SCROLL_PX
+        if hub.buttons.left():  dx =  SCROLL_PX
+        if hub.buttons.right(): dx = -SCROLL_PX
+        if dx or dy:
+            body.scroll_by(dx, dy, False)
+
+        time.sleep_ms(POLL_MS)
+
+    root.delete()
 
 
 def _is_dir(path):
@@ -157,29 +233,37 @@ def calibrate_imu(scr):
     root.delete()
 
 
+_DEBOUNCE_MS = 60
+
+
 def _wait_any_button_edge():
     """Full press-and-release cycle. Drains any stuck-held button first, then
-    waits for a fresh press, then waits for release so the same event doesn't
-    re-fire the caller's next menu action."""
+    waits for a fresh press, then waits for stable release so contact bounce
+    on release cannot re-fire the caller's next menu poll as a rising edge."""
     getters = (hub.buttons.up, hub.buttons.down,
                hub.buttons.left, hub.buttons.right, hub.buttons.center)
     while any(g() for g in getters):
         battery.refresh()
-        protocol.poll()
         time.sleep_ms(POLL_MS)
     while not any(g() for g in getters):
         battery.refresh()
-        protocol.poll()
         time.sleep_ms(POLL_MS)
-    while any(g() for g in getters):
+    released_since = None
+    while True:
         battery.refresh()
-        protocol.poll()
+        if any(g() for g in getters):
+            released_since = None
+        elif released_since is None:
+            released_since = time.ticks_ms()
+        elif time.ticks_diff(time.ticks_ms(), released_since) >= _DEBOUNCE_MS:
+            return
         time.sleep_ms(POLL_MS)
 
 
 def _settings_items(cfg):
-    mark = "[x]" if cfg.allow_full_fs else "[ ]"
-    return [mark + " Full FS root"]
+    fs_mark  = "[x]" if cfg.allow_full_fs else "[ ]"
+    msc_mark = "[x]" if cfg.usb_msc      else "[ ]"
+    return [fs_mark + " Full FS root", msc_mark + " USB MSC"]
 
 
 def _new_main(scr):
@@ -208,7 +292,7 @@ def _run_from_menu(scr, ui, path):
         _wait_any_button_edge()
         _reset_to_main(scr, ui)
         return
-    runner.run_program(path, poll_stdin=protocol.poll)
+    runner.run_program(path)
     # runner leaves Done/Error text_screen up; wait for a fresh button cycle,
     # then rebuild the main menu.
     _wait_any_button_edge()
@@ -221,10 +305,16 @@ def run():
     runner.set_screen(scr)
     apply_screen_bg(scr)
 
+    if cfg.usb_msc:
+        _init_state = STATE_USB_MSC
+        _init_view = ListView(scr, "USB MSC Active", ["Turn off USB MSC"])
+    else:
+        _init_state = STATE_MAIN
+        _init_view = _new_main(scr)
+
     ui = {
-        "state": STATE_MAIN,
-        "view": _new_main(scr),
-        "about_view": None,
+        "state": _init_state,
+        "view": _init_view,
         "root_path": cfg.root(),
         "cur_path": cfg.root(),
         "cur_kinds": [],
@@ -247,10 +337,9 @@ def run():
     def _wake_or_pass(fn):
         """Wrap a button callback so the first press while dimmed only wakes.
 
-        Rising-edge callbacks fire from ``hub.buttons.poll()``. When ``dimmed``
-        is set, we still want to refresh the timer and restore brightness, but
-        not invoke the underlying handler — the user's intent was "wake up",
-        not "trigger the menu action under the button".
+        When ``dimmed`` is set, we still want to refresh the timer and
+        restore brightness, but not invoke the underlying handler — the user's
+        intent was "wake up", not "trigger the menu action under the button".
         """
         def wrapped():
             was_dimmed = idle["dimmed"]
@@ -290,7 +379,7 @@ def run():
         ui["state"] = STATE_MAIN
 
     _MOVE_STATES = (STATE_MAIN, STATE_BROWSE, STATE_SETTINGS,
-                    STATE_CONFIRM_POWEROFF, STATE_HARDWARE)
+                    STATE_CONFIRM_POWEROFF, STATE_HARDWARE, STATE_USB_MSC)
 
     def _on_up():
         if ui["state"] in _MOVE_STATES:
@@ -305,18 +394,9 @@ def run():
         if s == STATE_BROWSE:
             if not go_up():
                 back_to_main()
-        elif s == STATE_ABOUT:
-            if ui["about_view"] is not None:
-                ui["about_view"].delete()
-            ui["about_view"] = None
-            ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
-            ui["state"] = STATE_HARDWARE
-        elif s == STATE_SETTINGS:
+        elif s in (STATE_SETTINGS, STATE_HARDWARE, STATE_CONFIRM_POWEROFF):
             back_to_main()
-        elif s == STATE_HARDWARE:
-            back_to_main()
-        elif s == STATE_CONFIRM_POWEROFF:
-            back_to_main()
+        # STATE_USB_MSC: left does nothing — only option is "Turn off USB MSC"
 
     def _select():
         s = ui["state"]
@@ -339,9 +419,28 @@ def run():
             sel = ui["view"].sel
             if sel == 0:
                 ui["view"].close()
-                ui["about_view"] = about_hw(scr)
-                ui["state"] = STATE_ABOUT
+                _unregister_all()
+                try:
+                    runner.run_program("/ports_view.py")
+                    _wait_any_button_edge()
+                finally:
+                    _register_all()
+                _note_activity()
+                scr.clean()
+                ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
+                ui["state"] = STATE_HARDWARE
             elif sel == 1:
+                ui["view"].close()
+                _unregister_all()
+                try:
+                    _show_about(scr)
+                finally:
+                    _register_all()
+                _note_activity()
+                scr.clean()
+                ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
+                ui["state"] = STATE_HARDWARE
+            elif sel == 2:
                 ui["view"].close()
                 _unregister_all()
                 try:
@@ -366,13 +465,41 @@ def run():
                 ui["view"].close()
                 _run_from_menu(scr, ui, path)
                 _note_activity()
-        elif s == STATE_ABOUT:
-            _on_left()
         elif s == STATE_SETTINGS:
-            if ui["view"].sel == 0:
+            sel = ui["view"].sel
+            if sel == 0:
                 cfg.allow_full_fs = not cfg.allow_full_fs
                 cfg.save()
-                ui["view"].set_items("Settings", _settings_items(cfg), ui["view"].sel)
+                ui["view"].set_items("Settings", _settings_items(cfg), sel)
+            elif sel == 1:
+                if not cfg.usb_msc:
+                    try:
+                        os.umount("/sd")
+                    except OSError:
+                        pass
+                    try:
+                        sd = hub.sd_card()
+                        if sd is not None:
+                            sd.deinit()
+                    except Exception:
+                        pass
+                    hub.set_usb_msc(True)
+                    cfg.usb_msc = True
+                    cfg.save()
+                    ui["view"].set_items("USB MSC Active", ["Turn off USB MSC"], 0)
+                    ui["state"] = STATE_USB_MSC
+                else:
+                    hub.set_usb_msc(False)
+                    hub.sd_remount()
+                    cfg.usb_msc = False
+                    cfg.save()
+                    ui["view"].set_items("Settings", _settings_items(cfg), sel)
+        elif s == STATE_USB_MSC:
+            hub.set_usb_msc(False)
+            hub.sd_remount()
+            cfg.usb_msc = False
+            cfg.save()
+            back_to_main()
         elif s == STATE_CONFIRM_POWEROFF:
             if ui["view"].sel == 1:
                 scr.clean()
@@ -401,9 +528,7 @@ def run():
                 or hub.buttons.left() or hub.buttons.right())
 
     while True:
-        hub.buttons.poll()
         battery.refresh()
-        protocol.poll()
         if _any_button_held():
             idle["last"] = time.ticks_ms()
         elapsed = time.ticks_diff(time.ticks_ms(), idle["last"])

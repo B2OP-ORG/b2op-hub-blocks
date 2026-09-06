@@ -1,37 +1,96 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "./types";
+import { KIND, FLAGS_NO_ACK, makeFrame } from "../device/protocol";
 
-/**
- * In-memory mock hub speaking the new HubProtocol frame format
- * (0x1E-delimited). Understands RUN / UPLOAD / STOP / READ / PING and echoes
- * OK/ERR/DATA replies. Programs are not actually executed — the mock replies
- * OK to RUN and streams a pre-seeded stdout (see setNextStdout) before OK.
- */
-const FRAME_MARK = new TextEncoder().encode("#FR:");
-const FRAME_FIRST = FRAME_MARK[0];
-
-function matchMark(chunk: Uint8Array, start: number): boolean {
-  if (chunk.length - start < FRAME_MARK.length) return false;
-  for (let k = 0; k < FRAME_MARK.length; k++) {
-    if (chunk[start + k] !== FRAME_MARK[k]) return false;
-  }
-  return true;
-}
+const PROTO_VER = 2;
+const BOARD_NAME = "MockHub";
+const BOARD_VERSION = "1.0.0";
+const MOCK_MTU = 185;
+const PROGRESS_EVERY = 2048;
 
 export interface MockOptions {
   stdout?: string;
   files?: Record<string, Uint8Array>;
 }
 
-interface PendingUpload {
-  path: string;
-  remaining: number;
-  buf: Uint8Array;
-  offset: number;
-  total: number;
-  lastReported: number;
+// ── Binary parse state (device mirrors the host-side parser) ──────────────────
+
+const Phase = { Idle: 0, Varint: 1, Fixed: 2, Payload: 3 } as const;
+type Phase = typeof Phase[keyof typeof Phase];
+
+interface ParseState {
+  phase: Phase;
+  varintAccum: number;
+  varintShift: number;
+  varintBytesRead: number;
+  payloadLen: number;
+  fixedBuf: number[];
+  seq: number;
+  flags: number;
+  kind: number;
+  payloadBuf: Uint8Array;
+  payloadOff: number;
 }
 
-const PROGRESS_EVERY = 2048;
+function freshState(): ParseState {
+  return {
+    phase: Phase.Idle,
+    varintAccum: 0, varintShift: 0, varintBytesRead: 0,
+    payloadLen: 0,
+    fixedBuf: [],
+    seq: 0, flags: 0, kind: 0,
+    payloadBuf: new Uint8Array(0), payloadOff: 0,
+  };
+}
+
+// ── Frame building helpers ────────────────────────────────────────────────────
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function frameOk(seq: number, payload: Uint8Array = new Uint8Array(0)): Uint8Array {
+  return makeFrame(KIND.OK, seq, 0, payload);
+}
+function frameErr(seq: number, msg: string): Uint8Array {
+  return makeFrame(KIND.ERR, seq, 0, enc.encode(msg));
+}
+function frameAck(seq: number, msg = ""): Uint8Array {
+  return makeFrame(KIND.ACK, seq, 0, msg ? enc.encode(msg) : new Uint8Array(0));
+}
+function frameProgress(seq: number, sent: number, total: number): Uint8Array {
+  const p = new Uint8Array(8);
+  const v = new DataView(p.buffer);
+  v.setUint32(0, sent, false);
+  v.setUint32(4, total, false);
+  return makeFrame(KIND.PROGRESS, seq, 0, p);
+}
+function frameData(seq: number, payload: Uint8Array): Uint8Array {
+  return makeFrame(KIND.DATA, seq, 0, payload);
+}
+function frameStdout(text: string): Uint8Array {
+  return makeFrame(KIND.STDOUT, 0xFF, 0, enc.encode(text));
+}
+function frameProgEnd(ok: boolean, msg = ""): Uint8Array {
+  const msgBytes = enc.encode(msg);
+  const p = new Uint8Array(1 + msgBytes.length);
+  p[0] = ok ? 1 : 0;
+  p.set(msgBytes, 1);
+  return makeFrame(KIND.PROG_END, 0xFF, 0, p);
+}
+function frameHello(): Uint8Array {
+  return makeFrame(KIND.HELLO, 0xFF, 0, helloBoardPayload());
+}
+
+function helloBoardPayload(): Uint8Array {
+  const name = enc.encode(BOARD_NAME + "\0");
+  const ver  = enc.encode(BOARD_VERSION + "\0");
+  const p = new Uint8Array(1 + name.length + ver.length);
+  p[0] = PROTO_VER;
+  p.set(name, 1);
+  p.set(ver, 1 + name.length);
+  return p;
+}
+
+// ── MockTransport ─────────────────────────────────────────────────────────────
 
 export class MockTransport implements Transport {
   readonly kind = "mock" as const;
@@ -39,23 +98,21 @@ export class MockTransport implements Transport {
   private _connected = false;
   private dataCbs = new Set<DataListener>();
   private discCbs = new Set<() => void>();
-  private headerBuf: number[] | null = null;
-  private pendingUpload: PendingUpload | null = null;
+  private ps: ParseState = freshState();
   public files: Record<string, Uint8Array>;
-  private nextStdout: string;
+  private _nextStdout: string;
 
   constructor(opts: MockOptions = {}) {
     this.files = { ...(opts.files ?? {}) };
-    this.nextStdout = opts.stdout ?? "";
-    this.info = { name: "MockDevice", mtu: 185 };
+    this._nextStdout = opts.stdout ?? "";
+    this.info = { name: "MockDevice", mtu: MOCK_MTU };
   }
 
-  get connected(): boolean {
-    return this._connected;
-  }
+  get connected(): boolean { return this._connected; }
 
   async connect(): Promise<void> {
     this._connected = true;
+    queueMicrotask(() => this.emit(frameHello()));
   }
 
   async disconnect(): Promise<void> {
@@ -73,137 +130,220 @@ export class MockTransport implements Transport {
     return () => this.discCbs.delete(cb);
   }
 
-  setNextStdout(s: string): void {
-    this.nextStdout = s;
-  }
+  setNextStdout(s: string): void { this._nextStdout = s; }
+
+  writeFast(chunk: Uint8Array): Promise<void> { return this.write(chunk); }
 
   async write(chunk: Uint8Array): Promise<void> {
     if (!this._connected) throw new Error("Not connected");
-    let i = 0;
-    while (i < chunk.length) {
-      if (this.pendingUpload) {
-        const pu = this.pendingUpload;
-        const take = Math.min(pu.remaining, chunk.length - i);
-        pu.buf.set(chunk.subarray(i, i + take), pu.offset);
-        pu.offset += take;
-        pu.remaining -= take;
-        i += take;
-        if (pu.offset - pu.lastReported >= PROGRESS_EVERY && pu.remaining > 0) {
-          pu.lastReported = pu.offset;
-          this.replyProgress(`${pu.offset}/${pu.total} ${pu.path}`);
+    for (let i = 0; i < chunk.length; ) {
+      i = this.feedByte(chunk[i], i, chunk);
+    }
+  }
+
+  // Returns the new index after consuming bytes.
+  private feedByte(b: number, i: number, chunk: Uint8Array): number {
+    const ps = this.ps;
+    switch (ps.phase) {
+      case Phase.Idle:
+        if (b === 0x7E) { ps.phase = Phase.Varint; ps.varintAccum = 0; ps.varintShift = 0; ps.varintBytesRead = 0; }
+        return i + 1;
+
+      case Phase.Varint: {
+        ps.varintAccum |= (b & 0x7F) << ps.varintShift;
+        ps.varintShift += 7;
+        ps.varintBytesRead++;
+        const done = !(b & 0x80) || ps.varintBytesRead === 5;
+        if (done) {
+          ps.payloadLen = ps.varintAccum;
+          ps.fixedBuf = [];
+          ps.phase = Phase.Fixed;
         }
-        if (pu.remaining === 0) {
-          this.files[pu.path] = pu.buf;
-          const path = pu.path;
-          this.pendingUpload = null;
-          this.replyOk(`UPLOAD ${path}`);
+        return i + 1;
+      }
+
+      case Phase.Fixed:
+        ps.fixedBuf.push(b);
+        if (ps.fixedBuf.length === 3) {
+          ps.seq   = ps.fixedBuf[0];
+          ps.flags = ps.fixedBuf[1];
+          ps.kind  = ps.fixedBuf[2];
+          if (ps.payloadLen === 0) {
+            this.dispatch(ps.seq, ps.flags, ps.kind, new Uint8Array(0));
+            this.ps = freshState();
+          } else {
+            ps.payloadBuf = new Uint8Array(ps.payloadLen);
+            ps.payloadOff = 0;
+            ps.phase = Phase.Payload;
+          }
         }
-        continue;
-      }
-      if (this.headerBuf !== null) {
-        const b = chunk[i++];
-        if (b === 0x0a) {
-          const header = new TextDecoder().decode(new Uint8Array(this.headerBuf));
-          this.headerBuf = null;
-          this.handleHeader(header);
-        } else {
-          this.headerBuf.push(b);
+        return i + 1;
+
+      case Phase.Payload: {
+        const take = Math.min(ps.payloadLen - ps.payloadOff, chunk.length - i);
+        ps.payloadBuf.set(chunk.subarray(i, i + take), ps.payloadOff);
+        ps.payloadOff += take;
+        if (ps.payloadOff === ps.payloadLen) {
+          const payload = ps.payloadBuf;
+          const { seq, flags, kind } = ps;
+          this.ps = freshState();
+          this.dispatch(seq, flags, kind, payload);
         }
-        continue;
-      }
-      if (chunk[i] === FRAME_FIRST && matchMark(chunk, i)) {
-        this.headerBuf = [];
-        i += FRAME_MARK.length;
-      } else {
-        // Bytes outside a frame in web→device direction shouldn't happen; drop.
-        i++;
+        return i + take;
       }
     }
   }
 
-  private handleHeader(header: string): void {
-    const sp = header.indexOf(" ");
-    const cmd = sp >= 0 ? header.slice(0, sp) : header;
-    const rest = sp >= 0 ? header.slice(sp + 1) : "";
-    if (cmd === "PING") return this.replyOk("PING");
-    if (cmd === "MTU") return this.replyOk(`MTU=${this.info.mtu ?? 185}`);
-    if (cmd === "STOP") return this.replyOk("STOP");
-    if (cmd === "RUN") {
-      const path = rest;
-      if (!this.files[path]) return this.replyErr(`no such file: ${path}`);
-      if (this.nextStdout) {
-        this.emitStdout(this.nextStdout);
-        this.nextStdout = "";
+  private emit(frame: Uint8Array): void {
+    for (const cb of this.dataCbs) cb(frame);
+  }
+
+  private reply(frame: Uint8Array): void {
+    queueMicrotask(() => this.emit(frame));
+  }
+
+  private dispatch(seq: number, flags: number, kind: number, payload: Uint8Array): void {
+    // NO_ACK: process but don't respond (we still handle the command)
+    const noAck = !!(flags & FLAGS_NO_ACK);
+
+    switch (kind) {
+      case KIND.HELLO_REQ: {
+        if (!noAck) this.reply(frameOk(seq, helloBoardPayload()));
+        break;
       }
-      return this.replyOk(`RUN ${path}`);
-    }
-    if (cmd === "READ") {
-      const path = rest;
-      const bytes = this.files[path];
-      if (!bytes) return this.replyErr(`no such file: ${path}`);
-      return this.replyData(bytes, path);
-    }
-    if (cmd === "UPLOAD") {
-      const parts = rest.split(" ");
-      if (parts.length < 2) return this.replyErr("UPLOAD: bad header");
-      const path = parts.slice(0, -1).join(" ");
-      const len = parseInt(parts[parts.length - 1], 10);
-      if (Number.isNaN(len) || len < 0) return this.replyErr("UPLOAD: bad length");
-      if (path === "/main.py" || path === "/boot.py" || path === "/boot.mpy" || path === "/runner.py") {
-        return this.replyErr(`forbidden path: ${path}`);
+      case KIND.PING: {
+        if (!noAck) this.reply(frameOk(seq));
+        break;
       }
-      if (len === 0) {
-        this.replyAck(`UPLOAD ${path} 0`);
-        this.files[path] = new Uint8Array(0);
-        return this.replyOk(`UPLOAD ${path}`);
+      case KIND.MTU_REQ: {
+        if (!noAck) {
+          const p = new Uint8Array(2);
+          new DataView(p.buffer).setUint16(0, MOCK_MTU, false);
+          this.reply(frameOk(seq, p));
+        }
+        break;
       }
-      this.replyAck(`UPLOAD ${path} ${len}`);
-      this.pendingUpload = {
-        path,
-        remaining: len,
-        buf: new Uint8Array(len),
-        offset: 0,
-        total: len,
-        lastReported: 0,
-      };
-      return;
+      case KIND.STOP: {
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.RUN: {
+        const path = dec.decode(payload);
+        if (!this.files[path]) {
+          if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`));
+          break;
+        }
+        if (!noAck) this.reply(frameOk(seq));
+        const stdout = this._nextStdout;
+        this._nextStdout = "";
+        queueMicrotask(() => {
+          if (stdout) this.emit(frameStdout(stdout));
+          this.emit(frameProgEnd(true));
+        });
+        break;
+      }
+      case KIND.UPLOAD: {
+        if (payload.length < 1) { this.reply(frameErr(seq, "UPLOAD: empty payload")); break; }
+        const pathLen = payload[0];
+        if (1 + pathLen > payload.length) { this.reply(frameErr(seq, "UPLOAD: path_len overflow")); break; }
+        const path = dec.decode(payload.subarray(1, 1 + pathLen));
+        const data = payload.subarray(1 + pathLen);
+        this.reply(frameAck(seq));
+        const total = data.length;
+        let offset = 0;
+        const CHUNK = PROGRESS_EVERY;
+        const emitProgress = () => {
+          while (offset < total) {
+            const next = Math.min(offset + CHUNK, total);
+            offset = next;
+            if (offset < total) {
+              this.emit(frameProgress(seq, offset, total));
+            }
+          }
+          this.files[path] = data;
+          this.emit(frameOk(seq));
+        };
+        queueMicrotask(emitProgress);
+        break;
+      }
+      case KIND.READ: {
+        const path = dec.decode(payload);
+        const bytes = this.files[path];
+        if (!bytes) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
+        if (!noAck) this.reply(frameData(seq, bytes));
+        break;
+      }
+      case KIND.LS: {
+        const path = dec.decode(payload);
+        // Gather entries from files map whose keys start with path/
+        const prefix = path.endsWith("/") ? path : path + "/";
+        const seen = new Set<string>();
+        const entries: { name: string; isDir: boolean }[] = [];
+        for (const key of Object.keys(this.files)) {
+          if (!key.startsWith(prefix)) continue;
+          const rel = key.slice(prefix.length);
+          const sep = rel.indexOf("/");
+          if (sep === -1) {
+            if (!seen.has(rel)) { seen.add(rel); entries.push({ name: rel, isDir: false }); }
+          } else {
+            const dir = rel.slice(0, sep);
+            if (!seen.has(dir)) { seen.add(dir); entries.push({ name: dir, isDir: true }); }
+          }
+        }
+        // Pack [is_dir:u8][name\0]...
+        const parts: Uint8Array[] = entries.map(e => {
+          const nb = enc.encode(e.name + "\0");
+          const r = new Uint8Array(1 + nb.length);
+          r[0] = e.isDir ? 1 : 0;
+          r.set(nb, 1);
+          return r;
+        });
+        const total = parts.reduce((s, p) => s + p.length, 0);
+        const packed = new Uint8Array(total);
+        let off = 0;
+        for (const p of parts) { packed.set(p, off); off += p.length; }
+        if (!noAck) this.reply(frameData(seq, packed));
+        break;
+      }
+      case KIND.MV: {
+        const result = decodeTwoPaths(payload);
+        if (!result) { if (!noAck) this.reply(frameErr(seq, "MV: bad payload")); break; }
+        const [src, dst] = result;
+        if (!this.files[src]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${src}`)); break; }
+        this.files[dst] = this.files[src];
+        delete this.files[src];
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.CP: {
+        const result = decodeTwoPaths(payload);
+        if (!result) { if (!noAck) this.reply(frameErr(seq, "CP: bad payload")); break; }
+        const [src, dst] = result;
+        if (!this.files[src]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${src}`)); break; }
+        this.files[dst] = this.files[src].slice();
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.RM: {
+        const path = dec.decode(payload);
+        if (!this.files[path]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
+        delete this.files[path];
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      default:
+        if (!noAck) this.reply(frameErr(seq, `unknown kind: 0x${kind.toString(16)}`));
     }
-    return this.replyErr(`unknown command: ${cmd}`);
   }
+}
 
-  private emit(bytes: Uint8Array): void {
-    for (const cb of this.dataCbs) cb(bytes);
-  }
-
-  private emitStdout(text: string): void {
-    queueMicrotask(() => this.emit(new TextEncoder().encode(text)));
-  }
-
-  private replyOk(msg: string): void {
-    const frame = new TextEncoder().encode(`#FR:OK ${msg}\n`);
-    queueMicrotask(() => this.emit(frame));
-  }
-
-  private replyAck(msg: string): void {
-    const frame = new TextEncoder().encode(`#FR:ACK ${msg}\n`);
-    queueMicrotask(() => this.emit(frame));
-  }
-
-  private replyProgress(msg: string): void {
-    const frame = new TextEncoder().encode(`#FR:PROGRESS ${msg}\n`);
-    queueMicrotask(() => this.emit(frame));
-  }
-
-  private replyErr(msg: string): void {
-    const frame = new TextEncoder().encode(`#FR:ERR ${msg}\n`);
-    queueMicrotask(() => this.emit(frame));
-  }
-
-  private replyData(bytes: Uint8Array, msg = ""): void {
-    const header = new TextEncoder().encode(`#FR:DATA ${bytes.length}${msg ? " " + msg : ""}\n`);
-    const frame = new Uint8Array(header.length + bytes.length);
-    frame.set(header, 0);
-    frame.set(bytes, header.length);
-    queueMicrotask(() => this.emit(frame));
-  }
+function decodeTwoPaths(payload: Uint8Array): [string, string] | null {
+  if (payload.length < 1) return null;
+  const srcLen = payload[0];
+  if (1 + srcLen + 1 > payload.length) return null;
+  const src = new TextDecoder().decode(payload.subarray(1, 1 + srcLen));
+  const dstLen = payload[1 + srcLen];
+  if (1 + srcLen + 1 + dstLen > payload.length) return null;
+  const dst = new TextDecoder().decode(payload.subarray(1 + srcLen + 1, 1 + srcLen + 1 + dstLen));
+  return [src, dst];
 }

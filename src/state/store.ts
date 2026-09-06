@@ -21,6 +21,8 @@ interface AppState {
   console: ConsoleEntry[];
   /** JSON snapshot of the last explicitly-saved project. Empty until save. */
   savedSnapshot: string;
+  boardName: string;
+  boardVersion: string;
   setProject: (p: AnyProject) => void;
   /** Replace project AND mark the new state as the saved baseline (Open / Load). */
   loadProject: (p: AnyProject) => void;
@@ -32,6 +34,7 @@ interface AppState {
   setRunning: (r: boolean) => void;
   appendConsole: (kind: ConsoleEntry["kind"], text: string) => void;
   clearConsole: () => void;
+  setBoardInfo: (name: string, version: string) => void;
 }
 
 const MAX_CONSOLE = 500;
@@ -47,6 +50,8 @@ export const useApp = create<AppState>((set) => ({
   running: false,
   console: [],
   savedSnapshot: JSON.stringify(INITIAL_PROJECT),
+  boardName: "",
+  boardVersion: "",
   setProject: (project) => set({ project }),
   loadProject: (project) => set({ project, savedSnapshot: JSON.stringify(project) }),
   markSaved: () => set((s) => ({ savedSnapshot: JSON.stringify(s.project) })),
@@ -58,6 +63,7 @@ export const useApp = create<AppState>((set) => ({
   setDevice: (device) => set({ device }),
   setConnection: (connection, err) =>
     set({ connection, connectionError: err ?? null }),
+  setBoardInfo: (boardName, boardVersion) => set({ boardName, boardVersion }),
   setRunning: (running) => set({ running }),
   appendConsole: (kind, text) =>
     set((s) => {

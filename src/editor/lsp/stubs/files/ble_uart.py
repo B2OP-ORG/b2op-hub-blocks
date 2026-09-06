@@ -46,7 +46,7 @@ def _adv_payload(name, service_uuid):
 
 
 class BLEUART:
-    def __init__(self, name="LEGO Hub"):
+    def __init__(self, name="B2OP Hub"):
         self._ble = bluetooth.BLE()
         self._ble.active(True)
         self._ble.config(gap_name=name)
@@ -85,6 +85,14 @@ class BLEUART:
         if event == _IRQ_CENTRAL_CONNECT:
             conn_handle, _, _ = data
             self._conns.add(conn_handle)
+            # ATT MTU exchange is spec-allowed from either role. Some centrals
+            # (Web Bluetooth on certain browsers, older BlueZ) never initiate,
+            # leaving MTU at 23 (20 B payload/notify). Request it ourselves so
+            # NUS notifies can use the full 182 B/frame at MTU 185.
+            try:
+                self._ble.gattc_exchange_mtu(conn_handle)  # type: ignore
+            except Exception:
+                pass
         elif event == _IRQ_CENTRAL_DISCONNECT:
             conn_handle, _, _ = data
             self._conns.discard(conn_handle)
@@ -141,7 +149,7 @@ class BLEUART:
 _instance = None
 
 
-def start(name="LEGO Hub"):
+def start(name="B2OP Hub"):
     global _instance
     if _instance is not None:
         return _instance

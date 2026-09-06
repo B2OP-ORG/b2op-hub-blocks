@@ -76,12 +76,12 @@ export const LVGL_BLOCKS = [
     inputsInline: true,
   },
   {
-    type: "lvgl_run",
-    message0: "run screen forever",
+    type: "lvgl_update_screen",
+    message0: "update screen",
     previousStatement: null,
     nextStatement: null,
     colour: 280,
-    tooltip: "Enter LVGL event loop. Blocks after this never run.",
+    tooltip: "Process LVGL events and refresh the display. Add inside a loop. Auto-added to loop bodies in generated Python.",
   },
   {
     type: "lvgl_hex_color",

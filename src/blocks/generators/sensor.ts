@@ -1,27 +1,28 @@
 import type { Block } from "blockly";
 import { Order, type PythonGenerator } from "blockly/python";
-import { devVar, type Port, registerDevice } from "../setup";
+import { type Port, registerDevice } from "../setup";
 
 export function registerSensorGenerators(gen: PythonGenerator): void {
   const port = (block: Block) => block.getFieldValue("PORT") as Port;
   const val = (block: Block, name: string, def = "0") =>
     gen.valueToCode(block, name, Order.NONE) || def;
 
+  // Color sensor — device uses internal mode combo; no manual setMode() needed.
   gen.forBlock["color_get_color"] = (block: Block) => {
     const p = port(block);
-    const v = registerDevice(gen, p, "color_sensor", `${devVar(p)}.setMode(devices.color_sensor.MODE_COLOR)`);
+    const v = registerDevice(gen, p, "color_sensor");
     return [`${v}.getColorIdx()`, Order.FUNCTION_CALL];
   };
 
   gen.forBlock["color_get_reflectivity"] = (block: Block) => {
     const p = port(block);
-    const v = registerDevice(gen, p, "color_sensor", `${devVar(p)}.setMode(devices.color_sensor.MODE_REFLT)`);
+    const v = registerDevice(gen, p, "color_sensor");
     return [`${v}.getReflectivity()`, Order.FUNCTION_CALL];
   };
 
   gen.forBlock["color_get_rgb"] = (block: Block) => {
     const p = port(block);
-    const v = registerDevice(gen, p, "color_sensor", `${devVar(p)}.setMode(devices.color_sensor.MODE_RGB)`);
+    const v = registerDevice(gen, p, "color_sensor");
     return [`${v}.getRGB()`, Order.FUNCTION_CALL];
   };
 
@@ -55,4 +56,3 @@ export function registerSensorGenerators(gen: PythonGenerator): void {
     return [`${v}.getDistance()`, Order.FUNCTION_CALL];
   };
 }
-

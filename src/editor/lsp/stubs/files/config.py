@@ -8,6 +8,7 @@ FULL_FS_ROOT = "/"
 class Config:
     def __init__(self):
         self.allow_full_fs = False
+        self.usb_msc = False
         self.load()
 
     def load(self):
@@ -15,13 +16,14 @@ class Config:
             with open(SETTINGS_PATH) as f:
                 data = json.load(f)
             self.allow_full_fs = bool(data.get("allow_full_fs", False))
+            self.usb_msc = bool(data.get("usb_msc", False))
         except (OSError, ValueError):
             pass
 
     def save(self):
         try:
             with open(SETTINGS_PATH, "w") as f:
-                json.dump({"allow_full_fs": self.allow_full_fs}, f)
+                json.dump({"allow_full_fs": self.allow_full_fs, "usb_msc": self.usb_msc}, f)
         except OSError as e:
             print("settings save failed:", e)
 

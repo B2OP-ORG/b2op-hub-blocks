@@ -41,6 +41,9 @@ export function workspaceToPython(workspace: Workspace): string {
     if (PROC_TYPES.has(top.type)) gen.blockToCode(top);
   }
 
+  const allVarNames = workspace.getAllVariables().map((v) => gen.getVariableName(v.getId()));
+  const globalDecl = allVarNames.length ? `global ${allVarNames.join(", ")}\n` : "";
+
   const mainBodies: string[] = [];
   const buttonDefs: string[] = [];
   const buttonCounts: Record<string, number> = {};
@@ -62,7 +65,7 @@ export function workspaceToPython(workspace: Workspace): string {
       const n = (buttonCounts[btn] = (buttonCounts[btn] ?? 0) + 1);
       const suffix = n === 1 ? "" : `_${n}`;
       const name = `_on_btn_${btn}${suffix}`;
-      buttonDefs.push(`@hub.buttons.on("${btn}")\ndef ${name}():\n${indentBody(body)}`);
+      buttonDefs.push(`@hub.buttons.on("${btn}")\ndef ${name}():\n${indentBody(globalDecl + body)}`);
     }
   }
 
@@ -86,5 +89,9 @@ export function workspaceToPython(workspace: Workspace): string {
   const parts: string[] = [VERSION_HEADER];
   if (preamble) parts.push(preamble);
   if (body) parts.push(body);
-  return parts.join("\n\n") + "\n";
+  return parts
+    .join("\n\n")
+    .replace(/^from numbers import Number\n/gm, "")
+    .replace(/isinstance\(([^,]+),\s*Number\)/g, "isinstance($1, (int, float))")
+    + "\n";
 }

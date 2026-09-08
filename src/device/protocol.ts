@@ -375,12 +375,16 @@ export class HubProtocolV2 implements IHubProtocol {
       };
       w.timer = setTimeout(() => {
         this.waiters.delete(seq);
+        console.warn(`[proto] TIMEOUT kind=0x${kind.toString(16).padStart(2,'0')} seq=${seq} after ${opts.timeoutMs}ms`);
         reject(new Error("protocol timeout"));
       }, opts.timeoutMs);
       this.waiters.set(seq, w);
     });
     this.sending = this.sending
-      .then(() => this.transport.write(frame))
+      .then(() => {
+        console.log(`[proto] → kind=0x${kind.toString(16).padStart(2,'0')} seq=${seq} ${payload.length}b`);
+        return this.transport.write(frame);
+      })
       .catch((e) => { console.error("[protocol] write failed", e); });
     return p;
   }
@@ -420,6 +424,7 @@ export class HubProtocolV2 implements IHubProtocol {
         break;
 
       case KIND.OK: {
+        console.log(`[proto] ← OK seq=${seq} ${payload.length}b`);
         const w = this.waiters.get(seq);
         if (w?.requestKind === KIND.RUN) this.programRunning = true;
         this.resolveWaiter(seq, { kind: "OK", payload });
@@ -427,6 +432,7 @@ export class HubProtocolV2 implements IHubProtocol {
       }
 
       case KIND.ERR:
+        console.log(`[proto] ← ERR seq=${seq}`);
         if (this.programRunning && !this.waiters.has(seq)) {
           // Unsolicited ERR during program = legacy traceback fallback
           this.programRunning = false;
@@ -437,6 +443,7 @@ export class HubProtocolV2 implements IHubProtocol {
         break;
 
       case KIND.ACK:
+        console.log(`[proto] ← ACK seq=${seq}`);
         this.resetWaiterTimer(seq);
         break;
 
@@ -498,6 +505,7 @@ export class HubProtocolV2 implements IHubProtocol {
   // ── Binary stream parser ────────────────────────────────────────────────────
 
   private onChunk(chunk: Uint8Array): void {
+    console.log(`[proto] ← raw ${chunk.length}b hex=${Array.from(chunk.slice(0,16)).map(b=>b.toString(16).padStart(2,'0')).join(' ')}${chunk.length>16?'…':''}`);
     let i = 0;
     while (i < chunk.length) {
       switch (this.state.phase) {

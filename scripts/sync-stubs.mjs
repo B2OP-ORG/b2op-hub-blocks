@@ -104,7 +104,7 @@ async function applyOverlays() {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.src) {
-    console.log("Usage: node scripts/sync-stubs.mjs --src <path-to-Lpf2-micropython>");
+    console.log("Usage: node scripts/sync-stubs.mjs --src <path-to-b2op-hub-micropython>");
     process.exit(args.help ? 0 : 1);
   }
   const SRC = path.resolve(args.src);

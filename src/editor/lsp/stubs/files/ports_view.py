@@ -198,7 +198,8 @@ for i, name in enumerate(_PORT_NAMES):
     _cells.append(PortCell(scr, x, y, cell_w, h, name))
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-while True:
+while not hub.buttons.center():
     for cell in _cells:
         cell.update()
+    lv.timer_handler()
     time.sleep_ms(150)

@@ -9,6 +9,7 @@ import runner
 import protocol
 import battery
 from config import Config
+from menu_node import Menu
 from listview import (
     SCREEN_W, SCREEN_H,
     COLOR_BG, COLOR_TEXT, COLOR_MUTED, COLOR_ACCENT,
@@ -22,10 +23,8 @@ IDLE_OFF_MS = 420_000
 BACKLIGHT_ACTIVE = 150
 BACKLIGHT_DIM = 20
 
-MENU_ITEMS = ["Run program", "Hardware", "Settings", "Power off"]
-HARDWARE_ITEMS = ["Ports", "About", "Calibrate IMU"]
-(STATE_MAIN, STATE_BROWSE, STATE_SETTINGS,
- STATE_CONFIRM_POWEROFF, STATE_HARDWARE, STATE_USB_MSC) = range(6)
+_BLOCKED_SCRIPTS = ("main.py", "boot.py")
+_DEBOUNCE_MS = 60
 
 
 def _show_about(scr):
@@ -91,6 +90,7 @@ def _show_about(scr):
     getters = (hub.buttons.up, hub.buttons.down,
                hub.buttons.left, hub.buttons.right, hub.buttons.center)
     while any(g() for g in getters):
+        lv.timer_handler()
         time.sleep_ms(POLL_MS)
 
     SCROLL_PX = 12
@@ -99,6 +99,7 @@ def _show_about(scr):
 
         if hub.buttons.center():
             while hub.buttons.center():
+                lv.timer_handler()
                 time.sleep_ms(POLL_MS)
             break
 
@@ -110,6 +111,7 @@ def _show_about(scr):
         if dx or dy:
             body.scroll_by(dx, dy, False)
 
+        lv.timer_handler()
         time.sleep_ms(POLL_MS)
 
     root.delete()
@@ -145,23 +147,6 @@ def list_dir(path):
     dirs.sort()
     files.sort()
     return dirs, files
-
-
-def _display_items(dirs, files, at_root):
-    items, kinds = [], []
-    if not at_root:
-        items.append(".. (up)")
-        kinds.append("up")
-    for d in dirs:
-        items.append(d + "/")
-        kinds.append("dir")
-    for f in files:
-        items.append(f)
-        kinds.append("file")
-    if not items:
-        items.append("(empty)")
-        kinds.append("empty")
-    return items, kinds
 
 
 def calibrate_imu(scr):
@@ -205,6 +190,7 @@ def calibrate_imu(scr):
     getters = (hub.buttons.up, hub.buttons.down,
                hub.buttons.left, hub.buttons.right, hub.buttons.center)
     while any(g() for g in getters):
+        lv.timer_handler()
         time.sleep_ms(POLL_MS)
 
     while True:
@@ -214,6 +200,7 @@ def calibrate_imu(scr):
 
         if hub.buttons.left():
             while hub.buttons.left():
+                lv.timer_handler()
                 time.sleep_ms(POLL_MS)
             break
         if hub.buttons.center() or hub.buttons.right():
@@ -221,82 +208,52 @@ def calibrate_imu(scr):
                 ok = hub.imu.save_calibration()
                 status.set_text("SAVED" if ok else "save failed")
                 while hub.buttons.center() or hub.buttons.right():
+                    lv.timer_handler()
                     time.sleep_ms(POLL_MS)
+                lv.timer_handler()
                 time.sleep_ms(600)
                 break
             else:
                 status.set_text("not calibrated")
                 while hub.buttons.center() or hub.buttons.right():
+                    lv.timer_handler()
                     time.sleep_ms(POLL_MS)
+        lv.timer_handler()
         time.sleep_ms(POLL_MS)
 
     root.delete()
 
 
-_DEBOUNCE_MS = 60
-
-
 def _wait_any_button_edge():
     """Full press-and-release cycle. Drains any stuck-held button first, then
     waits for a fresh press, then waits for stable release so contact bounce
-    on release cannot re-fire the caller's next menu poll as a rising edge."""
-    getters = (hub.buttons.up, hub.buttons.down,
-               hub.buttons.left, hub.buttons.right, hub.buttons.center)
-    while any(g() for g in getters):
-        battery.refresh()
-        time.sleep_ms(POLL_MS)
-    while not any(g() for g in getters):
-        battery.refresh()
-        time.sleep_ms(POLL_MS)
-    released_since = None
-    while True:
-        battery.refresh()
-        if any(g() for g in getters):
-            released_since = None
-        elif released_since is None:
-            released_since = time.ticks_ms()
-        elif time.ticks_diff(time.ticks_ms(), released_since) >= _DEBOUNCE_MS:
-            return
-        time.sleep_ms(POLL_MS)
+    on release cannot re-fire the caller's next menu poll as a rising edge.
 
-
-def _settings_items(cfg):
-    fs_mark  = "[x]" if cfg.allow_full_fs else "[ ]"
-    msc_mark = "[x]" if cfg.usb_msc      else "[ ]"
-    return [fs_mark + " Full FS root", msc_mark + " USB MSC"]
-
-
-def _new_main(scr):
-    return ListView(scr, "Menu", MENU_ITEMS)
-
-
-def _unregister_all():
-    for name in ("center", "up", "down", "left", "right"):
-        hub.buttons.off(name)
-
-
-def _reset_to_main(scr, ui):
-    scr.clean()
-    ui["view"] = _new_main(scr)
-    ui["state"] = STATE_MAIN
-
-
-_BLOCKED_SCRIPTS = ("main.py", "boot.py")
-
-
-def _run_from_menu(scr, ui, path):
-    name = path.rsplit("/", 1)[-1]
-    if name in _BLOCKED_SCRIPTS:
-        scr.clean()
-        text_screen(scr, "Blocked", name + " is a boot script", hint="press any button")
-        _wait_any_button_edge()
-        _reset_to_main(scr, ui)
-        return
-    runner.run_program(path)
-    # runner leaves Done/Error text_screen up; wait for a fresh button cycle,
-    # then rebuild the main menu.
-    _wait_any_button_edge()
-    _reset_to_main(scr, ui)
+    Unlocks the MicroPython scheduler for the duration so protocol.poll()
+    can fire at VM branch points and process USB commands while waiting.
+    """
+    hub._sched_unlock()
+    try:
+        getters = (hub.buttons.up, hub.buttons.down,
+                   hub.buttons.left, hub.buttons.right, hub.buttons.center)
+        while any(g() for g in getters):
+            battery.refresh()
+            time.sleep_ms(POLL_MS)
+        while not any(g() for g in getters):
+            battery.refresh()
+            time.sleep_ms(POLL_MS)
+        released_since = None
+        while True:
+            battery.refresh()
+            if any(g() for g in getters):
+                released_since = None
+            elif released_since is None:
+                released_since = time.ticks_ms()
+            elif time.ticks_diff(time.ticks_ms(), released_since) >= _DEBOUNCE_MS:
+                return
+            time.sleep_ms(POLL_MS)
+    finally:
+        hub._sched_lock()
 
 
 def run():
@@ -305,21 +262,7 @@ def run():
     runner.set_screen(scr)
     apply_screen_bg(scr)
 
-    if cfg.usb_msc:
-        _init_state = STATE_USB_MSC
-        _init_view = ListView(scr, "USB MSC Active", ["Turn off USB MSC"])
-    else:
-        _init_state = STATE_MAIN
-        _init_view = _new_main(scr)
-
-    ui = {
-        "state": _init_state,
-        "view": _init_view,
-        "root_path": cfg.root(),
-        "cur_path": cfg.root(),
-        "cur_kinds": [],
-    }
-
+    # ---- idle tracking ----
     idle = {"last": time.ticks_ms(), "dimmed": False}
 
     def _note_activity():
@@ -334,6 +277,169 @@ def run():
             hub.lcd.backlight(BACKLIGHT_ACTIVE)
             idle["dimmed"] = False
 
+    # ---- nav + view state (populated below) ----
+    nav = {}
+    ui  = {}
+
+    # ---- view helpers ----
+    def _children():
+        return nav["current"].get_children()
+
+    def _ch_names(ch):
+        return [c.name for c in ch]
+
+    def _rebuild_view():
+        ch = _children()
+        s  = min(nav["sel"], max(0, len(ch) - 1))
+        ui["view"] = ListView(scr, nav["current"].title, _ch_names(ch))
+        if s > 0:
+            ui["view"].sel = s
+            ui["view"]._refresh()
+
+    def _refresh_items():
+        ch = _children()
+        ui["view"].set_items(nav["current"].title, _ch_names(ch), nav["sel"])
+
+    # ---- file browser ----
+    def _dir_items(path):
+        dirs, files = list_dir(path)
+        items = []
+        for d in dirs:
+            p = _join(path, d)
+            t = p if len(p) <= 22 else "..." + p[-19:]
+            items.append(Menu(d + "/", dynamic_items=lambda p=p: _dir_items(p), title=t))
+        for f in files:
+            p = _join(path, f)
+            items.append(Menu(f, callback=lambda p=p: _run_file(p), screen_flow=True))
+        if not items:
+            items.append(Menu("(empty)"))
+        return items
+
+    def _run_file(path):
+        name = path.rsplit("/", 1)[-1]
+        if name in _BLOCKED_SCRIPTS:
+            text_screen(scr, "Blocked", name + " is a boot script", hint="press any button")
+            _wait_any_button_edge()
+            return
+        runner.run_program(path)
+        _note_activity()
+        _wait_any_button_edge()
+
+    # ---- settings ----
+    def _toggle_full_fs():
+        cfg.allow_full_fs = not cfg.allow_full_fs
+        cfg.save()
+
+    def _settings_items():
+        mark = "[x]" if cfg.allow_full_fs else "[ ]"
+        return [Menu(mark + " Full FS root", callback=_toggle_full_fs)]
+
+    # ---- USB MSC ----
+    def _turn_off_usb_msc():
+        hub.set_usb_msc(False)
+        hub.sd_remount()
+        cfg.usb_msc = False
+        cfg.save()
+        nav["current"] = nav["root"]
+        nav["sel"]     = 0
+        scr.clean()
+        _rebuild_view()
+
+    # ---- power off ----
+    def _do_poweroff():
+        text_screen(scr, "Power off", "Shutting down...")
+        time.sleep_ms(300)
+        hub.powerOff()
+
+    # ---- static menu tree ----
+    hardware = Menu("Hardware", title="Hardware", submenus=[
+        Menu("Ports",         callback=lambda: runner.run_program("/ports_view.py"),
+             screen_flow=True),
+        Menu("About",         callback=lambda: _show_about(scr),    screen_flow=True),
+        Menu("Calibrate IMU", callback=lambda: calibrate_imu(scr),  screen_flow=True),
+    ])
+
+    poweroff = Menu("Power off", title="Power off?", submenus=[
+        Menu("No"),
+        Menu("Yes", callback=_do_poweroff),
+    ])
+
+    root = Menu("Menu", submenus=[
+        Menu("Run program", title="Programs",
+             dynamic_items=lambda: _dir_items(cfg.root())),
+        hardware,
+        Menu("Settings", dynamic_items=_settings_items),
+        poweroff,
+    ])
+
+    # ---- initial nav state ----
+    if cfg.usb_msc:
+        msc_root = Menu("USB MSC Active", title="USB MSC Active", submenus=[
+            Menu("Turn off USB MSC", callback=_turn_off_usb_msc),
+        ])
+        nav["current"] = msc_root
+    else:
+        nav["current"] = root
+
+    nav["sel"]  = 0
+    nav["root"] = root
+
+    initial_ch = nav["current"].get_children()
+    ui["view"]  = ListView(scr, nav["current"].title, _ch_names(initial_ch))
+
+    # ---- navigation engine ----
+    def _nav_select():
+        ch  = _children()
+        if not ch:
+            return
+        idx   = nav["sel"]
+        child = ch[min(idx, len(ch) - 1)]
+
+        if child.isMenu:
+            nav["current"].last_position = idx
+            nav["current"] = child
+            nav["sel"]     = child.last_position
+            _refresh_items()
+
+        elif child.callback is None:
+            _nav_back()
+
+        elif child.screen_flow:
+            nav["current"].last_position = idx
+            ui["view"].close()
+            _unregister_all()
+            try:
+                child.callback()
+            finally:
+                _register_all()
+            _note_activity()
+            scr.clean()
+            _rebuild_view()
+
+        else:
+            child.callback()
+            nav["sel"] = min(idx, max(0, len(_children()) - 1))
+            _refresh_items()
+
+    def _nav_back():
+        if nav["current"].parent is not None:
+            nav["current"] = nav["current"].parent
+            nav["sel"]     = nav["current"].last_position
+            _refresh_items()
+
+    # ---- button callbacks ----
+    def _on_up():
+        ui["view"].move(-1)
+        nav["sel"] = ui["view"].sel
+
+    def _on_down():
+        ui["view"].move(1)
+        nav["sel"] = ui["view"].sel
+
+    def _on_left():   _nav_back()
+    def _on_center(): _nav_select()
+    def _on_right():  _nav_select()
+
     def _wake_or_pass(fn):
         """Wrap a button callback so the first press while dimmed only wakes.
 
@@ -344,192 +450,45 @@ def run():
         def wrapped():
             was_dimmed = idle["dimmed"]
             _note_activity()
-            if was_dimmed:
-                return
-            fn()
+            if not was_dimmed:
+                fn()
         return wrapped
 
-    def _on_ble_run_finished():
-        _wait_any_button_edge()
-        _note_activity()
-        _reset_to_main(scr, ui)
-    protocol.on_run_finished = _on_ble_run_finished
-
-    def enter_browse(path):
-        dirs, files = list_dir(path)
-        items, kinds = _display_items(dirs, files, at_root=(path == ui["root_path"]))
-        title = "Programs" if path == ui["root_path"] else path
-        if len(title) > 22:
-            title = "..." + title[-19:]
-        ui["cur_path"] = path
-        ui["cur_kinds"] = kinds
-        ui["view"].set_items(title, items, 0)
-
-    def go_up():
-        if ui["cur_path"] == ui["root_path"]:
-            return False
-        parent = ui["cur_path"].rsplit("/", 1)[0]
-        if not parent:
-            parent = "/"
-        enter_browse(parent)
-        return True
-
-    def back_to_main():
-        ui["view"].set_items("Menu", MENU_ITEMS, 0)
-        ui["state"] = STATE_MAIN
-
-    _MOVE_STATES = (STATE_MAIN, STATE_BROWSE, STATE_SETTINGS,
-                    STATE_CONFIRM_POWEROFF, STATE_HARDWARE, STATE_USB_MSC)
-
-    def _on_up():
-        if ui["state"] in _MOVE_STATES:
-            ui["view"].move(-1)
-
-    def _on_down():
-        if ui["state"] in _MOVE_STATES:
-            ui["view"].move(1)
-
-    def _on_left():
-        s = ui["state"]
-        if s == STATE_BROWSE:
-            if not go_up():
-                back_to_main()
-        elif s in (STATE_SETTINGS, STATE_HARDWARE, STATE_CONFIRM_POWEROFF):
-            back_to_main()
-        # STATE_USB_MSC: left does nothing — only option is "Turn off USB MSC"
-
-    def _select():
-        s = ui["state"]
-        if s == STATE_MAIN:
-            sel = ui["view"].sel
-            if sel == 0:
-                ui["root_path"] = cfg.root()
-                enter_browse(ui["root_path"])
-                ui["state"] = STATE_BROWSE
-            elif sel == 1:
-                ui["view"].set_items("Hardware", HARDWARE_ITEMS, 0)
-                ui["state"] = STATE_HARDWARE
-            elif sel == 2:
-                ui["view"].set_items("Settings", _settings_items(cfg), 0)
-                ui["state"] = STATE_SETTINGS
-            else:
-                ui["view"].set_items("Power off?", ["No", "Yes"], 0)
-                ui["state"] = STATE_CONFIRM_POWEROFF
-        elif s == STATE_HARDWARE:
-            sel = ui["view"].sel
-            if sel == 0:
-                ui["view"].close()
-                _unregister_all()
-                try:
-                    runner.run_program("/ports_view.py")
-                    _wait_any_button_edge()
-                finally:
-                    _register_all()
-                _note_activity()
-                scr.clean()
-                ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
-                ui["state"] = STATE_HARDWARE
-            elif sel == 1:
-                ui["view"].close()
-                _unregister_all()
-                try:
-                    _show_about(scr)
-                finally:
-                    _register_all()
-                _note_activity()
-                scr.clean()
-                ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
-                ui["state"] = STATE_HARDWARE
-            elif sel == 2:
-                ui["view"].close()
-                _unregister_all()
-                try:
-                    calibrate_imu(scr)
-                finally:
-                    _register_all()
-                _note_activity()
-                scr.clean()
-                ui["view"] = ListView(scr, "Hardware", HARDWARE_ITEMS)
-                ui["state"] = STATE_HARDWARE
-        elif s == STATE_BROWSE:
-            if not ui["cur_kinds"]:
-                return
-            kind = ui["cur_kinds"][ui["view"].sel]
-            label = ui["view"].items[ui["view"].sel]
-            if kind == "up":
-                go_up()
-            elif kind == "dir":
-                enter_browse(_join(ui["cur_path"], label.rstrip("/")))
-            elif kind == "file":
-                path = _join(ui["cur_path"], label)
-                ui["view"].close()
-                _run_from_menu(scr, ui, path)
-                _note_activity()
-        elif s == STATE_SETTINGS:
-            sel = ui["view"].sel
-            if sel == 0:
-                cfg.allow_full_fs = not cfg.allow_full_fs
-                cfg.save()
-                ui["view"].set_items("Settings", _settings_items(cfg), sel)
-            elif sel == 1:
-                if not cfg.usb_msc:
-                    try:
-                        os.umount("/sd")
-                    except OSError:
-                        pass
-                    try:
-                        sd = hub.sd_card()
-                        if sd is not None:
-                            sd.deinit()
-                    except Exception:
-                        pass
-                    hub.set_usb_msc(True)
-                    cfg.usb_msc = True
-                    cfg.save()
-                    ui["view"].set_items("USB MSC Active", ["Turn off USB MSC"], 0)
-                    ui["state"] = STATE_USB_MSC
-                else:
-                    hub.set_usb_msc(False)
-                    hub.sd_remount()
-                    cfg.usb_msc = False
-                    cfg.save()
-                    ui["view"].set_items("Settings", _settings_items(cfg), sel)
-        elif s == STATE_USB_MSC:
-            hub.set_usb_msc(False)
-            hub.sd_remount()
-            cfg.usb_msc = False
-            cfg.save()
-            back_to_main()
-        elif s == STATE_CONFIRM_POWEROFF:
-            if ui["view"].sel == 1:
-                scr.clean()
-                text_screen(scr, "Power off", "Shutting down...")
-                time.sleep_ms(300)
-                hub.powerOff()
-            else:
-                back_to_main()
-
-    def _on_center():
-        _select()
-
-    def _on_right():
-        _select()
-
     def _register_all():
-        hub.buttons.on("up", _wake_or_pass(_on_up))
-        hub.buttons.on("down", _wake_or_pass(_on_down))
-        hub.buttons.on("left", _wake_or_pass(_on_left))
+        hub.buttons.on("up",     _wake_or_pass(_on_up))
+        hub.buttons.on("down",   _wake_or_pass(_on_down))
+        hub.buttons.on("left",   _wake_or_pass(_on_left))
         hub.buttons.on("center", _wake_or_pass(_on_center))
-        hub.buttons.on("right", _wake_or_pass(_on_right))
+        hub.buttons.on("right",  _wake_or_pass(_on_right))
+
+    def _unregister_all():
+        for n in ("center", "up", "down", "left", "right"):
+            hub.buttons.off(n)
+
     _register_all()
 
-    def _any_button_held():
-        return (hub.buttons.center() or hub.buttons.up() or hub.buttons.down()
-                or hub.buttons.left() or hub.buttons.right())
+    # ---- BLE run-finished hook ----
+    def _on_ble_run_finished():
+        # runner.run_program calls scr.clean() which deletes the view's LVGL
+        # objects without setting _closed. Close it now so button callbacks that
+        # fire during _wait_any_button_edge don't try to update a dead view.
+        ui["view"].close()
+        _wait_any_button_edge()
+        _note_activity()
+        nav["current"] = nav["root"]
+        nav["sel"]     = nav["root"].last_position
+        scr.clean()
+        _rebuild_view()
+
+    protocol.on_run_finished = _on_ble_run_finished
+
+    # ---- main loop ----
+    getters = (hub.buttons.center, hub.buttons.up, hub.buttons.down,
+               hub.buttons.left, hub.buttons.right)
 
     while True:
         battery.refresh()
-        if _any_button_held():
+        if any(g() for g in getters):
             idle["last"] = time.ticks_ms()
         elapsed = time.ticks_diff(time.ticks_ms(), idle["last"])
         if elapsed >= IDLE_OFF_MS:

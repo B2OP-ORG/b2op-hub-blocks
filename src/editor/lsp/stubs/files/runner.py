@@ -16,7 +16,8 @@ _screen = lv.screen_active()
 
 def request_stop():
     """Called from stdin protocol (STOP frame). Interrupts the running script."""
-    hub._request_stop()
+    if _running:
+        hub._request_stop()
 
 def set_screen(scr):
     global _screen
@@ -25,15 +26,23 @@ def set_screen(scr):
 
 def _drain_center():
     while hub.buttons.center():
+        lv.timer_handler()
         time.sleep_ms(30)
 
 
 def _reset_hw():
     """Stop any motor left running and re-enable all ports after program exit."""
-    for name in ("A", "B", "C", "D"):
+    for name in ("A", "B", "C", "D", "E", "F"):
+        if not hasattr(hub.ports, name):
+            continue
         port = getattr(hub.ports, name)
         port.disable(False)
         port.startPower(0)
+
+    if hasattr(hub, "audio"):
+        hub.audio.stop()
+    if hasattr(hub, "video"):
+        hub.video.stop()
 
 
 def run_program(path):
@@ -45,11 +54,13 @@ def run_program(path):
     if _running:
         _screen.clean()
         text_screen(_screen, "Error", "already running", hint="press any button")
+        lv.timer_handler()
         _drain_center()
         return "already running"
 
     _screen.clean()
     text_screen(_screen, "Running", path, hint="hold center 2s: stop")
+    lv.timer_handler()
     _running = True
 
     saved_cbs = hub.buttons._snapshot()
@@ -57,13 +68,20 @@ def run_program(path):
     try:
         with open(path) as f:
             code = f.read()
-        exec(code, {"__name__": "__main__"})
-    except SystemExit:
-        pass        # hub.exit()
-    except KeyboardInterrupt:
-        pass        # 2 s centre-hold from C firmware
+        hub._sched_unlock()
+        try:
+            exec(code, {"__name__": "__main__"})
+        except SystemExit:
+            pass        # hub.exit()
+        except KeyboardInterrupt:
+            pass        # 2 s centre-hold or USB STOP command
+        except Exception as e:
+            err = repr(e)
+        finally:
+            hub._clear_stop_request()
+            hub._sched_lock()
     except Exception as e:
-        err = repr(e)
+        err = repr(e)   # file read error
     finally:
         hub.buttons._restore(saved_cbs)
         _reset_hw()
@@ -77,6 +95,7 @@ def run_program(path):
     else:
         text_screen(_screen, "Error", err, hint="press any button")
         hub.led.setColorIdx(lpf2.color.RED)
+    lv.timer_handler()
 
     _drain_center()
     hub.led.setColorIdx(lpf2.color.GREEN)

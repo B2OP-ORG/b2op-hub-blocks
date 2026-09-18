@@ -1,4 +1,5 @@
 import lvgl as lv
+import time
 
 import battery
 
@@ -78,6 +79,7 @@ class ListView:
     def __init__(self, parent, title, items):
         self.items = list(items)
         self.sel = 0
+        self._closed = False
 
         self.root = lv.obj(parent)
         _style_panel(self.root)
@@ -108,30 +110,50 @@ class ListView:
         return l
 
     def set_items(self, title, items, sel=0):
+        if self._closed:
+            return
         self.items = list(items)
         self.sel = min(sel, max(0, len(self.items) - 1))
-        self.title.set_text(title)
-        while len(self.labels) < len(self.items):
-            self.labels.append(self._mk_label())
-        while len(self.labels) > len(self.items):
-            self.labels.pop().delete()
+        try:
+            self.title.set_text(title)
+            while len(self.labels) < len(self.items):
+                self.labels.append(self._mk_label())
+            while len(self.labels) > len(self.items):
+                self.labels.pop().delete()
+        except Exception:
+            self._closed = True
+            return
         self._refresh()
 
     def _refresh(self):
-        for i, l in enumerate(self.labels):
-            l.set_text(self.items[i])
-            _style_item(l, i == self.sel)
-        if self.labels:
-            self.labels[self.sel].scroll_to_view(False)
+        if self._closed:
+            return
+        try:
+            for i, l in enumerate(self.labels):
+                l.set_text(self.items[i])
+                _style_item(l, i == self.sel)
+            if self.labels:
+                self.labels[self.sel].scroll_to_view(False)
+            time.sleep_ms(0)
+        except Exception:
+            self._closed = True
 
     def move(self, d):
+        if self._closed:
+            return
         n = len(self.items)
         if n:
             self.sel = (self.sel + d) % n
             self._refresh()
 
     def close(self):
-        self.root.delete()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.root.delete()
+        except Exception:
+            pass
 
 
 def text_screen(parent, title, body_text, hint=None):
@@ -160,4 +182,6 @@ def text_screen(parent, title, body_text, hint=None):
         h.set_text(hint)
         h.set_style_text_color(lv.color_hex(COLOR_MUTED), 0)
         h.align(lv.ALIGN.BOTTOM_LEFT, 0, 0)
+
+    time.sleep_ms(0)
     return root

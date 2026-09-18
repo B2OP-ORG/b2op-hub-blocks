@@ -250,6 +250,59 @@ class _audio_module:
         """Return ``True`` when no playback is in progress."""
         ...
 
+    def beep(self, freq: float, duration_ms: int, *, block: bool = True) -> None:
+        """Synthesise a single tone at ``freq`` Hz for ``duration_ms`` milliseconds.
+
+        Uses the current wave type (see :meth:`set_wave_type`).
+        If ``block=False`` returns immediately while playback continues in the background.
+        """
+        ...
+
+    def note(self, note: "str | int", length: float, *, block: bool = True) -> None:
+        """Synthesise one note using the current BPM and wave type.
+
+        ``note``: name string (e.g. ``"C4"``, ``"D#3"``, ``"Bb5"``, ``"REST"``)
+        or an integer MIDI note number.
+        ``length``: duration in beats (1.0 = one beat at current BPM).
+        """
+        ...
+
+    def set_note_speed(self, bpm: float) -> None:
+        """Set the tempo used by :meth:`note` and :meth:`play_melody_from_list`. Default 120 BPM."""
+        ...
+
+    def set_wave_type(self, wave: "Literal['sine', 'square', 'sawtooth']") -> None:
+        """Set the waveform for all synthesis methods. ``"sine"`` (default), ``"square"``, ``"sawtooth"``."""
+        ...
+
+    def play_melody(self, name: str, *, block: bool = True) -> None:
+        """Play a built-in melody by name.
+
+        Available: ``"startup"``, ``"shutdown"``, ``"success"``, ``"error"``,
+        ``"dadadum"``, ``"mario"``, ``"nokia"``.
+        """
+        ...
+
+    def play_melody_from_list(
+        self,
+        melody: "list[tuple[str | int, float]]",
+        *,
+        block: bool = True,
+    ) -> None:
+        """Play a user-defined sequence of ``(note, length)`` tuples.
+
+        ``note`` is a note name string or MIDI int; ``length`` is beats at current BPM.
+        """
+        ...
+
+    def play_midi(self, path: str, *, block: bool = True) -> None:
+        """Play a Standard MIDI File (SMF format 0 or 1) from the filesystem.
+
+        Up to 8 simultaneous voices. Uses the current wave type.
+        ``path`` must be absolute (e.g. ``"/sd/song.mid"``).
+        """
+        ...
+
 
 from typing import Callable, Literal, Optional, overload
 
@@ -740,20 +793,41 @@ def on(name: _PollName, fn: Optional[_PollFn] = None) -> Union[Callable[[_PollFn
     """
     ...
 
-def exit() -> NoReturn:
-    """Exit the running user script cleanly. Raises SystemExit.
-
-    The program runner catches SystemExit and shows the "Done" screen.
-    Safe to call from anywhere — button callbacks, loops, top-level code.
-    """
-    ...
-
 def _request_stop() -> None:
     """Schedule a KeyboardInterrupt on the MicroPython task.
 
     Used by the protocol STOP frame handler to interrupt a running script
     from outside (e.g. host sends STOP over USB/BLE). The interrupt fires
     at the next VM checkpoint; the runner catches it as a clean exit.
+    Sets an internal flag so hub_poll_c re-fires KI every scheduler cycle
+    until _clear_stop_request() is called, preventing FIFO callbacks (e.g.
+    BLE IRQ) from permanently consuming the interrupt.
+    """
+    ...
+
+def _clear_stop_request() -> None:
+    """Clear the stop-request flag set by _request_stop().
+
+    Called by runner.run_program() in its finally block after exec() returns,
+    so hub_poll_c stops re-firing KeyboardInterrupt once the program has ended.
+    """
+    ...
+
+def _sched_lock() -> None:
+    """Lock the MicroPython scheduler (calls mp_sched_lock).
+
+    Paired with _sched_unlock(). Call in a finally block after _sched_unlock()
+    to restore the scheduler state expected by the outer mp_sched_run_pending
+    caller (e.g. after exec() returns in runner.run_program).
+    """
+    ...
+
+def _sched_unlock() -> None:
+    """Unlock the MicroPython scheduler if currently locked (calls mp_sched_unlock).
+
+    No-op if the scheduler is not locked. Call before exec(user_code) in
+    runner.run_program so that hub_poll static nodes can fire at VM branch
+    points during user script execution, enabling USB STOP delivery.
     """
     ...
 

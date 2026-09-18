@@ -7,6 +7,10 @@ See docs/PROTOCOL.md section 1.1.
 """
 import bluetooth
 from micropython import const
+try:
+    from hub import _ble_drain as _hub_ble_drain
+except (ImportError, AttributeError):
+    _hub_ble_drain = None
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -28,6 +32,8 @@ _UART_SVC = (_UART_UUID, (_UART_TX, _UART_RX))
 _ADV_INTERVAL_US = const(500000)
 _RX_BUF_MAX = 4096
 _RX_ATT_BUF = 512
+
+_DEBUG = False
 
 
 def _adv_payload(name, service_uuid):
@@ -97,7 +103,10 @@ class BLEUART:
             conn_handle, _, _ = data
             self._conns.discard(conn_handle)
             self._mtu = 23
-            self._advertise()
+            self._rx = bytearray()
+            # Re-advertising is handled by NimBLE-cpp advertiseOnDisconnect(true)
+            # set in ble_gatts.cpp. Calling gap_advertise from Python (mp_task)
+            # after disconnect races with the NimBLE host cleanup and crashes.
         elif event == _IRQ_GATTS_WRITE:
             _, value_handle = data
             # Some MP builds report a handle that doesn't match the tuple
@@ -114,10 +123,16 @@ class BLEUART:
 
     def read_rx(self):
         """Return pending RX bytes (drains buffer). Empty bytes if none."""
+        # Pump BLE event queue directly (bypasses MP scheduler — safe when called
+        # from hub_poll_node_cb with sched_state locked, i.e. from _read_exact).
+        if _hub_ble_drain is not None:
+            _hub_ble_drain()
         if not self._rx:
             return b""
         out = bytes(self._rx)
         self._rx = bytearray()
+        if _DEBUG:
+            print("[ble] read_rx: %d bytes" % len(out))
         return out
 
     def write_tx(self, buf):

@@ -58,10 +58,6 @@ export function SettingsModal({ onClose }: Props) {
           Auto-run after upload
         </label>
         <label style={row}>
-          <input type="checkbox" checked={settings.autoreloadInLive} onChange={toggle("autoreloadInLive")} />
-          Autoreload on block edit (live mode)
-        </label>
-        <label style={row}>
           <input type="checkbox" checked={settings.allowRoot} onChange={toggle("allowRoot")} />
           Allow uploads to root filesystem (advanced)
         </label>

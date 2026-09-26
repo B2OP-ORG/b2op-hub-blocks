@@ -1,11 +1,17 @@
 import { useState } from "react";
 import * as Blockly from "blockly/core";
+import { BleTransport, bleSupported } from "../transport/ble";
+import { SerialTransport, serialSupported } from "../transport/serial";
+import { MockTransport } from "../transport/mock";
+import { DeviceClient } from "../device/deviceClient";
 import { useApp } from "../state/store";
-import { downloadProject, pickFile } from "../project/download";
 import type { BlocksProject } from "../project/format";
-import { newBlocksProject, newPythonProject, parseProject } from "../project/format";
+import { newBlocksProject, newPythonProject } from "../project/format";
 import { hasRawBlock, normalizePython, pythonToBlocks } from "../project/pythonToBlocks";
 import { workspaceToPython } from "../codegen/pythonGen";
+import { sanitizeFilename } from "../utils/sanitize";
+import { saveLastDeviceName } from "../project/storage";
+import { FileBrowserModal } from "./FileBrowserModal";
 
 interface Props {
   onOpenSettings: () => void;
@@ -29,10 +35,7 @@ function blocksProjectFromPython(source: string, title: string, settings: Blocks
     topBlocks.push(b);
   });
   const workspace: Record<string, unknown> = {
-    blocks: {
-      languageVersion: 0,
-      blocks: topBlocks,
-    },
+    blocks: { languageVersion: 0, blocks: topBlocks },
   };
   if (variables.length) workspace.variables = variables;
   return { ...base, settings, workspace };
@@ -60,34 +63,23 @@ function checkTranslation(source: string, title: string, settings: BlocksProject
   }
 }
 
-interface PromptState {
-  hasRaw: boolean;
-  roundTripOk: boolean;
-}
-
-interface ToPythonPromptState {
-  hasRaw: boolean;
-  roundTripOk: boolean;
-  source: string;
-}
+interface PromptState { hasRaw: boolean; roundTripOk: boolean; }
+interface ToPythonPromptState { hasRaw: boolean; roundTripOk: boolean; source: string; }
 
 export function Header({ onOpenSettings }: Props) {
-  const { project, setProject } = useApp();
-  const loadProject = useApp((s) => s.loadProject);
-  const markSaved = useApp((s) => s.markSaved);
+  const { project, setProject, device, connection, connectionError, running,
+    setDevice, setConnection, setRunning, appendConsole, pythonPreview } = useApp();
   const [switchPrompt, setSwitchPrompt] = useState<PromptState | null>(null);
   const [toPythonPrompt, setToPythonPrompt] = useState<ToPythonPromptState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
   const dark = project.type === "python";
 
-  const rename = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setProject({ ...project, title: e.target.value });
-  };
+  // ── Mode toggle ──────────────────────────────────────────────────────────────
 
   const toggleType = () => {
     if (project.type === "blocks") {
       const source = useApp.getState().pythonPreview || "";
-      // Warn if the generated Python can't be parsed back to matching blocks —
-      // going back after edits will lose fidelity.
       const check = checkTranslation(source, project.title, project.settings);
       if (check.hasRaw || !check.roundTripOk) {
         setToPythonPrompt({ hasRaw: check.hasRaw, roundTripOk: check.roundTripOk, source });
@@ -98,7 +90,6 @@ export function Header({ onOpenSettings }: Props) {
     }
     const check = checkTranslation(project.source, project.title, project.settings);
     if (!check.hasRaw && check.roundTripOk) {
-      // Clean translation — skip prompt.
       setProject(check.project);
       return;
     }
@@ -121,56 +112,179 @@ export function Header({ onOpenSettings }: Props) {
     setSwitchPrompt(null);
   };
 
-  const openFile = async () => {
-    const file = await pickFile(".json,.blocksproj.json,.py");
-    if (!file) return;
-    const text = await file.text();
-    if (file.name.endsWith(".py")) {
-      loadProject({
-        ...newPythonProject(file.name.replace(/\.py$/, "")),
-        source: text,
+  // ── Device ───────────────────────────────────────────────────────────────────
+
+  const connect = async (kind: "ble" | "serial" | "mock") => {
+    setBusy(true);
+    setConnection("connecting");
+    let client: DeviceClient | null = null;
+    try {
+      const transport =
+        kind === "ble" ? new BleTransport()
+        : kind === "serial" ? new SerialTransport()
+        : new MockTransport();
+      client = new DeviceClient(transport);
+      transport.onDisconnect(() => {
+        setConnection("disconnected");
+        setDevice(null);
+        setRunning(false);
+        appendConsole("info", "[device disconnected]\n");
       });
-    } else {
-      try {
-        const raw = JSON.parse(text);
-        const parsed = parseProject(raw);
-        if (!parsed) {
-          alert("Unsupported project format. Only b2op-hub-blocks projects are supported.");
-          return;
-        }
-        if (parsed.stale) {
-          alert("This project was created with an older version. It may not work correctly. Please recreate it using the current blocks.");
-        }
-        loadProject(parsed.project);
-      } catch (e) {
-        alert("Invalid project file: " + (e as Error).message);
-      }
+      await client.connect();
+      client.setProgramEndSink((info) => {
+        setRunning(false);
+        appendConsole(info.ok ? "info" : "err", `[program ${info.ok ? "ended" : "error"}${info.message ? ": " + info.message : ""}]\n`);
+      });
+      setDevice(client);
+      setConnection("connected");
+      setRunning(false);
+      saveLastDeviceName(transport.info.name);
+      appendConsole("info", `[connected: ${transport.info.name}]\n`);
+    } catch (e) {
+      setConnection("error", (e as Error).message);
+      appendConsole("err", `[connect failed: ${(e as Error).message}]\n`);
+      if (client) { try { await client.disconnect(); } catch { /* noop */ } }
+    } finally {
+      setBusy(false);
     }
   };
 
-  const saveFile = () => {
-    downloadProject(project);
-    markSaved();
+  const disconnect = async () => {
+    if (!device) return;
+    setBusy(true);
+    try {
+      await device.disconnect();
+      setDevice(null);
+      setConnection("disconnected");
+      setRunning(false);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const toggleAdvanced = () => {
-    useApp.getState().updateSettings({ showAdvanced: !project.settings.showAdvanced });
+  const run = async () => {
+    if (!device) return;
+    const code = project.type === "python" ? project.source : pythonPreview;
+    if (!code.trim()) return;
+    const base = sanitizeFilename(project.title);
+    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    setBusy(true);
+    appendConsole("info", `[run → ${path}]\n`);
+    try {
+      const bytes = new TextEncoder().encode(code);
+      await device.upload(path, bytes, {
+        policy: { allowRoot: project.settings.allowRoot },
+        autoRun: true,
+        onStdout: (t) => appendConsole("out", t),
+      });
+      setRunning(true);
+    } catch (e) {
+      appendConsole("err", `[run failed: ${(e as Error).message}]\n`);
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const stop = async () => {
+    if (!device) return;
+    setBusy(true);
+    try {
+      await device.stop();
+      setRunning(false);
+      appendConsole("info", "[stop]\n");
+    } catch (e) {
+      appendConsole("err", `[stop failed: ${(e as Error).message}]\n`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upload = async () => {
+    if (!device) return;
+    const code = project.type === "python" ? project.source : pythonPreview;
+    if (!code.trim()) return;
+    const base = sanitizeFilename(project.title);
+    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    setBusy(true);
+    appendConsole("info", `[upload → ${path}]\n`);
+    try {
+      const bytes = new TextEncoder().encode(code);
+      await device.upload(path, bytes, {
+        policy: { allowRoot: project.settings.allowRoot },
+        autoRun: project.settings.autoRunAfterUpload,
+        onStdout: (t) => appendConsole("out", t),
+      });
+      if (project.settings.autoRunAfterUpload) setRunning(true);
+      appendConsole("info", `[upload OK: ${path} (${bytes.length}B)]\n`);
+    } catch (e) {
+      appendConsole("err", `[upload failed: ${(e as Error).message}]\n`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ── Styles ───────────────────────────────────────────────────────────────────
 
   const headerBg = dark ? "#0b1216" : "#0e7490";
   const headerBorder = dark ? "#164e63" : "#155e75";
-  const inputBg = dark ? "#111a20" : "#ffffff";
-  const inputColor = dark ? "#dff5fb" : "#0b3b48";
-  const inputBorder = dark ? "#164e63" : "#b6dbe4";
 
-  const btnStyle: React.CSSProperties = {
-    padding: "4px 12px",
-    border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.4)",
+  const btn: React.CSSProperties = {
+    padding: "4px 11px",
+    border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.35)",
     background: dark ? "#111a20" : "rgba(255,255,255,0.12)",
-    color: "#ffffff",
+    color: dark ? "#dff5fb" : "#ffffff",
     cursor: "pointer",
     borderRadius: 6,
     fontWeight: 600,
+    fontSize: 13,
+  };
+
+  const dis = (base: React.CSSProperties, disabled: boolean): React.CSSProperties =>
+    disabled ? { ...base, opacity: 0.45, cursor: "not-allowed" } : base;
+
+  const primaryBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#0e7490" : "rgba(255,255,255,0.22)",
+    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.55)",
+  };
+
+  const successBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#0f3e21" : "rgba(30,160,80,0.35)",
+    border: dark ? "1px solid #1a5a30" : "1px solid rgba(80,220,120,0.6)",
+    color: dark ? "#a9dcbc" : "#e0fff0",
+  };
+
+  const dangerBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#4a1414" : "rgba(200,30,30,0.35)",
+    border: dark ? "1px solid #6a1c1c" : "1px solid rgba(255,100,100,0.6)",
+    color: dark ? "#ffb0b0" : "#ffe8e8",
+  };
+
+  // status badge
+  const badgeBg = (k: "ok" | "err" | "idle" | "run") =>
+    dark
+      ? k === "ok" ? "#0f3e21" : k === "err" ? "#4a1414" : k === "run" ? "#3a2a05" : "#111a20"
+      : k === "ok" ? "rgba(60,200,100,0.25)" : k === "err" ? "rgba(220,50,50,0.25)" : k === "run" ? "rgba(255,200,30,0.25)" : "rgba(255,255,255,0.15)";
+  const badgeFg = (k: "ok" | "err" | "idle" | "run") =>
+    dark
+      ? k === "ok" ? "#a9dcbc" : k === "err" ? "#ffb0b0" : k === "run" ? "#ffd166" : "#dff5fb"
+      : k === "ok" ? "#c0ffe0" : k === "err" ? "#ffc0c0" : k === "run" ? "#fff2a0" : "#e0f4ff";
+  const statusKind: "ok" | "err" | "idle" | "run" =
+    connection === "connected" ? (running ? "run" : "ok") : connection === "error" ? "err" : "idle";
+  const statusText =
+    connection === "connected" ? (running ? "Running" : "Connected")
+    : connection === "connecting" ? "Connecting…"
+    : connection === "error" ? `Error: ${connectionError}`
+    : "Disconnected";
+
+  const divider: React.CSSProperties = {
+    width: 1,
+    alignSelf: "stretch",
+    background: dark ? "#164e63" : "rgba(255,255,255,0.25)",
+    margin: "2px 2px",
+    flexShrink: 0,
   };
 
   return (
@@ -178,59 +292,111 @@ export function Header({ onOpenSettings }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "8px 14px",
+        gap: 6,
+        padding: "6px 12px",
         background: headerBg,
-        color: "#ffffff",
+        color: dark ? "#dff5fb" : "#ffffff",
         borderBottom: `1px solid ${headerBorder}`,
+        flexWrap: "nowrap",
+        minHeight: 42,
       }}
     >
-      <strong style={{ letterSpacing: 0.4 }}>b2op-hub-blocks</strong>
-      <input
-        value={project.title}
-        onChange={rename}
-        style={{
-          background: inputBg,
-          color: inputColor,
-          border: `1px solid ${inputBorder}`,
-          padding: "4px 8px",
-          borderRadius: 6,
-          width: 220,
-          outline: "none",
-        }}
-        aria-label="project title"
-      />
-      <button type="button" onClick={toggleType} style={btnStyle}>
-        Mode: {project.type === "blocks" ? "Blocks" : "Python"}
+      {/* Brand */}
+      <strong style={{ letterSpacing: 0.4, fontSize: 13, flexShrink: 0, marginRight: 4 }}>
+        b2op
+      </strong>
+
+      <div style={divider} />
+
+      {/* Mode toggle */}
+      <button type="button" onClick={toggleType} style={btn}>
+        {project.type === "blocks" ? "Blocks" : "Python"}
       </button>
-      {project.type === "blocks" && (
-        <button type="button" onClick={toggleAdvanced} style={btnStyle}>
-          {project.settings.showAdvanced ? "Advanced ✓" : "Advanced"}
-        </button>
+
+      <div style={divider} />
+
+      {/* Device controls */}
+      {!device ? (
+        <>
+          <button type="button" style={dis(primaryBtn, busy || !bleSupported())} disabled={busy || !bleSupported()}
+            onClick={() => connect("ble")} title={bleSupported() ? "Connect via Bluetooth" : "Web Bluetooth unsupported"}>
+            BLE
+          </button>
+          <button type="button" style={dis(primaryBtn, busy || !serialSupported())} disabled={busy || !serialSupported()}
+            onClick={() => connect("serial")} title={serialSupported() ? "Connect via USB" : "Web Serial unsupported"}>
+            USB
+          </button>
+        </>
+      ) : (
+        <>
+          <button type="button" style={dis(btn, busy)} disabled={busy} onClick={disconnect}>
+            Disconnect
+          </button>
+          <button type="button" style={dis(successBtn, busy || running)} disabled={busy || running}
+            onClick={run} title={running ? "Stop the running program first" : ""}>
+            Run
+          </button>
+          <button type="button" style={dis(dangerBtn, busy || !running)} disabled={busy || !running}
+            onClick={stop} title={!running ? "No program running" : ""}>
+            Stop
+          </button>
+          {!running && (
+            <>
+              <button type="button" style={dis(primaryBtn, busy)} disabled={busy} onClick={upload}>
+                Upload
+              </button>
+              <button type="button" style={dis(btn, busy)} disabled={busy}
+                onClick={() => setShowBrowser(true)} title="Browse device filesystem">
+                Files
+              </button>
+            </>
+          )}
+        </>
       )}
-      <button type="button" onClick={openFile} style={btnStyle}>Open</button>
-      <button type="button" onClick={saveFile} style={btnStyle}>Save</button>
-      <button type="button" onClick={onOpenSettings} style={{ ...btnStyle, marginLeft: "auto" }}>Settings</button>
+
+      {/* Status badge */}
+      <span style={{
+        marginLeft: "auto",
+        fontWeight: 600,
+        fontSize: 12,
+        padding: "3px 9px",
+        borderRadius: 999,
+        background: badgeBg(statusKind),
+        color: badgeFg(statusKind),
+        border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
+        flexShrink: 0,
+      }}>
+        {statusText}
+      </span>
+
+      {/* Settings icon */}
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        style={{ ...btn, fontSize: 16, padding: "3px 8px", lineHeight: 1 }}
+        title="Settings"
+      >
+        ⚙
+      </button>
+
+      {/* Modals */}
+      {showBrowser && <FileBrowserModal onClose={() => setShowBrowser(false)} />}
       {switchPrompt && (
-        <SwitchToBlocksPrompt
-          dark={dark}
-          state={switchPrompt}
+        <SwitchToBlocksPrompt dark={dark} state={switchPrompt}
           onCancel={() => setSwitchPrompt(null)}
           onDiscard={() => confirmSwitch("discard")}
-          onBestEffort={() => confirmSwitch("best-effort")}
-        />
+          onBestEffort={() => confirmSwitch("best-effort")} />
       )}
       {toPythonPrompt && (
-        <SwitchToPythonPrompt
-          dark={dark}
-          state={toPythonPrompt}
+        <SwitchToPythonPrompt dark={dark} state={toPythonPrompt}
           onCancel={() => setToPythonPrompt(null)}
-          onProceed={confirmToPython}
-        />
+          onProceed={confirmToPython} />
       )}
     </header>
   );
 }
+
+// ── Prompt modals ─────────────────────────────────────────────────────────────
 
 interface PromptProps {
   dark: boolean;
@@ -241,31 +407,9 @@ interface PromptProps {
 }
 
 function SwitchToBlocksPrompt({ dark, state, onCancel, onDiscard, onBestEffort }: PromptProps) {
-  const overlay: React.CSSProperties = {
-    position: "fixed",
-    inset: 0,
-    background: dark ? "rgba(0,0,0,0.6)" : "rgba(11, 59, 72, 0.45)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-  };
-  const modal: React.CSSProperties = {
-    background: dark ? "#0b1216" : "#ffffff",
-    color: dark ? "#dff5fb" : "#0b3b48",
-    padding: 20,
-    borderRadius: 12,
-    maxWidth: 460,
-    border: dark ? "1px solid #164e63" : "1px solid #b6dbe4",
-    boxShadow: dark ? "0 10px 30px rgba(0,0,0,0.5)" : "0 10px 30px rgba(0,111,143,0.25)",
-  };
-  const btn: React.CSSProperties = {
-    padding: "6px 14px",
-    borderRadius: 6,
-    fontWeight: 600,
-    cursor: "pointer",
-    border: "1px solid #155e75",
-  };
+  const overlay: React.CSSProperties = { position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.6)" : "rgba(11,59,72,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
+  const modal: React.CSSProperties = { background: dark ? "#0b1216" : "#ffffff", color: dark ? "#dff5fb" : "#0b3b48", padding: 20, borderRadius: 12, maxWidth: 460, border: dark ? "1px solid #164e63" : "1px solid #b6dbe4", boxShadow: dark ? "0 10px 30px rgba(0,0,0,0.5)" : "0 10px 30px rgba(0,111,143,0.25)" };
+  const btn: React.CSSProperties = { padding: "6px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer", border: "1px solid #155e75" };
   const warnBg = dark ? "#3f1d1d" : "#fef2f2";
   const warnBorder = dark ? "#7f1d1d" : "#fecaca";
   const warnColor = dark ? "#fecaca" : "#7f1d1d";
@@ -273,23 +417,11 @@ function SwitchToBlocksPrompt({ dark, state, onCancel, onDiscard, onBestEffort }
     <div style={overlay} onClick={onCancel}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ marginTop: 0 }}>Switch to Blocks?</h3>
-        <p style={{ fontSize: 14, lineHeight: 1.4 }}>
-          Full translation isn't possible for this Python source:
-        </p>
+        <p style={{ fontSize: 14, lineHeight: 1.4 }}>Full translation isn't possible for this Python source:</p>
         <ul style={{ fontSize: 13, lineHeight: 1.5, paddingLeft: 18 }}>
-          {state.hasRaw && (
-            <li>Some code doesn't map to any block — it will stay inside "raw Python" blocks.</li>
-          )}
+          {state.hasRaw && <li>Some code doesn't map to any block — it will stay inside "raw Python" blocks.</li>}
           {!state.roundTripOk && (
-            <li style={{
-              background: warnBg,
-              border: `1px solid ${warnBorder}`,
-              color: warnColor,
-              padding: "4px 8px",
-              borderRadius: 4,
-              listStyle: "none",
-              marginLeft: -18,
-            }}>
+            <li style={{ background: warnBg, border: `1px solid ${warnBorder}`, color: warnColor, padding: "4px 8px", borderRadius: 4, listStyle: "none", marginLeft: -18 }}>
               <strong>Round-trip check failed:</strong> regenerating Python from the imported blocks does not reproduce the original source exactly. Behavior may drift.
             </li>
           )}
@@ -301,15 +433,9 @@ function SwitchToBlocksPrompt({ dark, state, onCancel, onDiscard, onBestEffort }
           <li><strong>Cancel</strong> — stay in Python mode.</li>
         </ul>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <button type="button" onClick={onCancel} style={{ ...btn, background: "transparent", color: dark ? "#dff5fb" : "#0b3b48", border: `1px solid ${dark ? "#164e63" : "#b6dbe4"}` }}>
-            Cancel
-          </button>
-          <button type="button" onClick={onDiscard} style={{ ...btn, background: "#b91c1c", color: "#fff", border: "1px solid #7f1d1d" }}>
-            Discard
-          </button>
-          <button type="button" onClick={onBestEffort} style={{ ...btn, background: "#0e7490", color: "#fff" }}>
-            Best effort
-          </button>
+          <button type="button" onClick={onCancel} style={{ ...btn, background: "transparent", color: dark ? "#dff5fb" : "#0b3b48", border: `1px solid ${dark ? "#164e63" : "#b6dbe4"}` }}>Cancel</button>
+          <button type="button" onClick={onDiscard} style={{ ...btn, background: "#b91c1c", color: "#fff", border: "1px solid #7f1d1d" }}>Discard</button>
+          <button type="button" onClick={onBestEffort} style={{ ...btn, background: "#0e7490", color: "#fff" }}>Best effort</button>
         </div>
       </div>
     </div>
@@ -324,31 +450,9 @@ interface ToPythonPromptProps {
 }
 
 function SwitchToPythonPrompt({ dark, state, onCancel, onProceed }: ToPythonPromptProps) {
-  const overlay: React.CSSProperties = {
-    position: "fixed",
-    inset: 0,
-    background: dark ? "rgba(0,0,0,0.6)" : "rgba(11, 59, 72, 0.45)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-  };
-  const modal: React.CSSProperties = {
-    background: dark ? "#0b1216" : "#ffffff",
-    color: dark ? "#dff5fb" : "#0b3b48",
-    padding: 20,
-    borderRadius: 12,
-    maxWidth: 460,
-    border: dark ? "1px solid #164e63" : "1px solid #b6dbe4",
-    boxShadow: dark ? "0 10px 30px rgba(0,0,0,0.5)" : "0 10px 30px rgba(0,111,143,0.25)",
-  };
-  const btn: React.CSSProperties = {
-    padding: "6px 14px",
-    borderRadius: 6,
-    fontWeight: 600,
-    cursor: "pointer",
-    border: "1px solid #155e75",
-  };
+  const overlay: React.CSSProperties = { position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.6)" : "rgba(11,59,72,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
+  const modal: React.CSSProperties = { background: dark ? "#0b1216" : "#ffffff", color: dark ? "#dff5fb" : "#0b3b48", padding: 20, borderRadius: 12, maxWidth: 460, border: dark ? "1px solid #164e63" : "1px solid #b6dbe4", boxShadow: dark ? "0 10px 30px rgba(0,0,0,0.5)" : "0 10px 30px rgba(0,111,143,0.25)" };
+  const btn: React.CSSProperties = { padding: "6px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer", border: "1px solid #155e75" };
   const warnBg = dark ? "#3f1d1d" : "#fef2f2";
   const warnBorder = dark ? "#7f1d1d" : "#fecaca";
   const warnColor = dark ? "#fecaca" : "#7f1d1d";
@@ -356,38 +460,17 @@ function SwitchToPythonPrompt({ dark, state, onCancel, onProceed }: ToPythonProm
     <div style={overlay} onClick={onCancel}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ marginTop: 0 }}>Switch to Python?</h3>
-        <div style={{
-          background: warnBg,
-          border: `1px solid ${warnBorder}`,
-          color: warnColor,
-          padding: "8px 10px",
-          borderRadius: 6,
-          fontSize: 13,
-          lineHeight: 1.5,
-          marginBottom: 12,
-        }}>
-          <strong>Going back to Blocks won't be lossless.</strong> The generated
-          Python does not round-trip cleanly to the current blocks:
+        <div style={{ background: warnBg, border: `1px solid ${warnBorder}`, color: warnColor, padding: "8px 10px", borderRadius: 6, fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
+          <strong>Going back to Blocks won't be lossless.</strong> The generated Python does not round-trip cleanly to the current blocks:
           <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
-            {state.hasRaw && (
-              <li>Contains constructs that only exist as "raw Python" blocks.</li>
-            )}
-            {!state.roundTripOk && (
-              <li>Re-parsing the Python does not reproduce the current workspace exactly.</li>
-            )}
+            {state.hasRaw && <li>Contains constructs that only exist as "raw Python" blocks.</li>}
+            {!state.roundTripOk && <li>Re-parsing the Python does not reproduce the current workspace exactly.</li>}
           </ul>
-          <p style={{ marginTop: 8, marginBottom: 0 }}>
-            If you edit the Python and later switch back, some blocks may change
-            or disappear.
-          </p>
+          <p style={{ marginTop: 8, marginBottom: 0 }}>If you edit the Python and later switch back, some blocks may change or disappear.</p>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" onClick={onCancel} style={{ ...btn, background: "transparent", color: dark ? "#dff5fb" : "#0b3b48", border: `1px solid ${dark ? "#164e63" : "#b6dbe4"}` }}>
-            Cancel
-          </button>
-          <button type="button" onClick={onProceed} style={{ ...btn, background: "#0e7490", color: "#fff" }}>
-            Switch anyway
-          </button>
+          <button type="button" onClick={onCancel} style={{ ...btn, background: "transparent", color: dark ? "#dff5fb" : "#0b3b48", border: `1px solid ${dark ? "#164e63" : "#b6dbe4"}` }}>Cancel</button>
+          <button type="button" onClick={onProceed} style={{ ...btn, background: "#0e7490", color: "#fff" }}>Switch anyway</button>
         </div>
       </div>
     </div>

@@ -320,14 +320,14 @@ export class HubProtocolV2 implements IHubProtocol {
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
   }
 
-  async readFile(path: string, timeoutMs = 10000): Promise<Uint8Array> {
-    const reply = await this.sendRequest(KIND.READ, 0, enc.encode(path), { timeoutMs });
+  async readFile(path: string, timeoutMs = 3000, onProgress?: ProgressSink): Promise<Uint8Array> {
+    const reply = await this.sendRequest(KIND.READ, 0, enc.encode(path), { timeoutMs, onProgress });
     if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
     if (reply.kind !== "DATA") throw new Error("READ: expected DATA reply");
     return reply.payload;
   }
 
-  async ls(path: string, timeoutMs = 5000): Promise<DirEntry[]> {
+  async ls(path: string, timeoutMs = 3000): Promise<DirEntry[]> {
     const reply = await this.sendRequest(KIND.LS, 0, enc.encode(path), { timeoutMs });
     if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
     if (reply.kind !== "DATA") throw new Error("LS: expected DATA reply");
@@ -452,7 +452,13 @@ export class HubProtocolV2 implements IHubProtocol {
         const w = this.waiters.get(seq);
         if (w?.onProgress && payload.length >= 8) {
           const dv = new DataView(payload.buffer, payload.byteOffset);
-          w.onProgress(dv.getUint32(0, false), dv.getUint32(4, false));
+          try {
+            w.onProgress(dv.getUint32(0, false), dv.getUint32(4, false));
+          } catch (e) {
+            this.waiters.delete(seq);
+            if (w.timer) clearTimeout(w.timer);
+            w.reject(e instanceof Error ? e : new Error(String(e)));
+          }
         }
         break;
       }
@@ -506,6 +512,9 @@ export class HubProtocolV2 implements IHubProtocol {
 
   private onChunk(chunk: Uint8Array): void {
     console.log(`[proto] ← raw ${chunk.length}b hex=${Array.from(chunk.slice(0,16)).map(b=>b.toString(16).padStart(2,'0')).join(' ')}${chunk.length>16?'…':''}`);
+    for (const seq of this.waiters.keys()) {
+      this.resetWaiterTimer(seq);
+    }
     let i = 0;
     while (i < chunk.length) {
       switch (this.state.phase) {
@@ -563,6 +572,21 @@ export class HubProtocolV2 implements IHubProtocol {
           buf.set(chunk.subarray(i, i + take), this.state.payloadFilled);
           this.state.payloadFilled += take;
           i += take;
+          if (this.state.kind === KIND.DATA) {
+            const w = this.waiters.get(this.state.seq);
+            if (w?.onProgress) {
+              try {
+                w.onProgress(this.state.payloadFilled, this.state.payloadLen);
+              } catch (e) {
+                const seq = this.state.seq;
+                this.state = freshState();
+                this.waiters.delete(seq);
+                if (w.timer) clearTimeout(w.timer);
+                w.reject(e instanceof Error ? e : new Error(String(e)));
+                break;
+              }
+            }
+          }
           if (this.state.payloadFilled === this.state.payloadLen) {
             this.dispatch(this.state.seq, this.state.flags, this.state.kind, buf);
             this.state = freshState();

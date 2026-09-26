@@ -130,9 +130,19 @@ export class DeviceClient {
     return this.proto.isProgramRunning();
   }
 
-  async readFile(path: string, opts: { timeoutMs?: number } = {}): Promise<string> {
-    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? 10000);
+  async readFile(
+    path: string,
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+  ): Promise<string> {
+    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
     return new TextDecoder().decode(bytes);
+  }
+
+  async readFileRaw(
+    path: string,
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+  ): Promise<Uint8Array> {
+    return this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
   }
 
   async upload(path: string, bytes: Uint8Array, opts: UploadRunOptions): Promise<UploadResult> {
@@ -150,7 +160,7 @@ export class DeviceClient {
   }
 
   async ls(path: string, opts: { timeoutMs?: number } = {}): Promise<DirEntry[]> {
-    return this.proto.ls(path, opts.timeoutMs ?? 10000);
+    return this.proto.ls(path, opts.timeoutMs ?? 3000);
   }
 
   async mv(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {

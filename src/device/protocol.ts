@@ -212,6 +212,8 @@ interface Waiter {
 interface SendOptions {
   timeoutMs: number;
   onProgress?: ProgressSink;
+  /** Use writeValueWithoutResponse for large host→device transfers (e.g. UPLOAD). */
+  fast?: boolean;
 }
 
 // ── HubProtocolV2 ─────────────────────────────────────────────────────────────
@@ -316,7 +318,7 @@ export class HubProtocolV2 implements IHubProtocol {
     payload[0] = pathBytes.length;
     payload.set(pathBytes, 1);
     payload.set(bytes, 1 + pathBytes.length);
-    const reply = await this.sendRequest(KIND.UPLOAD, 0, payload, { timeoutMs: idleTimeoutMs, onProgress });
+    const reply = await this.sendRequest(KIND.UPLOAD, 0, payload, { timeoutMs: idleTimeoutMs, onProgress, fast: false });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
   }
 
@@ -383,7 +385,10 @@ export class HubProtocolV2 implements IHubProtocol {
     this.sending = this.sending
       .then(() => {
         console.log(`[proto] → kind=0x${kind.toString(16).padStart(2,'0')} seq=${seq} ${payload.length}b`);
-        return this.transport.write(frame);
+        const write = opts.fast && this.transport.writeFast
+          ? this.transport.writeFast.bind(this.transport)
+          : this.transport.write.bind(this.transport);
+        return write(frame);
       })
       .catch((e) => { console.error("[protocol] write failed", e); });
     return p;

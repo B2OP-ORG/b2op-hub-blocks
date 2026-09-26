@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import * as Blockly from "blockly/core";
 import { BleTransport, bleSupported } from "../transport/ble";
 import { SerialTransport, serialSupported } from "../transport/serial";
@@ -12,6 +12,17 @@ import { workspaceToPython } from "../codegen/pythonGen";
 import { sanitizeFilename } from "../utils/sanitize";
 import { saveLastDeviceName } from "../project/storage";
 import { FileBrowserModal } from "./FileBrowserModal";
+
+function fmtSpeed(bps: number): string {
+  if (bps >= 1_048_576) return `${(bps / 1_048_576).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+
+function fmtEta(sec: number): string {
+  if (sec < 60) return `~${Math.ceil(sec)}s`;
+  return `~${Math.floor(sec / 60)}m ${Math.ceil(sec % 60)}s`;
+}
 
 interface Props {
   onOpenSettings: () => void;
@@ -73,6 +84,9 @@ export function Header({ onOpenSettings }: Props) {
   const [toPythonPrompt, setToPythonPrompt] = useState<ToPythonPromptState | null>(null);
   const [busy, setBusy] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ label: string; sent: number; total: number } | null>(null);
+  const cancelRef = useRef(false);
+  const transferStartRef = useRef(0);
   const dark = project.type === "python";
 
   // ── Mode toggle ──────────────────────────────────────────────────────────────
@@ -168,20 +182,32 @@ export function Header({ onOpenSettings }: Props) {
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
     const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    cancelRef.current = false;
+    transferStartRef.current = Date.now();
     setBusy(true);
     appendConsole("info", `[run → ${path}]\n`);
     try {
       const bytes = new TextEncoder().encode(code);
+      setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
         policy: { allowRoot: project.settings.allowRoot },
         autoRun: true,
         onStdout: (t) => appendConsole("out", t),
+        onProgress: (sent, total) => {
+          if (cancelRef.current) throw new Error("Cancelled");
+          setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
+        },
       });
       setRunning(true);
     } catch (e) {
-      appendConsole("err", `[run failed: ${(e as Error).message}]\n`);
+      if ((e as Error).message === "Cancelled") {
+        device.stop().catch(() => {});
+      } else {
+        appendConsole("err", `[run failed: ${(e as Error).message}]\n`);
+      }
     } finally {
       setBusy(false);
+      setUploadProgress(null);
     }
   };
 
@@ -205,21 +231,32 @@ export function Header({ onOpenSettings }: Props) {
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
     const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    cancelRef.current = false;
+    transferStartRef.current = Date.now();
     setBusy(true);
     appendConsole("info", `[upload → ${path}]\n`);
     try {
       const bytes = new TextEncoder().encode(code);
+      setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
         policy: { allowRoot: project.settings.allowRoot },
-        autoRun: project.settings.autoRunAfterUpload,
+        autoRun: false,
         onStdout: (t) => appendConsole("out", t),
+        onProgress: (sent, total) => {
+          if (cancelRef.current) throw new Error("Cancelled");
+          setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
+        },
       });
-      if (project.settings.autoRunAfterUpload) setRunning(true);
       appendConsole("info", `[upload OK: ${path} (${bytes.length}B)]\n`);
     } catch (e) {
-      appendConsole("err", `[upload failed: ${(e as Error).message}]\n`);
+      if ((e as Error).message === "Cancelled") {
+        device.stop().catch(() => {});
+      } else {
+        appendConsole("err", `[upload failed: ${(e as Error).message}]\n`);
+      }
     } finally {
       setBusy(false);
+      setUploadProgress(null);
     }
   };
 
@@ -381,6 +418,68 @@ export function Header({ onOpenSettings }: Props) {
 
       {/* Modals */}
       {showBrowser && <FileBrowserModal onClose={() => setShowBrowser(false)} />}
+      {uploadProgress && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 2000,
+          background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            background: dark ? "#0b1216" : "#ffffff",
+            border: dark ? "1px solid #164e63" : "1px solid #b6dbe4",
+            borderRadius: 10,
+            padding: "24px 32px",
+            minWidth: 320,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+            color: dark ? "#dff5fb" : "#0b3b48",
+          }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>
+              {uploadProgress.label}
+            </div>
+            <div style={{
+              height: 8, borderRadius: 4,
+              background: dark ? "#1a2a35" : "#e0f0f5",
+              overflow: "hidden", marginBottom: 8,
+            }}>
+              <div style={{
+                height: "100%",
+                width: uploadProgress.total > 0
+                  ? `${Math.min(100, Math.round(uploadProgress.sent / uploadProgress.total * 100))}%`
+                  : "0%",
+                background: "#0e7490",
+                borderRadius: 4,
+                transition: "width 0.1s linear",
+              }} />
+            </div>
+            {uploadProgress.total > 0 && (() => {
+              const elapsed = (Date.now() - transferStartRef.current) / 1000;
+              const speed = elapsed > 0.5 && uploadProgress.sent > 0 ? uploadProgress.sent / elapsed : 0;
+              const eta = speed > 0 && uploadProgress.total > uploadProgress.sent ? (uploadProgress.total - uploadProgress.sent) / speed : 0;
+              return (
+                <div style={{ fontSize: 12, color: dark ? "#8ab4c0" : "#5a8a9a", marginBottom: 16 }}>
+                  {uploadProgress.sent.toLocaleString()} / {uploadProgress.total.toLocaleString()} B
+                  {" "}({Math.min(100, Math.round(uploadProgress.sent / uploadProgress.total * 100))}%)
+                  {speed > 0 && <> · {fmtSpeed(speed)}</>}
+                  {eta > 0 && <> · {fmtEta(eta)}</>}
+                </div>
+              );
+            })()}
+            <button
+              type="button"
+              style={{
+                padding: "6px 18px",
+                border: dark ? "1px solid #6a1c1c" : "1px solid #f0b4b4",
+                background: dark ? "#4a1414" : "#ffe4e4",
+                color: dark ? "#ffb0b0" : "#8a1c1c",
+                borderRadius: 6, cursor: "pointer", fontWeight: 600,
+              }}
+              onClick={() => { cancelRef.current = true; }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {switchPrompt && (
         <SwitchToBlocksPrompt dark={dark} state={switchPrompt}
           onCancel={() => setSwitchPrompt(null)}

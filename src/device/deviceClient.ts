@@ -73,6 +73,7 @@ export class DeviceClient {
             if (mtu > 23 || attempt === 1) {
               // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
               this.transport.setChunkSize(mtu - 3);
+              console.log(`DeviceClient: ATT MTU=${mtu}, chunk=${mtu - 3}`);
               break;
             }
             await new Promise((r) => setTimeout(r, 400));

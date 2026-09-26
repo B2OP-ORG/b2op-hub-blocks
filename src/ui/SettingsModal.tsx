@@ -54,10 +54,6 @@ export function SettingsModal({ onClose }: Props) {
           Show advanced blocks
         </label>
         <label style={row}>
-          <input type="checkbox" checked={settings.autoRunAfterUpload} onChange={toggle("autoRunAfterUpload")} />
-          Auto-run after upload
-        </label>
-        <label style={row}>
           <input type="checkbox" checked={settings.allowRoot} onChange={toggle("allowRoot")} />
           Allow uploads to root filesystem (advanced)
         </label>

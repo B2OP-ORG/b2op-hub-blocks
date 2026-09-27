@@ -42,6 +42,7 @@ interface AppState {
   console: ConsoleEntry[];
   boardName: string;
   boardVersion: string;
+  fwVersion: string;
 
   // Tab management
   openTab: (project: AnyProject, devicePath?: string) => void;
@@ -62,7 +63,7 @@ interface AppState {
   setRunning: (r: boolean) => void;
   appendConsole: (kind: ConsoleEntry["kind"], text: string) => void;
   clearConsole: () => void;
-  setBoardInfo: (name: string, version: string) => void;
+  setBoardInfo: (name: string, version: string, fwVersion: string) => void;
 }
 
 const MAX_CONSOLE = 500;
@@ -82,6 +83,7 @@ export const useApp = create<AppState>((set) => ({
   console: [],
   boardName: "",
   boardVersion: "",
+  fwVersion: "",
 
   openTab: (project, devicePath) => set((s) => {
     if (devicePath) {
@@ -195,7 +197,7 @@ export const useApp = create<AppState>((set) => ({
 
   setDevice: (device) => set({ device }),
   setConnection: (connection, err) => set({ connection, connectionError: err ?? null }),
-  setBoardInfo: (boardName, boardVersion) => set({ boardName, boardVersion }),
+  setBoardInfo: (boardName, boardVersion, fwVersion) => set({ boardName, boardVersion, fwVersion }),
   setRunning: (running) => set({ running }),
 
   appendConsole: (kind, text) =>

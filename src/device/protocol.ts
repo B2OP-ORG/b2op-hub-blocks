@@ -123,6 +123,7 @@ export interface HelloInfo {
   protocolVersion: number;
   boardName: string;
   boardVersion: string;
+  fwVersion: string;
 }
 export type HelloSink = (info: HelloInfo) => void;
 
@@ -139,6 +140,7 @@ export interface IHubProtocol {
   readonly protocolVersion: number;
   readonly boardName: string;
   readonly boardVersion: string;
+  readonly fwVersion: string;
 
   dispose(): void;
   setStdoutSink(sink: StdoutSink | null): void;
@@ -237,6 +239,7 @@ export class HubProtocolV2 implements IHubProtocol {
   private _protocolVersion = 0;
   private _boardName = "";
   private _boardVersion = "";
+  private _fwVersion = "";
 
   constructor(transport: Transport) {
     this.transport = transport;
@@ -246,6 +249,7 @@ export class HubProtocolV2 implements IHubProtocol {
   get protocolVersion(): number { return this._protocolVersion; }
   get boardName(): string { return this._boardName; }
   get boardVersion(): string { return this._boardVersion; }
+  get fwVersion(): string { return this._fwVersion; }
 
   dispose(): void {
     this.unsub?.();
@@ -499,20 +503,19 @@ export class HubProtocolV2 implements IHubProtocol {
   private parseHelloPayload(payload: Uint8Array): void {
     if (payload.length < 1) return;
     const protoVer = payload[0];
-    let i = 1;
-    // null-terminated board name
-    let j = i;
-    while (j < payload.length && payload[j] !== 0) j++;
-    const boardName = dec.decode(payload.slice(i, j));
-    i = j + 1;
-    // null-terminated board version
-    j = i;
-    while (j < payload.length && payload[j] !== 0) j++;
-    const boardVersion = dec.decode(payload.slice(i, j));
+    const readStr = (start: number): [string, number] => {
+      let j = start;
+      while (j < payload.length && payload[j] !== 0) j++;
+      return [dec.decode(payload.slice(start, j)), j + 1];
+    };
+    const [boardName, i1] = readStr(1);
+    const [boardVersion, i2] = readStr(i1);
+    const [fwVersion]        = readStr(i2);
     this._protocolVersion = protoVer;
     this._boardName = boardName;
     this._boardVersion = boardVersion;
-    this.onHello?.({ protocolVersion: protoVer, boardName, boardVersion });
+    this._fwVersion = fwVersion;
+    this.onHello?.({ protocolVersion: protoVer, boardName, boardVersion, fwVersion });
   }
 
   // ── Binary stream parser ────────────────────────────────────────────────────

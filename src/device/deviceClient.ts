@@ -35,6 +35,7 @@ export class DeviceClient {
   private proto: HubProtocol;
   readonly transport: Transport;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private pinging = false;
 
   constructor(transport: Transport) {
     this.transport = transport;
@@ -43,6 +44,7 @@ export class DeviceClient {
 
   get boardName(): string { return this.proto.boardName; }
   get boardVersion(): string { return this.proto.boardVersion; }
+  get fwVersion(): string { return this.proto.fwVersion; }
   get protocolVersion(): number { return this.proto.protocolVersion; }
 
   async connect(): Promise<void> {
@@ -64,7 +66,7 @@ export class DeviceClient {
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
       try {
         await this.proto.requestHello(3000);
-        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion);
+        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
       } catch { /* non-fatal */ }
 
       if (this.transport.setChunkSize) {
@@ -90,8 +92,10 @@ export class DeviceClient {
       }
     }
     this.pingInterval = setInterval(async () => {
-      if (!this.transport.connected) return;
+      if (!this.transport.connected || this.pinging) return;
+      this.pinging = true;
       try { await this.proto.ping(2000); } catch { /* ignore; disconnect handler fires on dead link */ }
+      finally { this.pinging = false; }
     }, 10_000);
   }
 

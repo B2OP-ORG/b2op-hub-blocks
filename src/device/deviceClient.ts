@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
+import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -32,14 +32,14 @@ const TMP_RUN_NAME = "__web_run.py";
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
 export class DeviceClient {
-  private proto: HubProtocol;
+  private proto: HubProtocolV1_0_0;
   readonly transport: Transport;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private pinging = false;
 
   constructor(transport: Transport) {
     this.transport = transport;
-    this.proto = new HubProtocol(transport);
+    this.proto = new HubProtocolV1_0_0(transport);
   }
 
   get boardName(): string { return this.proto.boardName; }
@@ -66,8 +66,15 @@ export class DeviceClient {
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
       try {
         await this.proto.requestHello(3000);
+        const protoVer = this.proto.protocolVersion;
+        if (!PROTOCOL_REGISTRY.has(protoVer)) {
+          throw new Error(`Unsupported device protocol v${protoVer}. Please update the app.`);
+        }
         useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
-      } catch { /* non-fatal */ }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith("Unsupported device protocol")) throw e;
+        /* other hello failures are non-fatal */
+      }
 
       if (this.transport.setChunkSize) {
         // Device queries `_ble_uart.instance().mtu()`, which reflects the last

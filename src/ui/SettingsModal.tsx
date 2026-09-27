@@ -104,6 +104,22 @@ export function SettingsModal({ onClose }: Props) {
           built-in Python editor. Remote mode needs the server in <code>docs/lsp-server/</code>.
         </p>
 
+        <h4 style={{ marginTop: 18, marginBottom: 4 }}>Firmware updates</h4>
+        <button
+          type="button"
+          onClick={() => {
+            for (const k of Object.keys(localStorage)) {
+              if (k.startsWith("b2op.suppressedFwUpdate.")) localStorage.removeItem(k);
+            }
+          }}
+          style={{ padding: "5px 14px", background: "transparent", border: dark ? "1px solid #164e63" : "1px solid #b6dbe4", color: dark ? "#dff5fb" : "#0b3b48", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
+        >
+          Reset firmware update notifications
+        </button>
+        <p style={{ fontSize: 12, opacity: 0.7 }}>
+          Clears all &quot;don&apos;t show again&quot; choices so update prompts reappear on next connect.
+        </p>
+
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
           <button
             type="button"

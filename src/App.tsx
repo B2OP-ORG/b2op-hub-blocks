@@ -4,13 +4,28 @@ import { TabBar } from "./ui/TabBar";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { Workspace } from "./ui/Workspace";
 import { SettingsModal } from "./ui/SettingsModal";
+import { FirmwareUpdatePrompt } from "./ui/FirmwareUpdatePrompt";
+import { FirmwareUpdatePage } from "./ui/FirmwareUpdatePage";
 import { useApp } from "./state/store";
 import { loadSavedTabs, saveTabs } from "./project/storage";
+import boardVersions from "./device/boardVersions.json";
+import { isNewer, isDevBuild } from "./device/fwVersion";
+
+function suppressionKey(boardName: string, boardVersion: string): string {
+  return `b2op.suppressedFwUpdate.${boardName}.${boardVersion}`;
+}
 
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
+  const [showUpdatePage, setShowUpdatePage] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<{ latestFw: string } | null>(null);
   const project = useApp((s) => s.project);
   const activeTabId = useApp((s) => s.activeTabId);
+  const connection = useApp((s) => s.connection);
+  const boardName = useApp((s) => s.boardName);
+  const boardVersion = useApp((s) => s.boardVersion);
+  const fwVersion = useApp((s) => s.fwVersion);
 
   useEffect(() => {
     const saved = loadSavedTabs();
@@ -32,6 +47,19 @@ export default function App() {
     }, 5000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (connection !== "connected" || !boardName || !boardVersion || !fwVersion) return;
+    if (isDevBuild(fwVersion)) return;
+    const entry = (boardVersions as Record<string, Record<string, { latestFwVersion: string }>>)[boardName]?.[boardVersion];
+    if (!entry) return;
+    const { latestFwVersion } = entry;
+    if (!isNewer(latestFwVersion, fwVersion)) return;
+    const key = suppressionKey(boardName, boardVersion);
+    if (localStorage.getItem(key) === latestFwVersion) return;
+    setUpdateInfo({ latestFw: latestFwVersion });
+    setShowUpdatePrompt(true);
+  }, [connection, boardName, boardVersion, fwVersion]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -57,6 +85,22 @@ export default function App() {
           </ErrorBoundary>
         </div>
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        {showUpdatePrompt && updateInfo && (
+          <FirmwareUpdatePrompt
+            boardName={boardName}
+            boardVersion={boardVersion}
+            currentFw={fwVersion}
+            latestFw={updateInfo.latestFw}
+            onUpdate={() => { setShowUpdatePrompt(false); setShowUpdatePage(true); }}
+            onDismiss={(doNotShowAgain) => {
+              if (doNotShowAgain) {
+                localStorage.setItem(suppressionKey(boardName, boardVersion), updateInfo.latestFw);
+              }
+              setShowUpdatePrompt(false);
+            }}
+          />
+        )}
+        {showUpdatePage && <FirmwareUpdatePage onBack={() => setShowUpdatePage(false)} />}
       </div>
     </ErrorBoundary>
   );

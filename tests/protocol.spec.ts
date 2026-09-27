@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  validatePath, UploadError, HubProtocol,
+  validatePath, UploadError, HubProtocolV1_0_0, HubProtocol, PROTOCOL_REGISTRY,
   KIND, makeFrame,
   type ProgramEndInfo,
 } from "../src/device/protocol";
@@ -16,14 +16,16 @@ function inject(transport: MockTransport, frame: Uint8Array): void {
     .dataCbs.forEach((cb) => cb(frame));
 }
 
-/** Build a HELLO payload: [proto_ver:u8][name\0][version\0] */
-function helloPayload(protoVer: number, name: string, ver: string): Uint8Array {
+/** Build a HELLO payload: [proto_ver:u8][name\0][ver\0][fw\0] */
+function helloPayload(protoVer: number, name: string, ver: string, fw = ""): Uint8Array {
   const nb = enc.encode(name + "\0");
   const vb = enc.encode(ver + "\0");
-  const p = new Uint8Array(1 + nb.length + vb.length);
+  const fb = enc.encode(fw + "\0");
+  const p = new Uint8Array(1 + nb.length + vb.length + fb.length);
   p[0] = protoVer;
   p.set(nb, 1);
   p.set(vb, 1 + nb.length);
+  p.set(fb, 1 + nb.length + vb.length);
   return p;
 }
 
@@ -190,6 +192,18 @@ describe("HubProtocol binary frame IO", () => {
 // ── HELLO ─────────────────────────────────────────────────────────────────────
 
 describe("HELLO / requestHello", () => {
+  it("PROTOCOL_REGISTRY maps proto_ver 2 to semver 1.0.0", () => {
+    expect(PROTOCOL_REGISTRY.get(2)).toBe("1.0.0");
+  });
+
+  it("PROTOCOL_REGISTRY does not contain unknown versions", () => {
+    expect(PROTOCOL_REGISTRY.has(99)).toBe(false);
+  });
+
+  it("HubProtocolV1_0_0 is exported and matches HubProtocol alias", () => {
+    expect(HubProtocolV1_0_0).toBe(HubProtocol);
+  });
+
   it("parses proactive HELLO frame and populates board info", async () => {
     const transport = new MockTransport();
     // Create proto BEFORE connect so it is subscribed when HELLO fires.
@@ -199,6 +213,7 @@ describe("HELLO / requestHello", () => {
     await new Promise((r) => queueMicrotask(r as () => void));
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
+    expect(proto.fwVersion).toBe("v1.1.0");
     expect(proto.protocolVersion).toBe(2);
     proto.dispose();
     await transport.disconnect();
@@ -211,23 +226,25 @@ describe("HELLO / requestHello", () => {
     await proto.requestHello();
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
+    expect(proto.fwVersion).toBe("v1.1.0");
     expect(proto.protocolVersion).toBe(2);
     proto.dispose();
     await transport.disconnect();
   });
 
-  it("helloSink fires with correct info", async () => {
+  it("helloSink fires with correct info including fwVersion", async () => {
     const transport = new MockTransport();
     await transport.connect();
     const proto = new HubProtocol(transport);
     const sink = vi.fn();
     proto.setHelloSink(sink);
     // Inject a HELLO frame with custom board info.
-    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(2, "MyBoard", "3.1.4")));
+    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(2, "MyBoard", "3.1.4", "fw2.0")));
     expect(sink).toHaveBeenCalledWith({
       protocolVersion: 2,
       boardName: "MyBoard",
       boardVersion: "3.1.4",
+      fwVersion: "fw2.0",
     });
     proto.dispose();
     await transport.disconnect();

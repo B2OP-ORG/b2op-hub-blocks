@@ -24,7 +24,7 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x19  RM         path:utf8                 → OK
  *
  * Device → Host:
- *   0x20  HELLO     [proto_ver:u8][board_name\0][board_ver\0]  SEQ=0xFF
+ *   0x20  HELLO     [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
  *   0x21  OK        payload (utf8 or structured, see cmd)
  *   0x22  ERR       error message utf8
  *   0x23  ACK       optional msg  (echoes SEQ, resets idle timer)
@@ -61,6 +61,14 @@ export const KIND = {
 
 export const FLAGS_NO_ACK = 0x01;
 export const SEQ_UNSOLICITED = 0xFF;
+
+/**
+ * Maps the proto_ver byte (sent in HELLO) to a semver name.
+ * Add an entry here when a new incompatible protocol variant is introduced.
+ */
+export const PROTOCOL_REGISTRY = new Map<number, string>([
+  [2, "1.0.0"],
+]);
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
 
@@ -218,12 +226,13 @@ interface SendOptions {
   fast?: boolean;
 }
 
-// ── HubProtocolV2 ─────────────────────────────────────────────────────────────
+// ── HubProtocolV1_0_0 ────────────────────────────────────────────────────────
+// Wire protocol semver v1.0.0 (proto_ver byte = 2).
 
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: false });
 
-export class HubProtocolV2 implements IHubProtocol {
+export class HubProtocolV1_0_0 implements IHubProtocol {
   private transport: Transport;
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
@@ -652,5 +661,4 @@ export function validatePath(path: string, policy: UploadPolicy): void {
   throw new UploadError(`Path must be under /sd/ (allowRoot=${policy.allowRoot}): ${path}`);
 }
 
-// Back-compat alias so DeviceClient import doesn't need changing.
-export { HubProtocolV2 as HubProtocol };
+export { HubProtocolV1_0_0 as HubProtocol };

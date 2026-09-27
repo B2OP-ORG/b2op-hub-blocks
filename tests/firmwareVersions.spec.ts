@@ -29,14 +29,14 @@ describe("boardVersions JSON", () => {
     expect((boardVersions as Record<string, unknown>)["B2OP Hub"]).toBeDefined();
   });
 
-  it("each entry has latestFwVersion and fwFile", () => {
-    type Entry = { latestFwVersion: string; fwFile: string };
+  it("each entry has latestFwVersion and manifestFile", () => {
+    type Entry = { latestFwVersion: string; manifestFile: string };
     const board = (boardVersions as Record<string, Record<string, Entry>>)["B2OP Hub"];
     for (const entry of Object.values(board)) {
       expect(entry).toHaveProperty("latestFwVersion");
-      expect(entry).toHaveProperty("fwFile");
+      expect(entry).toHaveProperty("manifestFile");
       expect(typeof entry.latestFwVersion).toBe("string");
-      expect(typeof entry.fwFile).toBe("string");
+      expect(typeof entry.manifestFile).toBe("string");
     }
   });
 

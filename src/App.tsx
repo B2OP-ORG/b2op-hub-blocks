@@ -11,9 +11,7 @@ import { loadSavedTabs, saveTabs } from "./project/storage";
 import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
 
-function suppressionKey(boardName: string, boardVersion: string): string {
-  return `b2op.suppressedFwUpdate.${boardName}.${boardVersion}`;
-}
+const SUPPRESS_KEY = "b2op.suppressFwUpdates";
 
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
@@ -55,10 +53,10 @@ export default function App() {
     if (!entry) return;
     const { latestFwVersion } = entry;
     if (!isNewer(latestFwVersion, fwVersion)) return;
-    const key = suppressionKey(boardName, boardVersion);
-    if (localStorage.getItem(key) === latestFwVersion) return;
     setUpdateInfo({ latestFw: latestFwVersion });
-    setShowUpdatePrompt(true);
+    if (localStorage.getItem(SUPPRESS_KEY) !== "true") {
+      setShowUpdatePrompt(true);
+    }
   }, [connection, boardName, boardVersion, fwVersion]);
 
   useEffect(() => {
@@ -77,7 +75,10 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden", background: project.type === "python" ? "#06090b" : "#eaf4f7" }}>
-        <Header onOpenSettings={() => setShowSettings(true)} />
+        <Header
+          onOpenSettings={() => setShowSettings(true)}
+          onOpenFwUpdate={updateInfo ? () => setShowUpdatePrompt(true) : undefined}
+        />
         <TabBar />
         <div style={{ flex: 1, minHeight: 0 }}>
           <ErrorBoundary>
@@ -94,7 +95,7 @@ export default function App() {
             onUpdate={() => { setShowUpdatePrompt(false); setShowUpdatePage(true); }}
             onDismiss={(doNotShowAgain) => {
               if (doNotShowAgain) {
-                localStorage.setItem(suppressionKey(boardName, boardVersion), updateInfo.latestFw);
+                localStorage.setItem(SUPPRESS_KEY, "true");
               }
               setShowUpdatePrompt(false);
             }}

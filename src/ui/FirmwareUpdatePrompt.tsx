@@ -70,7 +70,7 @@ export function FirmwareUpdatePrompt({ boardName, boardVersion, currentFw, lates
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 20, cursor: "pointer" }}>
           <input type="checkbox" checked={suppress} onChange={(e) => setSuppress(e.target.checked)} />
-          Don&apos;t show again for this version
+          Don&apos;t show firmware update notifications
         </label>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button

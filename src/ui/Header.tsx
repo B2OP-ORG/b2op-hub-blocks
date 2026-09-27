@@ -26,6 +26,7 @@ function fmtEta(sec: number): string {
 
 interface Props {
   onOpenSettings: () => void;
+  onOpenFwUpdate?: () => void;
 }
 
 function blocksProjectFromPython(source: string, title: string, settings: BlocksProject["settings"]): BlocksProject {
@@ -77,7 +78,7 @@ function checkTranslation(source: string, title: string, settings: BlocksProject
 interface PromptState { hasRaw: boolean; roundTripOk: boolean; }
 interface ToPythonPromptState { hasRaw: boolean; roundTripOk: boolean; source: string; }
 
-export function Header({ onOpenSettings }: Props) {
+export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const { project, setProject, device, connection, connectionError, running,
     setDevice, setConnection, setRunning, appendConsole, pythonPreview,
     boardName, boardVersion, fwVersion } = useApp();
@@ -398,6 +399,25 @@ export function Header({ onOpenSettings }: Props) {
           <span style={{ fontSize: 11, opacity: 0.75, color: dark ? "#a0cce0" : "#e0f4ff" }}>
             {boardName}{boardVersion ? ` ${boardVersion}` : ""}{fwVersion ? ` (${fwVersion})` : ""}
           </span>
+        )}
+        {onOpenFwUpdate && (
+          <button
+            type="button"
+            onClick={onOpenFwUpdate}
+            title="Firmware update available"
+            style={{
+              padding: "3px 9px",
+              borderRadius: 999,
+              fontWeight: 600,
+              fontSize: 12,
+              cursor: "pointer",
+              background: "#92400e",
+              color: "#fef3c7",
+              border: "1px solid #b45309",
+            }}
+          >
+            ↑ Update
+          </button>
         )}
         <span style={{
           fontWeight: 600,

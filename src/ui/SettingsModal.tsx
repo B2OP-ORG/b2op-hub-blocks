@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useApp } from "../state/store";
 import type { LspMode } from "../project/format";
 
@@ -17,6 +18,7 @@ export function SettingsModal({ onClose }: Props) {
   const project = useApp((s) => s.project);
   const update = useApp((s) => s.updateSettings);
   const dark = project.type === "python";
+  const [fwNotifs, setFwNotifs] = useState(() => localStorage.getItem("b2op.suppressFwUpdates") !== "true");
 
   const overlay: React.CSSProperties = {
     position: "fixed",
@@ -105,20 +107,22 @@ export function SettingsModal({ onClose }: Props) {
         </p>
 
         <h4 style={{ marginTop: 18, marginBottom: 4 }}>Firmware updates</h4>
-        <button
-          type="button"
-          onClick={() => {
-            for (const k of Object.keys(localStorage)) {
-              if (k.startsWith("b2op.suppressedFwUpdate.")) localStorage.removeItem(k);
-            }
-          }}
-          style={{ padding: "5px 14px", background: "transparent", border: dark ? "1px solid #164e63" : "1px solid #b6dbe4", color: dark ? "#dff5fb" : "#0b3b48", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
-        >
-          Reset firmware update notifications
-        </button>
-        <p style={{ fontSize: 12, opacity: 0.7 }}>
-          Clears all &quot;don&apos;t show again&quot; choices so update prompts reappear on next connect.
-        </p>
+        <label style={row}>
+          <input
+            type="checkbox"
+            checked={fwNotifs}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setFwNotifs(checked);
+              if (checked) {
+                localStorage.removeItem("b2op.suppressFwUpdates");
+              } else {
+                localStorage.setItem("b2op.suppressFwUpdates", "true");
+              }
+            }}
+          />
+          Show firmware update notifications
+        </label>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
           <button

@@ -11,6 +11,7 @@ import sys
 import os
 import time
 import uselect
+import lvgl as lv
 
 import runner
 import hub as _hub
@@ -44,8 +45,10 @@ KIND_PROG_END  = 0x32
 
 FLAGS_NO_ACK = 0x01
 
-FRAME_MAGIC    = 0x7E
+FRAME_MAGIC     = 0x7E
 SEQ_UNSOLICITED = 0xFF
+
+PROTO_VER = 2  # Protocol v1.0.0
 
 _FORBIDDEN = (
     # "/main.py", "/boot.py", "/boot.mpy", "/runner.py",
@@ -60,7 +63,47 @@ _buf = bytearray()
 
 # Optional hook called after every RUN completes (menu uses this to rebuild UI).
 on_run_finished = None
+# Optional hook called after an UPLOAD/transfer completes (no button-wait needed).
+on_transfer_finished = None
 _running = False
+
+_screen = None
+
+def set_screen(scr):
+    global _screen
+    _screen = scr
+
+def _show_transfer(label):
+    if _screen is None:
+        return
+    try:
+        from listview import text_screen
+        _screen.clean()
+        text_screen(_screen, "Transferring", label)
+        lv.timer_handler()
+    except Exception:
+        pass
+
+def _restore_menu(transfer=False):
+    cb = on_transfer_finished if transfer and on_transfer_finished else on_run_finished
+    if cb:
+        try:
+            cb()
+            lv.timer_handler()
+        except Exception as e:
+            print("_restore_menu failed:", e)
+
+def _check_stop_incoming():
+    """Check input buffer for a STOP frame between KIND_READ streaming chunks."""
+    global _buf
+    data = _read_available()
+    if data:
+        _buf = bytearray(_buf) + bytearray(data)
+    for i in range(len(_buf) - 4):
+        if (_buf[i] == FRAME_MAGIC and _buf[i + 1] == 0x00
+                and _buf[i + 4] == KIND_STOP):
+            return True
+    return False
 
 _DEBUG = False
 
@@ -160,9 +203,11 @@ def _hello():
     try:
         name = getattr(_hub.board, "BOARD_NAME", "unknown")
         ver  = getattr(_hub.board, "BOARD_VERSION", "")
+        fw   = getattr(_hub, "fw_version", "")
     except Exception:
-        name, ver = "unknown", ""
-    payload = bytes([2]) + name.encode() + b"\x00" + ver.encode() + b"\x00"
+        name, ver, fw = "unknown", "", ""
+    payload = (bytes([PROTO_VER]) + name.encode() + b"\x00"
+               + ver.encode() + b"\x00" + fw.encode() + b"\x00")
     _write(_make_frame(KIND_HELLO, SEQ_UNSOLICITED, 0, payload))
 
 
@@ -279,6 +324,129 @@ def _read_exact(n, timeout_ms=5000, progress_cb=None, progress_every=2048):
     return bytes(got)
 
 
+def _stream_to_file(path, n, seq, idle_timeout_ms=3000, progress_every=2048):
+    """Read exactly n bytes from transport and write directly to path.
+
+    Returns True on success, False on timeout/IO error (sends ERR reply itself).
+    Caller must call _restore_menu() in either case.
+    idle_timeout_ms: max ms with no incoming data before aborting.
+    """
+    global _buf
+    mk_err = _mkdirs(path.rsplit("/", 1)[0])
+    if mk_err:
+        _err(seq, mk_err.encode())
+        return False
+    try:
+        f = open(path, "wb")
+    except OSError as e:
+        _err(seq, ("write: " + str(e)).encode())
+        return False
+
+    remaining = n
+
+    try:
+        written = 0
+        last_reported = 0
+        deadline = time.ticks_add(time.ticks_ms(), idle_timeout_ms)
+        inst = _ble_uart.instance() if _ble_uart is not None else None
+        # Drain whatever _read_exact left in _buf first
+        if _buf and remaining > 0:
+            take = min(remaining, len(_buf))
+            f.write(_buf[:take])
+            _buf = _buf[take:]
+            written += take
+            remaining -= take
+        while remaining > 0:
+            made_progress = False
+            if _poller.poll(0):
+                chunk = None
+                try:
+                    chunk = sys.stdin.buffer.read(min(512, remaining))
+                except AttributeError:
+                    chunk = sys.stdin.read(min(512, remaining))
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode("utf-8")
+                if chunk:
+                    f.write(chunk)
+                    written += len(chunk)
+                    remaining -= len(chunk)
+                    made_progress = True
+            if inst is not None and remaining > 0:
+                chunk = inst.read_rx()
+                if chunk:
+                    if len(chunk) > remaining:
+                        f.write(chunk[:remaining])
+                        _buf = bytearray(chunk[remaining:]) + _buf
+                        written += remaining
+                        remaining = 0
+                    else:
+                        f.write(chunk)
+                        written += len(chunk)
+                        remaining -= len(chunk)
+                    made_progress = True
+            if made_progress:
+                deadline = time.ticks_add(time.ticks_ms(), idle_timeout_ms)
+                if written - last_reported >= progress_every:
+                    _progress(seq, written, n)
+                    last_reported = written
+            else:
+                if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+                    if _DEBUG:
+                        print("[proto] _stream_to_file TIMEOUT: %d/%d" % (written, n))
+                    _err(seq, b"UPLOAD: timeout")
+                    _discard_transport(remaining)
+                    return False
+                time.sleep_ms(2)
+        if last_reported != n:
+            _progress(seq, n, n)
+    except OSError as e:
+        _err(seq, ("write: " + str(e)).encode())
+        _discard_transport(remaining)
+        return False
+    finally:
+        f.close()
+    return True
+
+
+def _discard_transport(n, idle_timeout_ms=3000):
+    """Read and discard exactly n bytes from transport.
+
+    Called after a failed _stream_to_file to purge the remainder of the
+    upload frame from BLE/USB so _buf is clean for the next poll() iteration.
+    """
+    global _buf
+    inst = _ble_uart.instance() if _ble_uart is not None else None
+    remaining = n
+    if _buf and remaining > 0:
+        take = min(remaining, len(_buf))
+        _buf = _buf[take:]
+        remaining -= take
+    deadline = time.ticks_add(time.ticks_ms(), idle_timeout_ms)
+    while remaining > 0:
+        got = False
+        if _poller.poll(0):
+            try:
+                chunk = sys.stdin.buffer.read(min(512, remaining))
+            except AttributeError:
+                chunk = sys.stdin.read(min(512, remaining))
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8")
+            if chunk:
+                remaining -= min(len(chunk), remaining)
+                got = True
+        if inst is not None and remaining > 0:
+            chunk = inst.read_rx()
+            if chunk:
+                remaining -= min(len(chunk), remaining)
+                got = True
+        if got:
+            deadline = time.ticks_add(time.ticks_ms(), idle_timeout_ms)
+        elif time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+            break
+        else:
+            time.sleep_ms(2)
+
+
 def _mkdirs(dirpath):
     if not dirpath or dirpath == "/":
         return None
@@ -301,18 +469,21 @@ def _handle(kind, seq, payload):
     global _running
 
     if kind == KIND_HELLO_REQ:
-        # Reply with same board-info payload as HELLO, but as OK echoing SEQ
         try:
             name = getattr(_hub.board, "BOARD_NAME", "unknown")
             ver  = getattr(_hub.board, "BOARD_VERSION", "")
+            fw   = getattr(_hub, "fw_version", "")
         except Exception:
-            name, ver = "unknown", ""
-        p = bytes([2]) + name.encode() + b"\x00" + ver.encode() + b"\x00"
+            name, ver, fw = "unknown", "", ""
+        p = (bytes([PROTO_VER]) + name.encode() + b"\x00"
+             + ver.encode() + b"\x00" + fw.encode() + b"\x00")
         _write(_make_frame(KIND_OK, seq, 0, p))
         return
 
     if kind == KIND_PING:
         _ok(seq)
+        if _ble_uart is not None:
+            _ble_uart.adv_reset()
         return
 
     if kind == KIND_MTU_REQ:
@@ -358,11 +529,27 @@ def _handle(kind, seq, payload):
     if kind == KIND_READ:
         path = payload.decode("utf-8", "replace")
         try:
-            with open(path, "rb") as f:
-                data = f.read()
-            _data(seq, data)
+            file_size = os.stat(path)[6]
         except OSError as e:
             _err(seq, ("read: " + str(e)).encode())
+            return
+        _show_transfer(path)
+        _ack(seq)
+        try:
+            header = (bytes([FRAME_MAGIC]) + _encode_varint(file_size)
+                      + bytes([seq, 0, KIND_DATA]))
+            _hub.raw_write(header)
+            with open(path, "rb") as f:
+                while True:
+                    if _check_stop_incoming():
+                        break  # host cancelled — stop streaming cleanly
+                    chunk = f.read(512 * 4)
+                    if not chunk:
+                        break
+                    _hub.raw_write(chunk)
+        except OSError:
+            pass  # frame already started — can't recover cleanly
+        _restore_menu(transfer=True)
         return
 
     if kind == KIND_LS:
@@ -372,6 +559,7 @@ def _handle(kind, seq, payload):
         except OSError as e:
             _err(seq, ("ls: " + str(e)).encode())
             return
+        _ack(seq)
         out = bytearray()
         base = path.rstrip("/")
         for name in entries:
@@ -413,6 +601,7 @@ def _handle(kind, seq, payload):
         src = payload[1:1 + src_len].decode("utf-8", "replace")
         dst_len = payload[1 + src_len]
         dst = payload[2 + src_len:2 + src_len + dst_len].decode("utf-8", "replace")
+        _ack(seq)
         try:
             with open(src, "rb") as f:
                 data = f.read()
@@ -512,42 +701,37 @@ def poll():
             if _DEBUG:
                 print("[proto] UPLOAD seq=%d payload_len=%d" % (seq, length))
             _ack(seq)
+            _show_transfer("upload...")
             if _DEBUG:
                 print("[proto] ACK sent")
-            if length > 0:
-                def _cb(s, t, _seq=seq): _progress(_seq, s, t)
-                payload = _read_exact(length, timeout_ms=60000, progress_cb=_cb)
-            else:
-                payload = b""
-            if payload is None:
-                if _DEBUG:
-                    print("[proto] UPLOAD timed out")
+            # Read path header (1-byte len + path) — small, fits in memory.
+            hdr = _read_exact(1, timeout_ms=3000)
+            if hdr is None:
+                _restore_menu(transfer=True)
                 return
+            path_len = hdr[0]
+            path_bytes = _read_exact(path_len, timeout_ms=3000) if path_len else b""
+            if path_len and path_bytes is None:
+                _restore_menu(transfer=True)
+                return
+            path = path_bytes.decode("utf-8", "replace") if path_bytes else ""
+            data_len = length - 1 - path_len
             if _DEBUG:
-                print("[proto] UPLOAD payload received: %d bytes" % len(payload))
-            # Handle inline (ACK already sent)
-            if len(payload) >= 1:
-                path_len = payload[0]
-                if len(payload) >= 1 + path_len:
-                    path = payload[1:1 + path_len].decode("utf-8", "replace")
-                    file_data = payload[1 + path_len:]
-                    if path in _FORBIDDEN:
-                        _err(seq, ("forbidden path: " + path).encode())
-                    else:
-                        mk_err = _mkdirs(path.rsplit("/", 1)[0])
-                        if mk_err:
-                            _err(seq, mk_err.encode())
-                        else:
-                            try:
-                                with open(path, "wb") as f:
-                                    f.write(file_data)
-                                _ok(seq)
-                            except OSError as e:
-                                _err(seq, ("write: " + str(e)).encode())
-                else:
-                    _err(seq, b"UPLOAD: bad path_len")
+                print("[proto] UPLOAD path=%s data_len=%d" % (path, data_len))
+            if not path:
+                _err(seq, b"UPLOAD: empty path")
+                _restore_menu(transfer=True)
+            elif path in _FORBIDDEN:
+                _err(seq, ("forbidden path: " + path).encode())
+                _restore_menu(transfer=True)
+            elif data_len < 0:
+                _err(seq, b"UPLOAD: bad path_len")
+                _restore_menu(transfer=True)
             else:
-                _err(seq, b"UPLOAD: empty payload")
+                ok = _stream_to_file(path, data_len, seq)
+                if ok:
+                    _ok(seq)
+                _restore_menu(transfer=True)
         else:
             # ── Read payload ──────────────────────────────────────────────────
             if length > 0:

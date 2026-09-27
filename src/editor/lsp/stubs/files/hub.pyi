@@ -225,19 +225,20 @@ class _video_module:
 
 
 class _audio_module:
-    """Raw-PCM audio player via NS4168 I2S Class-D amplifier.
+    """PCM/WAV audio player and synthesiser via NS4168 I2S Class-D amplifier.
 
     Only present on boards where ``hub.board.HAS_NS4168 == 1``.
-    Paths must be absolute (e.g. ``/sd/sound.pcm``).
+    Paths must be absolute (e.g. ``/sd/sound.wav``).
     """
 
-    def play(self, path: str, rate: int, bits: int, channels: int,
-             *, block: bool = True) -> None:
-        """Stream a raw PCM file to the NS4168.
+    def play(self, path: str, *, rate: int = 44100, bits: int = 16,
+             channels: int = 1, block: bool = True) -> None:
+        """Stream a PCM or WAV file to the NS4168.
 
-        ``rate``: sample rate in Hz (e.g. 44100).
-        ``bits``: bit depth per sample (8, 16, 24, or 32).
-        ``channels``: 1 = mono, 2 = stereo.
+        WAV files are auto-detected: ``rate``, ``bits``, and ``channels`` are
+        read from the file header and the keyword arguments are ignored.
+        For raw PCM files the keyword arguments set the format
+        (``rate`` in Hz, ``bits`` = 8/16/24/32, ``channels`` = 1 or 2).
         If ``block=False`` returns immediately.
         """
         ...
@@ -769,6 +770,41 @@ def set_frame_sink(cb: Optional[Callable[[bytes], None]]) -> None:
     flush and every :func:`raw_write`. Used to forward the same byte stream
     to BLE NUS (since ``os.dupterm`` only exposes slot 0 = REPL on this port).
     Pass ``None`` to detach. Exceptions inside the callback are swallowed.
+    """
+    ...
+
+def _ble_drain() -> None:
+    """Pump the NimBLE event queue from mp_task without going through the scheduler.
+
+    Called by ``ble_uart.read_rx()`` inside ``_read_exact`` while the MicroPython
+    scheduler is locked, so BLE IRQ callbacks (which arrive via ``mp_sched_schedule``)
+    can still be serviced.
+    """
+    ...
+
+def ble_conn_update(conn_handle: int, min_ms: int, max_ms: int) -> None:
+    """Request a BLE connection parameter update from the peripheral side.
+
+    Calls NimBLE ``ble_gap_update_params``.  The central may accept or ignore
+    the request — no exception is raised either way.
+
+    Args:
+        conn_handle: BLE connection handle (from ``_IRQ_CENTRAL_CONNECT`` /
+            ``_IRQ_MTU_EXCHANGED``).
+        min_ms: Minimum desired connection interval in milliseconds.
+        max_ms: Maximum desired connection interval in milliseconds.
+    """
+    ...
+
+def ble_set_phy_2m(conn_handle: int) -> None:
+    """Request a PHY update to LE 2M on an active BLE connection.
+
+    Calls NimBLE ``ble_gap_set_prefered_le_phy`` with ``BLE_GAP_LE_PHY_2M_MASK``
+    for both TX and RX.  Doubles raw link throughput compared to the default 1M
+    PHY.  The central may ignore the request.
+
+    Args:
+        conn_handle: BLE connection handle (from ``_IRQ_CENTRAL_CONNECT``).
     """
     ...
 

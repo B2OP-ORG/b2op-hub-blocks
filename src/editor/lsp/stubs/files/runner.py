@@ -85,8 +85,7 @@ def run_program(path):
     finally:
         hub.buttons._restore(saved_cbs)
         _reset_hw()
-
-    _running = False
+        _running = False
 
     _screen.clean()
     if err is None:

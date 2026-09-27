@@ -190,6 +190,11 @@ def install_stream_redirect():
             pass
         _hub.set_framed_output(True)
         _stdout_installed = True
+        if _ble_uart is not None:
+            _ble_uart.on_connect = install_stream_redirect
+    # PROG_END clears stale run-in-progress state on the host after a device
+    # reset or BLE reconnect (host never saw PROG_END if the device crashed).
+    _prog_end(False, b"reset")
     _hello()
 
 
@@ -512,8 +517,10 @@ def _handle(kind, seq, payload):
             return
         _ok(seq)
         _running = True
-        err = runner.run_program(path)
-        _running = False
+        try:
+            err = runner.run_program(path)
+        finally:
+            _running = False
         if err is None:
             _prog_end(True, path.encode())
         else:

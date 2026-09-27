@@ -122,7 +122,10 @@ class _ports_module:
 class _log_module:
     """Firmware log control."""
     def setLevel(self, level: int) -> None:
-        """Set minimum log level printed by the C log macros."""
+        """Set the runtime log level."""
+        ...
+    def getLevel(self) -> int:
+        """Get the runtime log level."""
         ...
 
 class _lcd_module:

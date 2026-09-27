@@ -50,6 +50,8 @@ _DEBUG = False
 _ADV_TIMEOUT_MS = 60_000
 _adv_deadline_ms = None  # ticks_ms deadline; None = stopped intentionally
 
+on_connect = None  # called (no args) whenever a central connects
+
 
 def _adv_payload(name, service_uuid):
     payload = bytearray()
@@ -118,6 +120,11 @@ class BLEUART:
             if _hub_ble_set_phy_2m is not None:
                 try:
                     _hub_ble_set_phy_2m(conn_handle)
+                except Exception:
+                    pass
+            if on_connect is not None:
+                try:
+                    on_connect()
                 except Exception:
                     pass
         elif event == _IRQ_CENTRAL_DISCONNECT:

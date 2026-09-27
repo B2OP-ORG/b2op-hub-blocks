@@ -335,15 +335,30 @@ def run():
 
     # ---- BLE advertise ----
     def _ble_adv_action():
-        rem = _ble_uart.adv_remaining_ms() if _ble_uart is not None else None
-        if rem is not None and rem > 0:
-            secs = (rem + 999) // 1000
-            text_screen(scr, "BLE Advertise", "Active\n{}s remaining".format(secs), hint="press any button")
-        else:
-            if _ble_uart is not None:
+        if _ble_uart is not None:
+            rem = _ble_uart.adv_remaining_ms()
+            if rem is None or rem <= 0:
                 _ble_uart.adv_start()
-            text_screen(scr, "BLE Advertise", "Started\n60s window", hint="press any button")
-        _wait_any_button_edge()
+    
+        while any(g() for g in (hub.buttons.up, hub.buttons.down,
+                                hub.buttons.left, hub.buttons.right, hub.buttons.center)):
+            battery.refresh()
+            protocol.poll()
+            time.sleep_ms(POLL_MS)
+
+        while True:
+            rem = _ble_uart.adv_remaining_ms() if _ble_uart is not None else None
+            secs = (rem + 999) // 1000 if rem is not None and rem > 0 else 0
+            text_screen(scr, "BLE Advertise", "Active\n{}s remaining".format(secs), hint="press any button")
+
+            if any(g() for g in (hub.buttons.up, hub.buttons.down,
+                                 hub.buttons.left, hub.buttons.right, hub.buttons.center)):
+                break
+
+            lv.timer_handler()
+            battery.refresh()
+            protocol.poll()
+            time.sleep_ms(POLL_MS)
 
     # ---- settings ----
     def _toggle_full_fs():

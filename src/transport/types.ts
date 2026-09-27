@@ -27,6 +27,8 @@ export interface Transport {
    * not implemented.
    */
   writeFast?(chunk: Uint8Array): Promise<void>;
+  /** Abort any in-flight write chain (e.g. a large upload mid-stream). */
+  abort?(): void;
 }
 
 export class TransportError extends Error {

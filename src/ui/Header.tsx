@@ -79,7 +79,8 @@ interface ToPythonPromptState { hasRaw: boolean; roundTripOk: boolean; source: s
 
 export function Header({ onOpenSettings }: Props) {
   const { project, setProject, device, connection, connectionError, running,
-    setDevice, setConnection, setRunning, appendConsole, pythonPreview } = useApp();
+    setDevice, setConnection, setRunning, appendConsole, pythonPreview,
+    boardName, boardVersion } = useApp();
   const [switchPrompt, setSwitchPrompt] = useState<PromptState | null>(null);
   const [toPythonPrompt, setToPythonPrompt] = useState<ToPythonPromptState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -392,18 +393,23 @@ export function Header({ onOpenSettings }: Props) {
       )}
 
       {/* Status badge */}
-      <span style={{
-        marginLeft: "auto",
-        fontWeight: 600,
-        fontSize: 12,
-        padding: "3px 9px",
-        borderRadius: 999,
-        background: badgeBg(statusKind),
-        color: badgeFg(statusKind),
-        border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
-        flexShrink: 0,
-      }}>
-        {statusText}
+      <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        {connection === "connected" && boardName && (
+          <span style={{ fontSize: 11, opacity: 0.75, color: dark ? "#a0cce0" : "#e0f4ff" }}>
+            {boardName}{boardVersion ? ` ${boardVersion}` : ""}
+          </span>
+        )}
+        <span style={{
+          fontWeight: 600,
+          fontSize: 12,
+          padding: "3px 9px",
+          borderRadius: 999,
+          background: badgeBg(statusKind),
+          color: badgeFg(statusKind),
+          border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
+        }}>
+          {statusText}
+        </span>
       </span>
 
       {/* Settings icon */}

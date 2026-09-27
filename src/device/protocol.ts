@@ -287,13 +287,14 @@ export class HubProtocolV2 implements IHubProtocol {
     return new DataView(reply.payload.buffer, reply.payload.byteOffset).getUint16(0, false);
   }
 
-  async runProgram(path: string, timeoutMs = 15000): Promise<void> {
+  async runProgram(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RUN, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RUN failed");
     // programRunning was set to true in dispatch() when OK arrived, before this resumes
   }
 
   async stop(noAck = false, timeoutMs = 3000): Promise<void> {
+    this.state = freshState();
     if (noAck) {
       this.sendNoAck(KIND.STOP, new Uint8Array(0));
       return;
@@ -309,7 +310,7 @@ export class HubProtocolV2 implements IHubProtocol {
   async upload(
     path: string,
     bytes: Uint8Array,
-    idleTimeoutMs = 15000,
+    idleTimeoutMs = 3000,
     onProgress?: ProgressSink,
   ): Promise<void> {
     const pathBytes = enc.encode(path);
@@ -336,17 +337,17 @@ export class HubProtocolV2 implements IHubProtocol {
     return parseLsPayload(reply.payload);
   }
 
-  async mv(src: string, dst: string, timeoutMs = 5000): Promise<void> {
+  async mv(src: string, dst: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.MV, 0, encodeTwoPaths(src, dst), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MV failed");
   }
 
-  async cp(src: string, dst: string, timeoutMs = 10000): Promise<void> {
+  async cp(src: string, dst: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.CP, 0, encodeTwoPaths(src, dst), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "CP failed");
   }
 
-  async rm(path: string, timeoutMs = 5000): Promise<void> {
+  async rm(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
   }
@@ -462,6 +463,7 @@ export class HubProtocolV2 implements IHubProtocol {
           } catch (e) {
             this.waiters.delete(seq);
             if (w.timer) clearTimeout(w.timer);
+            this.transport.abort?.();
             w.reject(e instanceof Error ? e : new Error(String(e)));
           }
         }

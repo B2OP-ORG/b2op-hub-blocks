@@ -1,6 +1,7 @@
 import type { Transport } from "../transport/types";
 import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
+import { useApp } from "../state/store";
 
 export type ConsoleSink = (text: string) => void;
 
@@ -33,6 +34,7 @@ const TMP_RUN_NAME = "__web_run.py";
 export class DeviceClient {
   private proto: HubProtocol;
   readonly transport: Transport;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(transport: Transport) {
     this.transport = transport;
@@ -60,7 +62,10 @@ export class DeviceClient {
     if (pinged) {
       // Fetch board identity (HELLO may have arrived proactively; requestHello
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
-      try { await this.proto.requestHello(3000); } catch { /* non-fatal */ }
+      try {
+        await this.proto.requestHello(3000);
+        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion);
+      } catch { /* non-fatal */ }
 
       if (this.transport.setChunkSize) {
         // Device queries `_ble_uart.instance().mtu()`, which reflects the last
@@ -84,9 +89,17 @@ export class DeviceClient {
         }
       }
     }
+    this.pingInterval = setInterval(async () => {
+      if (!this.transport.connected) return;
+      try { await this.proto.ping(2000); } catch { /* ignore; disconnect handler fires on dead link */ }
+    }, 10_000);
   }
 
   async disconnect(): Promise<void> {
+    if (this.pingInterval !== null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
     // Skip stop if transport never connected — avoids a 3-second waiter timeout
     // when disconnect() is called from the error-cleanup path.
     if (this.transport.connected) {
@@ -115,7 +128,7 @@ export class DeviceClient {
     this.proto.setStderrSink(errSink);
     const bytes = new TextEncoder().encode(code);
     await this.proto.upload(path, bytes);
-    await this.proto.runProgram(path, opts.timeoutMs ?? 15000);
+    await this.proto.runProgram(path, opts.timeoutMs ?? 3000);
     return { stdout, stderr };
   }
 
@@ -165,15 +178,15 @@ export class DeviceClient {
   }
 
   async mv(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.mv(src, dst, opts.timeoutMs ?? 10000);
+    return this.proto.mv(src, dst, opts.timeoutMs ?? 3000);
   }
 
   async cp(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.cp(src, dst, opts.timeoutMs ?? 10000);
+    return this.proto.cp(src, dst, opts.timeoutMs ?? 3000);
   }
 
   async rm(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.rm(path, opts.timeoutMs ?? 10000);
+    return this.proto.rm(path, opts.timeoutMs ?? 3000);
   }
 }
 

@@ -24,6 +24,7 @@ export class BleTransport implements Transport {
   private dataCbs = new Set<DataListener>();
   private discCbs = new Set<() => void>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private writeAbortSignal: { aborted: boolean } | null = null;
   private writeCount = 0;
   private chunkSize = DEFAULT_CHUNK;
 
@@ -91,6 +92,10 @@ export class BleTransport implements Transport {
     this.cleanup();
   }
 
+  abort(): void {
+    if (this.writeAbortSignal) this.writeAbortSignal.aborted = true;
+  }
+
   write(chunk: Uint8Array): Promise<void> {
     return this.doWrite(chunk, /*fast=*/ false);
   }
@@ -102,14 +107,14 @@ export class BleTransport implements Transport {
   private doWrite(chunk: Uint8Array, fast: boolean): Promise<void> {
     if (!this.rxChar) throw new TransportError("Not connected");
     const rx = this.rxChar;
-    // writeValueWithoutResponse is a real speedup: browser can queue multiple
-    // writes per BLE conn interval, whereas writeValueWithResponse serializes
-    // one write per interval. Caller must have app-layer integrity checking
-    // (payload length verified by device) since silent drops are possible.
+    // Each call gets a fresh abort signal; abort() sets the current one.
+    const abortSignal: { aborted: boolean } = { aborted: false };
+    this.writeAbortSignal = abortSignal;
     let result: Promise<void> = this.writeQueue;
     for (let offset = 0; offset < chunk.length; offset += this.chunkSize) {
       const slice = chunk.subarray(offset, offset + this.chunkSize);
       const step = result.then(async () => {
+        if (abortSignal.aborted) throw new Error("aborted");
         this.writeCount++;
         const buf = new Uint8Array(slice.byteLength);
         buf.set(slice);

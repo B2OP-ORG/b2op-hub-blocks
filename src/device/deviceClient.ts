@@ -1,6 +1,7 @@
 import type { Transport } from "../transport/types";
-import { HubProtocol, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
+import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
+import { useApp } from "../state/store";
 
 export type ConsoleSink = (text: string) => void;
 
@@ -31,16 +32,19 @@ const TMP_RUN_NAME = "__web_run.py";
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
 export class DeviceClient {
-  private proto: HubProtocol;
+  private proto: HubProtocolV1_0_0;
   readonly transport: Transport;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private pinging = false;
 
   constructor(transport: Transport) {
     this.transport = transport;
-    this.proto = new HubProtocol(transport);
+    this.proto = new HubProtocolV1_0_0(transport);
   }
 
   get boardName(): string { return this.proto.boardName; }
   get boardVersion(): string { return this.proto.boardVersion; }
+  get fwVersion(): string { return this.proto.fwVersion; }
   get protocolVersion(): number { return this.proto.protocolVersion; }
 
   async connect(): Promise<void> {
@@ -60,7 +64,17 @@ export class DeviceClient {
     if (pinged) {
       // Fetch board identity (HELLO may have arrived proactively; requestHello
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
-      try { await this.proto.requestHello(3000); } catch { /* non-fatal */ }
+      try {
+        await this.proto.requestHello(3000);
+        const protoVer = this.proto.protocolVersion;
+        if (!PROTOCOL_REGISTRY.has(protoVer)) {
+          throw new Error(`Unsupported device protocol v${protoVer}. Please update the app.`);
+        }
+        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith("Unsupported device protocol")) throw e;
+        /* other hello failures are non-fatal */
+      }
 
       if (this.transport.setChunkSize) {
         // Device queries `_ble_uart.instance().mtu()`, which reflects the last
@@ -73,6 +87,7 @@ export class DeviceClient {
             if (mtu > 23 || attempt === 1) {
               // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
               this.transport.setChunkSize(mtu - 3);
+              console.log(`DeviceClient: ATT MTU=${mtu}, chunk=${mtu - 3}`);
               break;
             }
             await new Promise((r) => setTimeout(r, 400));
@@ -83,9 +98,19 @@ export class DeviceClient {
         }
       }
     }
+    this.pingInterval = setInterval(async () => {
+      if (!this.transport.connected || this.pinging) return;
+      this.pinging = true;
+      try { await this.proto.ping(2000); } catch { /* ignore; disconnect handler fires on dead link */ }
+      finally { this.pinging = false; }
+    }, 10_000);
   }
 
   async disconnect(): Promise<void> {
+    if (this.pingInterval !== null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
     // Skip stop if transport never connected — avoids a 3-second waiter timeout
     // when disconnect() is called from the error-cleanup path.
     if (this.transport.connected) {
@@ -114,7 +139,7 @@ export class DeviceClient {
     this.proto.setStderrSink(errSink);
     const bytes = new TextEncoder().encode(code);
     await this.proto.upload(path, bytes);
-    await this.proto.runProgram(path, opts.timeoutMs ?? 15000);
+    await this.proto.runProgram(path, opts.timeoutMs ?? 3000);
     return { stdout, stderr };
   }
 
@@ -130,9 +155,19 @@ export class DeviceClient {
     return this.proto.isProgramRunning();
   }
 
-  async readFile(path: string, opts: { timeoutMs?: number } = {}): Promise<string> {
-    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? 10000);
+  async readFile(
+    path: string,
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+  ): Promise<string> {
+    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
     return new TextDecoder().decode(bytes);
+  }
+
+  async readFileRaw(
+    path: string,
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+  ): Promise<Uint8Array> {
+    return this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
   }
 
   async upload(path: string, bytes: Uint8Array, opts: UploadRunOptions): Promise<UploadResult> {
@@ -150,19 +185,19 @@ export class DeviceClient {
   }
 
   async ls(path: string, opts: { timeoutMs?: number } = {}): Promise<DirEntry[]> {
-    return this.proto.ls(path, opts.timeoutMs ?? 10000);
+    return this.proto.ls(path, opts.timeoutMs ?? 3000);
   }
 
   async mv(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.mv(src, dst, opts.timeoutMs ?? 10000);
+    return this.proto.mv(src, dst, opts.timeoutMs ?? 3000);
   }
 
   async cp(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.cp(src, dst, opts.timeoutMs ?? 10000);
+    return this.proto.cp(src, dst, opts.timeoutMs ?? 3000);
   }
 
   async rm(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.rm(path, opts.timeoutMs ?? 10000);
+    return this.proto.rm(path, opts.timeoutMs ?? 3000);
   }
 }
 

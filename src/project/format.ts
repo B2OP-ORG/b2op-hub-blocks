@@ -8,7 +8,6 @@ export const PROJECT_VERSION = "2.0.0";
 export interface ProjectSettings {
   showAdvanced: boolean;
   allowRoot: boolean;
-  autoRunAfterUpload: boolean;
   autoreloadInLive: boolean;
   lspMode: LspMode;
   lspRemoteUrl: string;
@@ -19,7 +18,6 @@ export interface ProjectSettings {
 export const DEFAULT_SETTINGS: ProjectSettings = {
   showAdvanced: false,
   allowRoot: false,
-  autoRunAfterUpload: true,
   autoreloadInLive: false,
   lspMode: "worker",
   lspRemoteUrl: "ws://localhost:3001",

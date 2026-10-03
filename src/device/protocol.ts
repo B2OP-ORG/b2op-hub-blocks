@@ -24,7 +24,7 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x19  RM         path:utf8                 → OK
  *
  * Device → Host:
- *   0x20  HELLO     [proto_ver:u8][board_name\0][board_ver\0]  SEQ=0xFF
+ *   0x20  HELLO     [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
  *   0x21  OK        payload (utf8 or structured, see cmd)
  *   0x22  ERR       error message utf8
  *   0x23  ACK       optional msg  (echoes SEQ, resets idle timer)
@@ -61,6 +61,14 @@ export const KIND = {
 
 export const FLAGS_NO_ACK = 0x01;
 export const SEQ_UNSOLICITED = 0xFF;
+
+/**
+ * Maps the proto_ver byte (sent in HELLO) to a semver name.
+ * Add an entry here when a new incompatible protocol variant is introduced.
+ */
+export const PROTOCOL_REGISTRY = new Map<number, string>([
+  [2, "1.0.0"],
+]);
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
 
@@ -123,6 +131,7 @@ export interface HelloInfo {
   protocolVersion: number;
   boardName: string;
   boardVersion: string;
+  fwVersion: string;
 }
 export type HelloSink = (info: HelloInfo) => void;
 
@@ -139,6 +148,7 @@ export interface IHubProtocol {
   readonly protocolVersion: number;
   readonly boardName: string;
   readonly boardVersion: string;
+  readonly fwVersion: string;
 
   dispose(): void;
   setStdoutSink(sink: StdoutSink | null): void;
@@ -212,14 +222,17 @@ interface Waiter {
 interface SendOptions {
   timeoutMs: number;
   onProgress?: ProgressSink;
+  /** Use writeValueWithoutResponse for large host→device transfers (e.g. UPLOAD). */
+  fast?: boolean;
 }
 
-// ── HubProtocolV2 ─────────────────────────────────────────────────────────────
+// ── HubProtocolV1_0_0 ────────────────────────────────────────────────────────
+// Wire protocol semver v1.0.0 (proto_ver byte = 2).
 
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: false });
 
-export class HubProtocolV2 implements IHubProtocol {
+export class HubProtocolV1_0_0 implements IHubProtocol {
   private transport: Transport;
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
@@ -235,6 +248,7 @@ export class HubProtocolV2 implements IHubProtocol {
   private _protocolVersion = 0;
   private _boardName = "";
   private _boardVersion = "";
+  private _fwVersion = "";
 
   constructor(transport: Transport) {
     this.transport = transport;
@@ -244,6 +258,7 @@ export class HubProtocolV2 implements IHubProtocol {
   get protocolVersion(): number { return this._protocolVersion; }
   get boardName(): string { return this._boardName; }
   get boardVersion(): string { return this._boardVersion; }
+  get fwVersion(): string { return this._fwVersion; }
 
   dispose(): void {
     this.unsub?.();
@@ -285,13 +300,14 @@ export class HubProtocolV2 implements IHubProtocol {
     return new DataView(reply.payload.buffer, reply.payload.byteOffset).getUint16(0, false);
   }
 
-  async runProgram(path: string, timeoutMs = 15000): Promise<void> {
+  async runProgram(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RUN, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RUN failed");
     // programRunning was set to true in dispatch() when OK arrived, before this resumes
   }
 
   async stop(noAck = false, timeoutMs = 3000): Promise<void> {
+    this.state = freshState();
     if (noAck) {
       this.sendNoAck(KIND.STOP, new Uint8Array(0));
       return;
@@ -307,7 +323,7 @@ export class HubProtocolV2 implements IHubProtocol {
   async upload(
     path: string,
     bytes: Uint8Array,
-    idleTimeoutMs = 15000,
+    idleTimeoutMs = 3000,
     onProgress?: ProgressSink,
   ): Promise<void> {
     const pathBytes = enc.encode(path);
@@ -316,35 +332,35 @@ export class HubProtocolV2 implements IHubProtocol {
     payload[0] = pathBytes.length;
     payload.set(pathBytes, 1);
     payload.set(bytes, 1 + pathBytes.length);
-    const reply = await this.sendRequest(KIND.UPLOAD, 0, payload, { timeoutMs: idleTimeoutMs, onProgress });
+    const reply = await this.sendRequest(KIND.UPLOAD, 0, payload, { timeoutMs: idleTimeoutMs, onProgress, fast: false });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
   }
 
-  async readFile(path: string, timeoutMs = 10000): Promise<Uint8Array> {
-    const reply = await this.sendRequest(KIND.READ, 0, enc.encode(path), { timeoutMs });
+  async readFile(path: string, timeoutMs = 3000, onProgress?: ProgressSink): Promise<Uint8Array> {
+    const reply = await this.sendRequest(KIND.READ, 0, enc.encode(path), { timeoutMs, onProgress });
     if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
     if (reply.kind !== "DATA") throw new Error("READ: expected DATA reply");
     return reply.payload;
   }
 
-  async ls(path: string, timeoutMs = 5000): Promise<DirEntry[]> {
+  async ls(path: string, timeoutMs = 3000): Promise<DirEntry[]> {
     const reply = await this.sendRequest(KIND.LS, 0, enc.encode(path), { timeoutMs });
     if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
     if (reply.kind !== "DATA") throw new Error("LS: expected DATA reply");
     return parseLsPayload(reply.payload);
   }
 
-  async mv(src: string, dst: string, timeoutMs = 5000): Promise<void> {
+  async mv(src: string, dst: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.MV, 0, encodeTwoPaths(src, dst), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MV failed");
   }
 
-  async cp(src: string, dst: string, timeoutMs = 10000): Promise<void> {
+  async cp(src: string, dst: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.CP, 0, encodeTwoPaths(src, dst), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "CP failed");
   }
 
-  async rm(path: string, timeoutMs = 5000): Promise<void> {
+  async rm(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
   }
@@ -383,7 +399,10 @@ export class HubProtocolV2 implements IHubProtocol {
     this.sending = this.sending
       .then(() => {
         console.log(`[proto] → kind=0x${kind.toString(16).padStart(2,'0')} seq=${seq} ${payload.length}b`);
-        return this.transport.write(frame);
+        const write = opts.fast && this.transport.writeFast
+          ? this.transport.writeFast.bind(this.transport)
+          : this.transport.write.bind(this.transport);
+        return write(frame);
       })
       .catch((e) => { console.error("[protocol] write failed", e); });
     return p;
@@ -452,7 +471,14 @@ export class HubProtocolV2 implements IHubProtocol {
         const w = this.waiters.get(seq);
         if (w?.onProgress && payload.length >= 8) {
           const dv = new DataView(payload.buffer, payload.byteOffset);
-          w.onProgress(dv.getUint32(0, false), dv.getUint32(4, false));
+          try {
+            w.onProgress(dv.getUint32(0, false), dv.getUint32(4, false));
+          } catch (e) {
+            this.waiters.delete(seq);
+            if (w.timer) clearTimeout(w.timer);
+            this.transport.abort?.();
+            w.reject(e instanceof Error ? e : new Error(String(e)));
+          }
         }
         break;
       }
@@ -486,26 +512,28 @@ export class HubProtocolV2 implements IHubProtocol {
   private parseHelloPayload(payload: Uint8Array): void {
     if (payload.length < 1) return;
     const protoVer = payload[0];
-    let i = 1;
-    // null-terminated board name
-    let j = i;
-    while (j < payload.length && payload[j] !== 0) j++;
-    const boardName = dec.decode(payload.slice(i, j));
-    i = j + 1;
-    // null-terminated board version
-    j = i;
-    while (j < payload.length && payload[j] !== 0) j++;
-    const boardVersion = dec.decode(payload.slice(i, j));
+    const readStr = (start: number): [string, number] => {
+      let j = start;
+      while (j < payload.length && payload[j] !== 0) j++;
+      return [dec.decode(payload.slice(start, j)), j + 1];
+    };
+    const [boardName, i1] = readStr(1);
+    const [boardVersion, i2] = readStr(i1);
+    const [fwVersion]        = readStr(i2);
     this._protocolVersion = protoVer;
     this._boardName = boardName;
     this._boardVersion = boardVersion;
-    this.onHello?.({ protocolVersion: protoVer, boardName, boardVersion });
+    this._fwVersion = fwVersion;
+    this.onHello?.({ protocolVersion: protoVer, boardName, boardVersion, fwVersion });
   }
 
   // ── Binary stream parser ────────────────────────────────────────────────────
 
   private onChunk(chunk: Uint8Array): void {
     console.log(`[proto] ← raw ${chunk.length}b hex=${Array.from(chunk.slice(0,16)).map(b=>b.toString(16).padStart(2,'0')).join(' ')}${chunk.length>16?'…':''}`);
+    for (const seq of this.waiters.keys()) {
+      this.resetWaiterTimer(seq);
+    }
     let i = 0;
     while (i < chunk.length) {
       switch (this.state.phase) {
@@ -563,6 +591,21 @@ export class HubProtocolV2 implements IHubProtocol {
           buf.set(chunk.subarray(i, i + take), this.state.payloadFilled);
           this.state.payloadFilled += take;
           i += take;
+          if (this.state.kind === KIND.DATA) {
+            const w = this.waiters.get(this.state.seq);
+            if (w?.onProgress) {
+              try {
+                w.onProgress(this.state.payloadFilled, this.state.payloadLen);
+              } catch (e) {
+                const seq = this.state.seq;
+                this.state = freshState();
+                this.waiters.delete(seq);
+                if (w.timer) clearTimeout(w.timer);
+                w.reject(e instanceof Error ? e : new Error(String(e)));
+                break;
+              }
+            }
+          }
           if (this.state.payloadFilled === this.state.payloadLen) {
             this.dispatch(this.state.seq, this.state.flags, this.state.kind, buf);
             this.state = freshState();
@@ -618,5 +661,4 @@ export function validatePath(path: string, policy: UploadPolicy): void {
   throw new UploadError(`Path must be under /sd/ (allowRoot=${policy.allowRoot}): ${path}`);
 }
 
-// Back-compat alias so DeviceClient import doesn't need changing.
-export { HubProtocolV2 as HubProtocol };
+export { HubProtocolV1_0_0 as HubProtocol };

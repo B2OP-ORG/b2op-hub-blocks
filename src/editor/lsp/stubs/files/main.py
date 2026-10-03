@@ -16,6 +16,7 @@ try:
     import ble_uart
     import protocol
     ble_uart.start()
+    ble_uart.adv_reset()
     protocol.install_stream_redirect()
     hub.on("poll", protocol.poll)
 except Exception as e:

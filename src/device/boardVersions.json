@@ -1,0 +1,5 @@
+{
+  "B2OP Hub": {
+    "v1.1.0": { "latestFwVersion": "v1.0.0", "manifestFile": "/firmware/b2op_hub/v1.1.0/manifest.json" }
+  }
+}

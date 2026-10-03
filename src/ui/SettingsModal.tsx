@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useApp } from "../state/store";
 import type { LspMode } from "../project/format";
 
@@ -17,6 +18,7 @@ export function SettingsModal({ onClose }: Props) {
   const project = useApp((s) => s.project);
   const update = useApp((s) => s.updateSettings);
   const dark = project.type === "python";
+  const [fwNotifs, setFwNotifs] = useState(() => localStorage.getItem("b2op.suppressFwUpdates") !== "true");
 
   const overlay: React.CSSProperties = {
     position: "fixed",
@@ -52,14 +54,6 @@ export function SettingsModal({ onClose }: Props) {
         <label style={row}>
           <input type="checkbox" checked={settings.showAdvanced} onChange={toggle("showAdvanced")} />
           Show advanced blocks
-        </label>
-        <label style={row}>
-          <input type="checkbox" checked={settings.autoRunAfterUpload} onChange={toggle("autoRunAfterUpload")} />
-          Auto-run after upload
-        </label>
-        <label style={row}>
-          <input type="checkbox" checked={settings.autoreloadInLive} onChange={toggle("autoreloadInLive")} />
-          Autoreload on block edit (live mode)
         </label>
         <label style={row}>
           <input type="checkbox" checked={settings.allowRoot} onChange={toggle("allowRoot")} />
@@ -111,6 +105,24 @@ export function SettingsModal({ onClose }: Props) {
           Provides completion, hover, signature help, and diagnostics for the
           built-in Python editor. Remote mode needs the server in <code>docs/lsp-server/</code>.
         </p>
+
+        <h4 style={{ marginTop: 18, marginBottom: 4 }}>Firmware updates</h4>
+        <label style={row}>
+          <input
+            type="checkbox"
+            checked={fwNotifs}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setFwNotifs(checked);
+              if (checked) {
+                localStorage.removeItem("b2op.suppressFwUpdates");
+              } else {
+                localStorage.setItem("b2op.suppressFwUpdates", "true");
+              }
+            }}
+          />
+          Show firmware update notifications
+        </label>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
           <button

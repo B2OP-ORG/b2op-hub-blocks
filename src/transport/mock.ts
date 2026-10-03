@@ -4,6 +4,7 @@ import { KIND, FLAGS_NO_ACK, makeFrame } from "../device/protocol";
 const PROTO_VER = 2;
 const BOARD_NAME = "MockHub";
 const BOARD_VERSION = "1.0.0";
+const FW_VERSION = "v1.1.0";
 const MOCK_MTU = 185;
 const PROGRESS_EVERY = 2048;
 
@@ -83,10 +84,12 @@ function frameHello(): Uint8Array {
 function helloBoardPayload(): Uint8Array {
   const name = enc.encode(BOARD_NAME + "\0");
   const ver  = enc.encode(BOARD_VERSION + "\0");
-  const p = new Uint8Array(1 + name.length + ver.length);
+  const fw   = enc.encode(FW_VERSION + "\0");
+  const p = new Uint8Array(1 + name.length + ver.length + fw.length);
   p[0] = PROTO_VER;
   p.set(name, 1);
   p.set(ver, 1 + name.length);
+  p.set(fw, 1 + name.length + ver.length);
   return p;
 }
 

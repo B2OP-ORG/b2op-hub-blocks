@@ -8,6 +8,10 @@ import time
 import runner
 import protocol
 import battery
+try:
+    import ble_uart as _ble_uart
+except ImportError:
+    _ble_uart = None
 from config import Config
 from menu_node import Menu
 from listview import (
@@ -20,6 +24,7 @@ POLL_MS = 30
 
 IDLE_DIM_MS = 300_000
 IDLE_OFF_MS = 420_000
+IDLE_OFF_BLE_MS = 1_800_000
 BACKLIGHT_ACTIVE = 150
 BACKLIGHT_DIM = 20
 
@@ -258,8 +263,11 @@ def _wait_any_button_edge():
 
 def run():
     cfg = Config()
+    if _ble_uart is not None and not cfg.ble_adv:
+        _ble_uart.adv_stop()
     scr = lv.screen_active()
     runner.set_screen(scr)
+    protocol.set_screen(scr)
     apply_screen_bg(scr)
 
     # ---- idle tracking ----
@@ -325,14 +333,51 @@ def run():
         _note_activity()
         _wait_any_button_edge()
 
+    # ---- BLE advertise ----
+    def _ble_adv_action():
+        if _ble_uart is not None:
+            rem = _ble_uart.adv_remaining_ms()
+            if rem is None or rem <= 0:
+                _ble_uart.adv_start()
+    
+        while any(g() for g in (hub.buttons.up, hub.buttons.down,
+                                hub.buttons.left, hub.buttons.right, hub.buttons.center)):
+            battery.refresh()
+            protocol.poll()
+            time.sleep_ms(POLL_MS)
+
+        while True:
+            rem = _ble_uart.adv_remaining_ms() if _ble_uart is not None else None
+            secs = (rem + 999) // 1000 if rem is not None and rem > 0 else 0
+            text_screen(scr, "BLE Advertise", "Active\n{}s remaining".format(secs), hint="press any button")
+
+            if any(g() for g in (hub.buttons.up, hub.buttons.down,
+                                 hub.buttons.left, hub.buttons.right, hub.buttons.center)):
+                break
+
+            lv.timer_handler()
+            battery.refresh()
+            protocol.poll()
+            time.sleep_ms(POLL_MS)
+
     # ---- settings ----
     def _toggle_full_fs():
         cfg.allow_full_fs = not cfg.allow_full_fs
         cfg.save()
 
+    def _toggle_ble_adv():
+        cfg.ble_adv = not cfg.ble_adv
+        cfg.save()
+        if not cfg.ble_adv and _ble_uart is not None:
+            _ble_uart.adv_stop()
+
     def _settings_items():
-        mark = "[x]" if cfg.allow_full_fs else "[ ]"
-        return [Menu(mark + " Full FS root", callback=_toggle_full_fs)]
+        mark     = "[x]" if cfg.allow_full_fs else "[ ]"
+        ble_mark = "[x]" if cfg.ble_adv else "[ ]"
+        return [
+            Menu(mark + " Full FS root", callback=_toggle_full_fs),
+            Menu(ble_mark + " BLE Adv",  callback=_toggle_ble_adv),
+        ]
 
     # ---- USB MSC ----
     def _turn_off_usb_msc():
@@ -357,6 +402,7 @@ def run():
              screen_flow=True),
         Menu("About",         callback=lambda: _show_about(scr),    screen_flow=True),
         Menu("Calibrate IMU", callback=lambda: calibrate_imu(scr),  screen_flow=True),
+        Menu("BLE Advertise", callback=lambda: _ble_adv_action(),   screen_flow=True),
     ])
 
     poweroff = Menu("Power off", title="Power off?", submenus=[
@@ -478,9 +524,22 @@ def run():
         nav["current"] = nav["root"]
         nav["sel"]     = nav["root"].last_position
         scr.clean()
+        _refresh_items()
         _rebuild_view()
+        scr.invalidate()
+        lv.timer_handler()
 
     protocol.on_run_finished = _on_ble_run_finished
+
+    def _on_transfer_finished():
+        ui["view"].close()
+        _note_activity()
+        scr.clean()
+        _rebuild_view()
+        scr.invalidate()
+        lv.timer_handler()
+
+    protocol.on_transfer_finished = _on_transfer_finished
 
     # ---- main loop ----
     getters = (hub.buttons.center, hub.buttons.up, hub.buttons.down,
@@ -488,10 +547,18 @@ def run():
 
     while True:
         battery.refresh()
+        if _ble_uart is not None:
+            _ble_uart.adv_poll()
         if any(g() for g in getters):
             idle["last"] = time.ticks_ms()
         elapsed = time.ticks_diff(time.ticks_ms(), idle["last"])
-        if elapsed >= IDLE_OFF_MS:
+        _ble_on = False
+        _ble_uart_instance = _ble_uart.instance() if _ble_uart is not None else None
+        if _ble_uart_instance is not None:
+            _ble_on = _ble_uart_instance.connected()
+
+        _off_ms = IDLE_OFF_BLE_MS if _ble_on else IDLE_OFF_MS
+        if elapsed >= _off_ms:
             scr.clean()
             text_screen(scr, "Power off", "Idle timeout")
             time.sleep_ms(300)

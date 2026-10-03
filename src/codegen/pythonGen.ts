@@ -41,7 +41,7 @@ export function workspaceToPython(workspace: Workspace): string {
     if (PROC_TYPES.has(top.type)) gen.blockToCode(top);
   }
 
-  const allVarNames = workspace.getAllVariables().map((v) => gen.getVariableName(v.getId()));
+  const allVarNames = workspace.getVariableMap().getAllVariables().map((v) => gen.getVariableName(v.getId()));
   const globalDecl = allVarNames.length ? `global ${allVarNames.join(", ")}\n` : "";
 
   const mainBodies: string[] = [];

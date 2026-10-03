@@ -6,16 +6,28 @@ Device replies via `write_tx(bytes)` → NOTIFY on TX characteristic.
 See docs/PROTOCOL.md section 1.1.
 """
 import bluetooth
+import time as _time
 from micropython import const
 try:
     from hub import _ble_drain as _hub_ble_drain
 except (ImportError, AttributeError):
     _hub_ble_drain = None
+try:
+    from hub import ble_conn_update as _hub_ble_conn_update
+    from hub import ble_set_phy_2m as _hub_ble_set_phy_2m
+except (ImportError, AttributeError):
+    _hub_ble_conn_update = None
+    _hub_ble_set_phy_2m = None
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
 _IRQ_GATTS_WRITE = const(3)
 _IRQ_MTU_EXCHANGED = const(21)
+_IRQ_CONNECTION_UPDATE = const(27)
+
+# Max accepted interval in 1.25ms units.
+# Central exceeding this triggers a re-request.
+_CONN_ITVL_MAX_UNITS = const(15)
 
 _FLAG_WRITE = const(0x0008)
 _FLAG_WRITE_NO_RESPONSE = const(0x0004)
@@ -31,9 +43,14 @@ _UART_SVC = (_UART_UUID, (_UART_TX, _UART_RX))
 
 _ADV_INTERVAL_US = const(500000)
 _RX_BUF_MAX = 4096
-_RX_ATT_BUF = 512
+_RX_ATT_BUF = 2056  # 4 writes × 514 bytes at MTU 517; drain happens in write_tx retry loop
 
 _DEBUG = False
+
+_ADV_TIMEOUT_MS = 60_000
+_adv_deadline_ms = None  # ticks_ms deadline; None = stopped intentionally
+
+on_connect = None  # called (no args) whenever a central connects
 
 
 def _adv_payload(name, service_uuid):
@@ -57,7 +74,7 @@ class BLEUART:
         self._ble.active(True)
         self._ble.config(gap_name=name)
         try:
-            self._ble.config(mtu=185)
+            self._ble.config(mtu=517)
         except Exception:
             pass
         self._ble.irq(self._irq)
@@ -99,6 +116,17 @@ class BLEUART:
                 self._ble.gattc_exchange_mtu(conn_handle)  # type: ignore
             except Exception:
                 pass
+            # Request 2M PHY — doubles raw throughput; central may ignore.
+            if _hub_ble_set_phy_2m is not None:
+                try:
+                    _hub_ble_set_phy_2m(conn_handle)
+                except Exception:
+                    pass
+            if on_connect is not None:
+                try:
+                    on_connect()
+                except Exception:
+                    pass
         elif event == _IRQ_CENTRAL_DISCONNECT:
             conn_handle, _, _ = data
             self._conns.discard(conn_handle)
@@ -118,8 +146,31 @@ class BLEUART:
                     del self._rx[:len(chunk)]
                 self._rx.extend(chunk)
         elif event == _IRQ_MTU_EXCHANGED:
-            _, mtu = data
+            conn_handle, mtu = data
             self._mtu = mtu
+            # Request shorter connection interval now that MTU is settled.
+            # 7.5ms min / 15ms max — central accepts or ignores.
+            if _hub_ble_conn_update is not None:
+                try:
+                    _hub_ble_conn_update(conn_handle, 8, 15)
+                except Exception:
+                    pass
+        elif event == _IRQ_CONNECTION_UPDATE:
+            # data: (conn_handle, conn_interval, conn_latency, supervision_timeout, status)
+            try:
+                conn_handle   = data[0]
+                conn_interval = data[1]
+                status        = data[4]
+            except Exception:
+                return
+            # Central renegotiated to a longer interval (common after a burst
+            # transfer). Re-request our preferred range if it exceeds the max.
+            if (status == 0 and conn_interval > _CONN_ITVL_MAX_UNITS
+                    and _hub_ble_conn_update is not None):
+                try:
+                    _hub_ble_conn_update(conn_handle, 8, 15)
+                except Exception:
+                    pass
 
     def read_rx(self):
         """Return pending RX bytes (drains buffer). Empty bytes if none."""
@@ -141,17 +192,26 @@ class BLEUART:
             return len(buf)
         chunk_max = max(20, self._mtu - 3)
         mv = memoryview(buf)
-        fails = 0
-        pieces = 0
         for i in range(0, len(mv), chunk_max):
             piece = bytes(mv[i:i + chunk_max])
-            pieces += 1
             for h in tuple(self._conns):
-                try:
-                    self._ble.gatts_notify(h, self._tx_h, piece) # type: ignore
-                except OSError as e:
-                    fails += 1
+                for _ in range(500):  # retry up to ~1s; never drop
+                    try:
+                        self._ble.gatts_notify(h, self._tx_h, piece)  # type: ignore
+                        break
+                    except OSError:
+                        if h not in self._conns:
+                            break  # disconnected
+                        if _hub_ble_drain is not None:
+                            _hub_ble_drain()
+                        _time.sleep_ms(2)
         return len(buf)
+
+    def stop_advertise(self):
+        try:
+            self._ble.gap_advertise(None) # type: ignore
+        except OSError:
+            pass
 
     def connected(self):
         return bool(self._conns)
@@ -178,3 +238,40 @@ def start(name="B2OP Hub"):
 
 def instance():
     return _instance
+
+
+def adv_reset():
+    global _adv_deadline_ms
+    _adv_deadline_ms = _time.ticks_add(_time.ticks_ms(), _ADV_TIMEOUT_MS)
+
+
+def adv_start():
+    global _adv_deadline_ms
+    if _instance is not None:
+        _instance._advertise()
+    _adv_deadline_ms = _time.ticks_add(_time.ticks_ms(), _ADV_TIMEOUT_MS)
+
+
+def adv_stop():
+    global _adv_deadline_ms
+    _adv_deadline_ms = None
+    if _instance is not None:
+        _instance.stop_advertise()
+
+
+def adv_remaining_ms():
+    if _adv_deadline_ms is None:
+        return None
+    return max(0, _time.ticks_diff(_adv_deadline_ms, _time.ticks_ms()))
+
+
+def adv_poll():
+    if _instance is None:
+        return
+    if _adv_deadline_ms is None:
+        # Intentionally stopped. NimBLE advertiseOnDisconnect may have restarted it — re-stop.
+        if not _instance.connected():
+            _instance.stop_advertise()
+    else:
+        if _time.ticks_diff(_adv_deadline_ms, _time.ticks_ms()) <= 0:
+            adv_stop()

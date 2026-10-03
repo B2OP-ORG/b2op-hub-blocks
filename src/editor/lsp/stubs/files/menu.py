@@ -31,6 +31,12 @@ BACKLIGHT_DIM = 20
 _BLOCKED_SCRIPTS = ("main.py", "boot.py")
 _DEBOUNCE_MS = 60
 
+def _run_ports_view():
+    try:
+        os.stat("/ports_view.py")
+        runner.run_program("/ports_view.py")
+    except OSError:
+        runner.run_program("/ports_view.mpy")
 
 def _show_about(scr):
     scr.clean()
@@ -75,6 +81,7 @@ def _show_about(scr):
     lines = [
         "Board:  {} {}".format(hub.board.BOARD_NAME, hub.board.BOARD_VERSION),
         "MCU:    ESP32-S3",
+        "FW build: {}".format(hub.fw_version),
         "MicroPython: {}".format(v),
         "Heap free: {} B".format(gc.mem_free()),
         "VFS free: " + fs_info,
@@ -398,8 +405,7 @@ def run():
 
     # ---- static menu tree ----
     hardware = Menu("Hardware", title="Hardware", submenus=[
-        Menu("Ports",         callback=lambda: runner.run_program("/ports_view.py"),
-             screen_flow=True),
+        Menu("Ports",         callback=lambda: _run_ports_view(),   screen_flow=True),
         Menu("About",         callback=lambda: _show_about(scr),    screen_flow=True),
         Menu("Calibrate IMU", callback=lambda: calibrate_imu(scr),  screen_flow=True),
         Menu("BLE Advertise", callback=lambda: _ble_adv_action(),   screen_flow=True),

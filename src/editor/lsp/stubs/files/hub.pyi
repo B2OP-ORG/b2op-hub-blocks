@@ -14,6 +14,9 @@ from lpf2.devices import gyroscope as _gyroscope
 from machine import SDCard
 from typing import Iterable, NoReturn, Optional, Union
 
+fw_version: str
+"""Firmware build version string."""
+
 class _vec3:
     """3-component float vector used for IMU acceleration / gyro samples."""
     x: float
@@ -112,6 +115,10 @@ class _ports_module:
     """External port C."""
     D: _local_port
     """External port D."""
+    E: _local_port
+    """External port E."""
+    F: _local_port
+    """External port F."""
     LED: _port
     """Virtual port wrapping the built-in hub RGB LED."""
     accelerometer: _port

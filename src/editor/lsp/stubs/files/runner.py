@@ -5,6 +5,7 @@ from the C firmware loop (Hub::loop) automatically; no poll() needed.
 hub.exit() raises SystemExit; a 2 s centre-button hold schedules
 KeyboardInterrupt from C — both are caught here as a clean exit.
 """
+import sys
 import time
 import hub, lpf2
 from listview import text_screen
@@ -45,6 +46,21 @@ def _reset_hw():
         hub.video.stop()
 
 
+def _run_mpy(path):
+    slash = path.rfind("/")
+    dirpath = path[:slash] or "/"
+    modname = path[slash + 1:-4]
+    prev = sys.path[:]
+    if dirpath not in sys.path:
+        sys.path.insert(0, dirpath)
+    sys.modules.pop(modname, None)
+    try:
+        __import__(modname)
+    finally:
+        sys.path[:] = prev
+        sys.modules.pop(modname, None)
+
+
 def run_program(path):
     """Execute the file at `path` as a plain script.
 
@@ -66,20 +82,34 @@ def run_program(path):
     saved_cbs = hub.buttons._snapshot()
     err = None
     try:
-        with open(path) as f:
-            code = f.read()
-        hub._sched_unlock()
-        try:
-            exec(code, {"__name__": "__main__"})
-        except SystemExit:
-            pass        # hub.exit()
-        except KeyboardInterrupt:
-            pass        # 2 s centre-hold or USB STOP command
-        except Exception as e:
-            err = repr(e)
-        finally:
-            hub._clear_stop_request()
-            hub._sched_lock()
+        if path.endswith(".mpy"):
+            hub._sched_unlock()
+            try:
+                _run_mpy(path)
+            except SystemExit:
+                pass
+            except KeyboardInterrupt:
+                pass
+            except Exception as e:
+                err = repr(e)
+            finally:
+                hub._clear_stop_request()
+                hub._sched_lock()
+        else:
+            with open(path) as f:
+                code = f.read()
+            hub._sched_unlock()
+            try:
+                exec(code, {"__name__": "__main__"})
+            except SystemExit:
+                pass        # hub.exit()
+            except KeyboardInterrupt:
+                pass        # 2 s centre-hold or USB STOP command
+            except Exception as e:
+                err = repr(e)
+            finally:
+                hub._clear_stop_request()
+                hub._sched_lock()
     except Exception as e:
         err = repr(e)   # file read error
     finally:

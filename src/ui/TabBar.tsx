@@ -37,7 +37,12 @@ export function TabBar() {
   }, []);
 
   useEffect(() => {
-    if (renamingTabId && renameInputRef.current) renameInputRef.current.focus();
+    if (!renamingTabId) return;
+    const id = setTimeout(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }, 0);
+    return () => clearTimeout(id);
   }, [renamingTabId]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -54,7 +59,6 @@ export function TabBar() {
     if (!tab) return;
     setRenamingTabId(tabId);
     setRenameValue(tab.project.title);
-    activateTab(tabId);
   };
 
   const openFileIntoTab = async (tabId: string) => {

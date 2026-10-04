@@ -151,6 +151,10 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         setRunning(false);
         appendConsole(info.ok ? "info" : "err", `[program ${info.ok ? "ended" : "error"}${info.message ? ": " + info.message : ""}]\n`);
       });
+      client.setProgramStartSink((info) => {
+        setRunning(true);
+        appendConsole("info", `[program running: ${info.path}]\n`);
+      });
       setDevice(client);
       setConnection("connected");
       setRunning(false);

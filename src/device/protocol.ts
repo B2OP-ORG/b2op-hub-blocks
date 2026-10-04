@@ -24,39 +24,41 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x19  RM         path:utf8                 → OK
  *
  * Device → Host:
- *   0x20  HELLO     [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
- *   0x21  OK        payload (utf8 or structured, see cmd)
- *   0x22  ERR       error message utf8
- *   0x23  ACK       optional msg  (echoes SEQ, resets idle timer)
- *   0x24  PROGRESS  [sent:u32 BE][total:u32 BE]
- *   0x25  DATA      binary payload (echoes SEQ)
- *   0x30  STDOUT    utf8 text  SEQ=0xFF
- *   0x31  STDERR    utf8 text  SEQ=0xFF
- *   0x32  PROG_END  [ok:u8][message utf8]  SEQ=0xFF
+ *   0x20  HELLO      [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
+ *   0x21  OK         payload (utf8 or structured, see cmd)
+ *   0x22  ERR        error message utf8
+ *   0x23  ACK        optional msg  (echoes SEQ, resets idle timer)
+ *   0x24  PROGRESS   [sent:u32 BE][total:u32 BE]
+ *   0x25  DATA       binary payload (echoes SEQ)
+ *   0x30  STDOUT     utf8 text  SEQ=0xFF
+ *   0x31  STDERR     utf8 text  SEQ=0xFF
+ *   0x32  PROG_END   [ok:u8][message utf8]  SEQ=0xFF
+ *   0x33  PROG_START path:utf8              SEQ=0xFF; menu-initiated run started, or hub already running on BLE connect
  */
 
 // ── Kind constants ────────────────────────────────────────────────────────────
 export const KIND = {
-  HELLO_REQ: 0x01,
-  PING:      0x10,
-  MTU_REQ:   0x11,
-  RUN:       0x12,
-  STOP:      0x13,
-  UPLOAD:    0x14,
-  READ:      0x15,
-  LS:        0x16,
-  MV:        0x17,
-  CP:        0x18,
-  RM:        0x19,
-  HELLO:     0x20,
-  OK:        0x21,
-  ERR:       0x22,
-  ACK:       0x23,
-  PROGRESS:  0x24,
-  DATA:      0x25,
-  STDOUT:    0x30,
-  STDERR:    0x31,
-  PROG_END:  0x32,
+  HELLO_REQ:  0x01,
+  PING:       0x10,
+  MTU_REQ:    0x11,
+  RUN:        0x12,
+  STOP:       0x13,
+  UPLOAD:     0x14,
+  READ:       0x15,
+  LS:         0x16,
+  MV:         0x17,
+  CP:         0x18,
+  RM:         0x19,
+  HELLO:      0x20,
+  OK:         0x21,
+  ERR:        0x22,
+  ACK:        0x23,
+  PROGRESS:   0x24,
+  DATA:       0x25,
+  STDOUT:     0x30,
+  STDERR:     0x31,
+  PROG_END:   0x32,
+  PROG_START: 0x33,
 } as const;
 
 export const FLAGS_NO_ACK = 0x01;
@@ -125,6 +127,8 @@ export type StdoutSink = (chunk: string) => void;
 export type StderrSink = (chunk: string) => void;
 export interface ProgramEndInfo { ok: boolean; message: string; }
 export type ProgramEndSink = (info: ProgramEndInfo) => void;
+export interface ProgramStartInfo { path: string; }
+export type ProgramStartSink = (info: ProgramStartInfo) => void;
 export type ProgressSink = (sent: number, total: number) => void;
 
 export interface HelloInfo {
@@ -154,6 +158,7 @@ export interface IHubProtocol {
   setStdoutSink(sink: StdoutSink | null): void;
   setStderrSink(sink: StderrSink | null): void;
   setProgramEndSink(sink: ProgramEndSink | null): void;
+  setProgramStartSink(sink: ProgramStartSink | null): void;
   setHelloSink(sink: HelloSink | null): void;
   isProgramRunning(): boolean;
 
@@ -238,6 +243,7 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   private onStdout: StdoutSink | null = null;
   private onStderr: StderrSink | null = null;
   private onProgramEnd: ProgramEndSink | null = null;
+  private onProgramStart: ProgramStartSink | null = null;
   private onHello: HelloSink | null = null;
   private programRunning = false;
   private waiters = new Map<number, Waiter>();
@@ -276,8 +282,9 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
 
   setStdoutSink(sink: StdoutSink | null): void    { this.onStdout = sink; }
   setStderrSink(sink: StderrSink | null): void    { this.onStderr = sink; }
-  setProgramEndSink(sink: ProgramEndSink | null): void { this.onProgramEnd = sink; }
-  setHelloSink(sink: HelloSink | null): void      { this.onHello = sink; }
+  setProgramEndSink(sink: ProgramEndSink | null): void   { this.onProgramEnd = sink; }
+  setProgramStartSink(sink: ProgramStartSink | null): void { this.onProgramStart = sink; }
+  setHelloSink(sink: HelloSink | null): void             { this.onHello = sink; }
   isProgramRunning(): boolean                     { return this.programRunning; }
 
   // ── Public commands ─────────────────────────────────────────────────────────
@@ -503,6 +510,13 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
           this.onProgramEnd?.({ ok, message });
         }
         break;
+
+      case KIND.PROG_START: {
+        this.programRunning = true;
+        const path = dec.decode(payload);
+        this.onProgramStart?.({ path });
+        break;
+      }
 
       default:
         break;

@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type DirEntry } from "./protocol";
+import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -149,6 +149,10 @@ export class DeviceClient {
 
   setProgramEndSink(sink: ProgramEndSink | null): void {
     this.proto.setProgramEndSink(sink);
+  }
+
+  setProgramStartSink(sink: ProgramStartSink | null): void {
+    this.proto.setProgramStartSink(sink);
   }
 
   isProgramRunning(): boolean {

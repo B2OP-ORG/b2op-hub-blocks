@@ -146,7 +146,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         setRunning(false);
         appendConsole("info", "[device disconnected]\n");
       });
-      await client.connect();
+      // Sinks must be registered before connect() so PROG_START/END frames
+      // that arrive during the handshake (ping/hello/mtu) are not dropped.
       client.setProgramEndSink((info) => {
         setRunning(false);
         appendConsole(info.ok ? "info" : "err", `[program ${info.ok ? "ended" : "error"}${info.message ? ": " + info.message : ""}]\n`);
@@ -155,9 +156,10 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         setRunning(true);
         appendConsole("info", `[program running: ${info.path}]\n`);
       });
+      await client.connect();
       setDevice(client);
       setConnection("connected");
-      setRunning(false);
+      setRunning(client.isProgramRunning());
       saveLastDeviceName(transport.info.name);
       appendConsole("info", `[connected: ${transport.info.name}]\n`);
     } catch (e) {

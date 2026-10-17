@@ -1,8 +1,15 @@
-# LSP architecture — Python editor
+# Python Editor — LSP Integration
 
-Agent map for the LSP (Language Server Protocol) integration behind the
-built-in Python editor. Read this first before touching any file under
-`src/editor/lsp/` or `docs/lsp-server/`.
+Read this before touching any file under `src/editor/lsp/` or `docs/lsp-server/`.
+
+The Python editor runs in two modes, both using the same JSON-RPC wire format:
+
+- **Worker mode** (default) — stub-driven Pyright running in a Web Worker inside the browser. Fast, offline, no setup. Covers completion, hover, signature help, and basic syntax diagnostics. No real type inference.
+- **Remote mode** — connects to a Node.js bridge (`docs/lsp-server/`) that spawns a real `pyright-langserver` process. Full type checking: return-type mismatches, unbound names, unreachable code. Requires running the server locally.
+
+The LSP client is agnostic — same requests, same Monaco providers, only the transport differs.
+
+---
 
 ## Pipeline
 
@@ -31,13 +38,12 @@ built-in Python editor. Read this first before touching any file under
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-Two modes, one wire format. The client is agnostic — same LSP requests, same
-Monaco providers, only the transport differs.
+---
 
 ## File map
 
 | Path | Role |
-| ---- | ---- |
+| --- | --- |
 | [src/editor/MonacoView.tsx](../src/editor/MonacoView.tsx) | Editor host. Grabs Monaco namespace + model on mount, gates LSP on `language === "python" && !readOnly`. |
 | [src/editor/lsp/useLspClient.ts](../src/editor/lsp/useLspClient.ts) | React hook. Watches `settings.lspMode` + `lspRemoteUrl`, creates/tears down transport + client. |
 | [src/editor/lsp/lspClient.ts](../src/editor/lsp/lspClient.ts) | Custom LSP client. Handshake, JSON-RPC bookkeeping, Monaco completion/hover/signature providers, diagnostics → markers. Deliberately does not use `monaco-languageclient` — that library requires swapping monaco-editor for `@codingame/monaco-vscode-editor-api`. |
@@ -59,7 +65,9 @@ Monaco providers, only the transport differs.
 | [scripts/sync-stubs.mjs](../scripts/sync-stubs.mjs) | Refreshes `src/editor/lsp/stubs/files/` from a local `Lpf2-micropython` checkout — copies `stubs/`, `modules/Lpf2/stubs/lpf2/`, merges `typings/`, then appends per-file overlays from `scripts/stubs-overlay/`. Preserves `pyrightconfig.json`. |
 | [scripts/stubs-overlay/](../scripts/stubs-overlay/) | Shim additions merged on top of fw-sourced stubs. Declares symbols that live in the on-device Python shim layer but aren't in the firmware C-module stubs (e.g. `hub.sleep`, `hub.sleep_ms`). |
 
-## Where to change X
+---
+
+## How to change X
 
 - **Add or fix a hub API symbol** — edit `src/editor/lsp/stubs/files/hub.pyi` (or the matching `lpf2/...pyi`). The worker rebuilds its index on next reload; the remote server picks it up on next request.
 - **Support a new LSP feature (definition, references, rename, …)** — extend `pyright.worker.ts` handlers + advertise in `initialize` capabilities, then register the matching Monaco provider in `lspClient.ts`.
@@ -70,6 +78,8 @@ Monaco providers, only the transport differs.
 - **Refresh all stubs from firmware** — `npm run sync-stubs -- --src ../Lpf2-micropython`. Copies whole `stubs/`, `modules/Lpf2/stubs/lpf2/`, and merges `typings/` into `src/editor/lsp/stubs/files/`, then appends per-file overlays from `scripts/stubs-overlay/`. Re-run after any fw stub change.
 - **Add a hub Python-shim symbol** (not in fw C-module stubs) — add its `.pyi` fragment to `scripts/stubs-overlay/<module>.pyi`, then re-run `npm run sync-stubs`. The fragment is appended to the fw-sourced stub of the same relative path. Use this for `hub.sleep`, `hub.sleep_ms`, and any other on-device Python shim additions.
 
+---
+
 ## Known limits
 
 - Single file: the client treats `project.source` as one document at `file:///workspace/main.py`. No multi-file / package support on the browser side.
@@ -77,17 +87,15 @@ Monaco providers, only the transport differs.
 - Stub parser is regex-based. Handles the shape of the vendored stubs but is not a spec-compliant Python parser — anomalies in future stub imports may need parser tweaks in `stubParser.ts`.
 - LVGL stub is huge (~470 KB). It's inlined into the worker bundle. If bundle size becomes a problem, gate it behind an optional lazy fetch.
 
+---
+
 ## Verification checklist
 
-Kept in sync with the plan file:
-
 1. `npm run build` — TS + Vite bundle succeed. Worker chunk emitted.
-2. `npm run dev`; open Python project; verify `hub.<Ctrl-Space>` shows
-   `ports`, `buttons`, `imu`, `lcd`, `log`, `board`, `powerOff`.
+2. `npm run dev`; open Python project; verify `hub.<Ctrl-Space>` shows `ports`, `buttons`, `imu`, `lcd`, `log`, `board`, `powerOff`.
 3. Hover `hub.ports.LED.setRgbColor` → signature + type from stub.
 4. Type `foo(` after `hub.powerOff` → signature help panel opens.
 5. Type `def f(:` — bracket diagnostic surfaces as red squiggle.
 6. Toggle Settings → Off → completions vanish.
-7. Toggle Settings → Remote, run `docs/lsp-server`, retry (2)–(5); expect
-   richer diagnostics (real type errors).
+7. Toggle Settings → Remote, run `docs/lsp-server`, retry (2)–(5); expect richer diagnostics (real type errors).
 8. `npm test` — stub loader and settings default tests pass.

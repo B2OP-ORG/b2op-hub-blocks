@@ -51,7 +51,7 @@ export function parseProject(raw: unknown): { project: AnyProject; stale: boolea
   if (!raw || typeof raw !== "object") return null;
   const p = raw as Record<string, unknown>;
   // Accept old format name so stale detection works for pre-rename projects.
-  if (p.format !== "b2op-hub-blocks" && p.format !== "lego-hub-blocks") return null;
+  if (p.format !== "b2op-hub-blocks" && p.format !== "b2op-hub-blocks") return null;
   if (p.type !== "blocks" && p.type !== "python") return null;
   const project = p as unknown as AnyProject;
   const stale = p.format !== "b2op-hub-blocks" || project.version !== PROJECT_VERSION;

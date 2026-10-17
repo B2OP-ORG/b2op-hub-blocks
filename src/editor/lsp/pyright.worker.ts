@@ -18,5 +18,5 @@ const server = createLspServer(STUBS, (msg) => {
 // silently drops every request.
 self.addEventListener("error", (e) => {
   // eslint-disable-next-line no-console
-  console.error("[lego-hub-lsp worker]", e.message, e.filename, e.lineno);
+  console.error("[b2op-hub-lsp worker]", e.message, e.filename, e.lineno);
 });

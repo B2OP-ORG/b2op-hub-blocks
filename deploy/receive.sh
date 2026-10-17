@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# receive.sh — server-side installer for lego-hub-blocks uploads.
+# receive.sh — server-side installer for b2op-hub-blocks uploads.
 #
 # Invoked over ssh by the deploy workflow / deploy.sh after the
 # tarball and this script land in a staging dir:

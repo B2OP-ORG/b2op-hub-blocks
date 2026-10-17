@@ -200,7 +200,7 @@ export function createLspServer(stubs: Record<string, string>, emit: (msg: RpcMe
           range: { start: { line: li, character: 0 }, end: { line: li, character: ln.length } },
           severity: 2,
           message: "Mixed tabs and spaces in indentation",
-          source: "lego-hub-lsp",
+          source: "b2op-hub-lsp",
         });
       }
       let inStr: string | null = null;
@@ -217,7 +217,7 @@ export function createLspServer(stubs: Record<string, string>, emit: (msg: RpcMe
               range: { start: { line: li, character: c }, end: { line: li, character: c + 1 } },
               severity: 1,
               message: `Unmatched '${ch}'`,
-              source: "lego-hub-lsp",
+              source: "b2op-hub-lsp",
             });
           }
         }
@@ -228,7 +228,7 @@ export function createLspServer(stubs: Record<string, string>, emit: (msg: RpcMe
         range: { start: { line: open.line, character: open.col }, end: { line: open.line, character: open.col + 1 } },
         severity: 1,
         message: `Unclosed '${open.ch}'`,
-        source: "lego-hub-lsp",
+        source: "b2op-hub-lsp",
       });
     }
     notify("textDocument/publishDiagnostics", { uri, diagnostics });
@@ -247,7 +247,7 @@ export function createLspServer(stubs: Record<string, string>, emit: (msg: RpcMe
               signatureHelpProvider: { triggerCharacters: ["(", ","] },
               definitionProvider: false,
             },
-            serverInfo: { name: "lego-hub-stub-lsp", version: "0.1.0" },
+            serverInfo: { name: "b2op-hub-stub-lsp", version: "0.1.0" },
           });
           break;
         case "initialized":

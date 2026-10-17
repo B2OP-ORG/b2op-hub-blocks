@@ -15,7 +15,7 @@ import type { RpcMessage, Transport } from "./transport";
 
 const URI = "file:///workspace/main.py";
 const LANGUAGE_ID = "python";
-const OWNER = "lego-hub-lsp";
+const OWNER = "b2op-hub-lsp";
 
 interface Pending {
   resolve: (v: unknown) => void;
@@ -112,7 +112,7 @@ export function startLspClient(
     })
     .catch((err) => {
       // eslint-disable-next-line no-console
-      console.error("[lego-hub-lsp] initialize failed", err);
+      console.error("[b2op-hub-lsp] initialize failed", err);
     });
 
   // ── Monaco → LSP wiring ─────────────────────────────────────────────────

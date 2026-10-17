@@ -1,4 +1,4 @@
-# LEGO-Hub-blocks
+# B2OP-Hub-blocks
 
 ## LICENSE
 

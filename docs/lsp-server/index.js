@@ -20,11 +20,11 @@ const STUBS_URI = pathToFileURL(STUBS_DIR).href.replace(/\/$/, "");
 const PORT = Number(process.env.LSP_PORT ?? 3001);
 
 const wss = new WebSocketServer({ port: PORT });
-console.log(`[lego-hub-lsp] listening on ws://localhost:${PORT}`);
-console.log(`[lego-hub-lsp] stubs: ${STUBS_DIR}`);
+console.log(`[b2op-hub-lsp] listening on ws://localhost:${PORT}`);
+console.log(`[b2op-hub-lsp] stubs: ${STUBS_DIR}`);
 
 wss.on("connection", (socket) => {
-  console.log("[lego-hub-lsp] client connected");
+  console.log("[b2op-hub-lsp] client connected");
   const proc = spawn("npx", ["pyright-langserver", "--stdio"], {
     cwd: STUBS_DIR,
     stdio: ["pipe", "pipe", "pipe"],
@@ -78,7 +78,7 @@ wss.on("connection", (socket) => {
   const cleanup = () => {
     try { proc.kill(); } catch { /* ignore */ }
   };
-  socket.on("close", () => { console.log("[lego-hub-lsp] client disconnected"); cleanup(); });
+  socket.on("close", () => { console.log("[b2op-hub-lsp] client disconnected"); cleanup(); });
   socket.on("error", cleanup);
   proc.on("exit", () => {
     if (socket.readyState === socket.OPEN) socket.close();

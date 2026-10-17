@@ -217,9 +217,9 @@ describe("startLspClient — diagnostics", () => {
     // wait one more tick for the async publishDiagnostics that fires
     // synchronously with didOpen but is delivered through queueMicrotask
     await tick(4);
-    expect(markers["lego-hub-lsp"]).toBeDefined();
-    expect(markers["lego-hub-lsp"].length).toBeGreaterThan(0);
-    expect(markers["lego-hub-lsp"][0].message).toMatch(/Unclosed/);
+    expect(markers["b2op-hub-lsp"]).toBeDefined();
+    expect(markers["b2op-hub-lsp"].length).toBeGreaterThan(0);
+    expect(markers["b2op-hub-lsp"][0].message).toMatch(/Unclosed/);
   });
 
   it("clears markers on didChange to clean source", async () => {
@@ -228,10 +228,10 @@ describe("startLspClient — diagnostics", () => {
     const model = makeModel("print(hi");
     startLspClient(monacoNs, model as any, transport);
     await tick(4);
-    expect(markers["lego-hub-lsp"].length).toBeGreaterThan(0);
+    expect(markers["b2op-hub-lsp"].length).toBeGreaterThan(0);
 
     model._setValue("x = 1\n");
     await tick(4);
-    expect(markers["lego-hub-lsp"]).toEqual([]);
+    expect(markers["b2op-hub-lsp"]).toEqual([]);
   });
 });

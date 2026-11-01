@@ -1,5 +1,9 @@
 import { useRef, useState } from "react";
 import * as Blockly from "blockly/core";
+import {
+  ArrowUpCircle, Bluetooth, Code2, Cpu, FolderOpen, Layers,
+  Play, Power, Settings, Square, Upload, Zap,
+} from "lucide-react";
 import { BleTransport, bleSupported } from "../transport/ble";
 import { SerialTransport, serialSupported } from "../transport/serial";
 import { MockTransport } from "../transport/mock";
@@ -79,9 +83,12 @@ interface PromptState { hasRaw: boolean; roundTripOk: boolean; }
 interface ToPythonPromptState { hasRaw: boolean; roundTripOk: boolean; source: string; }
 
 export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
-  const { project, setProject, device, connection, connectionError, running,
+  const {
+    project, setProject, device, connection, connectionError, running,
     setDevice, setConnection, setRunning, appendConsole, pythonPreview,
-    boardName, boardVersion, fwVersion } = useApp();
+    boardName, boardVersion, fwVersion, editorSettings,
+    devicePanelOpen, setDevicePanelOpen,
+  } = useApp();
   const [switchPrompt, setSwitchPrompt] = useState<PromptState | null>(null);
   const [toPythonPrompt, setToPythonPrompt] = useState<ToPythonPromptState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,6 +97,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const cancelRef = useRef(false);
   const transferStartRef = useRef(0);
   const dark = project.type === "python";
+  const liveMode = project.settings.liveMode;
 
   // ── Mode toggle ──────────────────────────────────────────────────────────────
 
@@ -156,6 +164,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         setRunning(true);
         appendConsole("info", `[program running: ${info.path}]\n`);
       });
+      client.addStdoutSink((t) => appendConsole("out", t));
+      client.addStderrSink((t) => appendConsole("err", t));
       await client.connect();
       setDevice(client);
       setConnection("connected");
@@ -189,7 +199,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     const code = project.type === "python" ? project.source : pythonPreview;
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
-    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    const path = (editorSettings.allowRoot ? "/" : "/sd/") + base + ".py";
     cancelRef.current = false;
     transferStartRef.current = Date.now();
     setBusy(true);
@@ -198,9 +208,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       const bytes = new TextEncoder().encode(code);
       setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
-        policy: { allowRoot: project.settings.allowRoot },
+        policy: { allowRoot: editorSettings.allowRoot },
         autoRun: true,
-        onStdout: (t) => appendConsole("out", t),
         onProgress: (sent, total) => {
           if (cancelRef.current) throw new Error("Cancelled");
           setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
@@ -238,7 +247,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     const code = project.type === "python" ? project.source : pythonPreview;
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
-    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    const path = (editorSettings.allowRoot ? "/" : "/sd/") + base + ".py";
     cancelRef.current = false;
     transferStartRef.current = Date.now();
     setBusy(true);
@@ -247,9 +256,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       const bytes = new TextEncoder().encode(code);
       setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
-        policy: { allowRoot: project.settings.allowRoot },
+        policy: { allowRoot: editorSettings.allowRoot },
         autoRun: false,
-        onStdout: (t) => appendConsole("out", t),
         onProgress: (sent, total) => {
           if (cancelRef.current) throw new Error("Cancelled");
           setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
@@ -274,7 +282,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const headerBorder = dark ? "#164e63" : "#155e75";
 
   const btn: React.CSSProperties = {
-    padding: "4px 11px",
+    padding: "4px 10px",
     border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.35)",
     background: dark ? "#111a20" : "rgba(255,255,255,0.12)",
     color: dark ? "#dff5fb" : "#ffffff",
@@ -282,14 +290,18 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     borderRadius: 6,
     fontWeight: 600,
     fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
   };
 
   const dis = (base: React.CSSProperties, disabled: boolean): React.CSSProperties =>
     disabled ? { ...base, opacity: 0.45, cursor: "not-allowed" } : base;
 
+  // Actions
   const primaryBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#0e7490" : "rgba(255,255,255,0.22)",
+    background: dark ? "#0c3a4a" : "rgba(255,255,255,0.22)",
     border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.55)",
   };
 
@@ -307,7 +319,58 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     color: dark ? "#ffb0b0" : "#ffe8e8",
   };
 
-  // status badge
+  const warnBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#3c1a04" : "rgba(180,90,0,0.3)",
+    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.5)",
+    color: dark ? "#fde68a" : "#fef3c7",
+  };
+
+  const indigoBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#1e1b4b" : "rgba(99,102,241,0.25)",
+    border: dark ? "1px solid #3730a3" : "1px solid rgba(129,140,248,0.5)",
+    color: dark ? "#a5b4fc" : "#e0e7ff",
+  };
+
+  const violetBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#2e1065" : "rgba(139,92,246,0.2)",
+    border: dark ? "1px solid #5b21b6" : "1px solid rgba(167,139,250,0.5)",
+    color: dark ? "#c4b5fd" : "#ede9fe",
+  };
+
+  // Mode button — tinted to signal the current mode
+  const blocksModeBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#0c3040" : "rgba(255,255,255,0.22)",
+    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.55)",
+    color: dark ? "#67e8f9" : "#e0f9ff",
+  };
+
+  const pythonModeBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#3c1a04" : "rgba(120,53,15,0.25)",
+    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.5)",
+    color: dark ? "#fde68a" : "#fef3c7",
+  };
+
+  // Toggles — distinct active/inactive appearance
+  const deviceActiveBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#0c3040" : "rgba(14,116,144,0.4)",
+    border: dark ? "1px solid #0e7490" : "1px solid rgba(14,116,144,0.7)",
+    color: dark ? "#67e8f9" : "#cffafe",
+  };
+
+  const liveActiveBtn: React.CSSProperties = {
+    ...btn,
+    background: dark ? "#3c2a05" : "rgba(180,130,0,0.3)",
+    border: dark ? "1px solid #92400e" : "1px solid rgba(251,191,36,0.7)",
+    color: dark ? "#fcd34d" : "#fef3c7",
+  };
+
+  // Status badge
   const badgeBg = (k: "ok" | "err" | "idle" | "run") =>
     dark
       ? k === "ok" ? "#0f3e21" : k === "err" ? "#4a1414" : k === "run" ? "#3a2a05" : "#111a20"
@@ -337,7 +400,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 6,
+        gap: 5,
         padding: "6px 12px",
         background: headerBg,
         color: dark ? "#dff5fb" : "#ffffff",
@@ -347,59 +410,82 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       }}
     >
       {/* Brand */}
-      <strong style={{ letterSpacing: 0.4, fontSize: 13, flexShrink: 0, marginRight: 4 }}>
+      <strong style={{ letterSpacing: 0.4, fontSize: 13, flexShrink: 0, marginRight: 2 }}>
         b2op
       </strong>
 
       <div style={divider} />
 
       {/* Mode toggle */}
-      <button type="button" onClick={toggleType} style={btn}>
-        {project.type === "blocks" ? "Blocks" : "Python"}
+      <button type="button" onClick={toggleType}
+        style={project.type === "blocks" ? blocksModeBtn : pythonModeBtn}
+        title="Switch editor mode">
+        {project.type === "blocks"
+          ? <><Layers size={13} /> Blocks</>
+          : <><Code2 size={13} /> Python</>}
       </button>
 
       <div style={divider} />
 
-      {/* Device controls */}
+      {/* Actions */}
       {!device ? (
-        <>
-          <button type="button" style={dis(primaryBtn, busy || !bleSupported())} disabled={busy || !bleSupported()}
-            onClick={() => connect("ble")} title={bleSupported() ? "Connect via Bluetooth" : "Web Bluetooth unsupported"}>
-            BLE
-          </button>
-          <button type="button" style={dis(primaryBtn, busy || !serialSupported())} disabled={busy || !serialSupported()}
-            onClick={() => connect("serial")} title={serialSupported() ? "Connect via USB" : "Web Serial unsupported"}>
-            USB
-          </button>
-        </>
+        <button
+          type="button"
+          style={dis(primaryBtn, busy || !bleSupported())}
+          disabled={busy || !bleSupported()}
+          onClick={(e) => connect(e.shiftKey && serialSupported() ? "serial" : "ble")}
+          title={bleSupported() ? "Connect via Bluetooth · hold Shift for USB" : "Web Bluetooth unsupported"}
+        >
+          <Bluetooth size={13} /> BLE
+        </button>
       ) : (
         <>
-          <button type="button" style={dis(btn, busy)} disabled={busy} onClick={disconnect}>
-            Disconnect
+          <button type="button" style={dis(warnBtn, busy)} disabled={busy} onClick={disconnect}
+            title="Disconnect device">
+            <Power size={13} /> Disconnect
           </button>
           <button type="button" style={dis(successBtn, busy || running)} disabled={busy || running}
-            onClick={run} title={running ? "Stop the running program first" : ""}>
-            Run
+            onClick={run} title={running ? "Stop the running program first" : "Run program"}>
+            <Play size={13} /> Run
           </button>
           <button type="button" style={dis(dangerBtn, busy || !running)} disabled={busy || !running}
-            onClick={stop} title={!running ? "No program running" : ""}>
-            Stop
+            onClick={stop} title={!running ? "No program running" : "Stop program"}>
+            <Square size={13} /> Stop
           </button>
           {!running && (
             <>
-              <button type="button" style={dis(primaryBtn, busy)} disabled={busy} onClick={upload}>
-                Upload
+              <button type="button" style={dis(indigoBtn, busy)} disabled={busy} onClick={upload}
+                title="Upload without running">
+                <Upload size={13} /> Upload
               </button>
-              <button type="button" style={dis(btn, busy)} disabled={busy}
+              <button type="button" style={dis(violetBtn, busy)} disabled={busy}
                 onClick={() => setShowBrowser(true)} title="Browse device filesystem">
-                Files
+                <FolderOpen size={13} /> Files
               </button>
             </>
           )}
+
+          <div style={divider} />
+
+          {/* Toggles */}
+          <button type="button"
+            style={dis(devicePanelOpen ? deviceActiveBtn : btn, busy)}
+            disabled={busy}
+            onClick={() => setDevicePanelOpen(!devicePanelOpen)}
+            title="Toggle device panel">
+            <Cpu size={13} /> Device
+          </button>
+          <button type="button"
+            style={dis(liveMode ? liveActiveBtn : btn, busy)}
+            disabled={busy}
+            onClick={() => useApp.getState().updateSettings({ liveMode: !liveMode })}
+            title="Toggle Pyodide live mode for this file">
+            <Zap size={13} /> Live
+          </button>
         </>
       )}
 
-      {/* Status badge */}
+      {/* Status + right side */}
       <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         {connection === "connected" && boardName && (
           <span style={{ fontSize: 11, opacity: 0.75, color: dark ? "#a0cce0" : "#e0f4ff" }}>
@@ -420,9 +506,12 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
               background: "#92400e",
               color: "#fef3c7",
               border: "1px solid #b45309",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
             }}
           >
-            ↑ Update
+            <ArrowUpCircle size={12} /> Update
           </button>
         )}
         <span style={{
@@ -438,14 +527,14 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         </span>
       </span>
 
-      {/* Settings icon */}
+      {/* Settings */}
       <button
         type="button"
         onClick={onOpenSettings}
-        style={{ ...btn, fontSize: 16, padding: "3px 8px", lineHeight: 1 }}
+        style={{ ...btn, padding: "4px 8px" }}
         title="Settings"
       >
-        ⚙
+        <Settings size={15} />
       </button>
 
       {/* Modals */}

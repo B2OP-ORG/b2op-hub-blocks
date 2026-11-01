@@ -24,7 +24,7 @@ export interface Transport {
 export function createWorkerTransport(): Transport {
   const worker = new Worker(new URL("./pyright.worker.ts", import.meta.url), {
     type: "module",
-    name: "lego-hub-lsp",
+    name: "b2op-hub-lsp",
   });
   let msgHandler: ((m: RpcMessage) => void) | null = null;
   let closeHandler: (() => void) | null = null;

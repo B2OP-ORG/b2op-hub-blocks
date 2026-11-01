@@ -53,7 +53,7 @@ export function FileBrowserModal({ onClose }: Props) {
   const appendConsole = useApp((s) => s.appendConsole);
 
   const dark = project.type === "python";
-  const allowRoot = project.settings.allowRoot;
+  const allowRoot = useApp((s) => s.editorSettings.allowRoot);
   const defaultCwd = allowRoot ? "/" : "/sd";
 
   const [cwd, setCwd] = useState(defaultCwd);

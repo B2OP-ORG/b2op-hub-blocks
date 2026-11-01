@@ -13,8 +13,8 @@ export function useLspClient(
   monacoNs: typeof monaco | null,
   model: monaco.editor.ITextModel | null,
 ): void {
-  const mode = useApp((s) => s.project.settings.lspMode);
-  const remoteUrl = useApp((s) => s.project.settings.lspRemoteUrl);
+  const mode = useApp((s) => s.editorSettings.lspMode);
+  const remoteUrl = useApp((s) => s.editorSettings.lspRemoteUrl);
   const appendConsole = useApp((s) => s.appendConsole);
 
   useEffect(() => {

@@ -1,11 +1,12 @@
-import type { AnyProject } from "./format";
-import { parseProject } from "./format";
+import type { AnyProject, EditorSettings } from "./format";
+import { parseProject, DEFAULT_EDITOR_SETTINGS } from "./format";
 import type { Tab } from "../state/store";
 import { makeTab } from "../state/store";
 
 const KEY_AUTOSAVE = "b2op.autosave";
 const KEY_TABS = "b2op.tabs";
 const KEY_LAST_DEVICE = "b2op.lastDeviceName";
+const KEY_EDITOR_SETTINGS = "b2op.editorSettings";
 
 interface SavedTabs {
   version: 1;
@@ -90,4 +91,31 @@ export function loadLastDeviceName(): string | null {
 
 export function saveLastDeviceName(name: string): void {
   localStorage.setItem(KEY_LAST_DEVICE, name);
+}
+
+export function loadEditorSettings(): EditorSettings {
+  try {
+    const raw = localStorage.getItem(KEY_EDITOR_SETTINGS);
+    if (raw) {
+      return { ...DEFAULT_EDITOR_SETTINGS, ...JSON.parse(raw) };
+    }
+    // Migrate: pull known fields from the first saved project's settings if present.
+    const tabsRaw = localStorage.getItem(KEY_TABS) ?? localStorage.getItem(KEY_AUTOSAVE);
+    if (tabsRaw) {
+      const parsed = JSON.parse(tabsRaw);
+      const src = (parsed?.tabs?.[0]?.project?.settings ?? parsed?.settings) as Partial<EditorSettings> | undefined;
+      if (src) return { ...DEFAULT_EDITOR_SETTINGS, ...src };
+    }
+  } catch {
+    // corrupt storage
+  }
+  return { ...DEFAULT_EDITOR_SETTINGS };
+}
+
+export function saveEditorSettings(settings: EditorSettings): void {
+  try {
+    localStorage.setItem(KEY_EDITOR_SETTINGS, JSON.stringify(settings));
+  } catch {
+    // storage quota — silent
+  }
 }

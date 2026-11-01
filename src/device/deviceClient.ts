@@ -1,9 +1,17 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry } from "./protocol";
+import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
+const dec = new TextDecoder("utf-8", { fatal: false });
+
 export type ConsoleSink = (text: string) => void;
+
+export interface ExecResult {
+  ok: boolean;
+  stdout: string;
+  error?: string;
+}
 
 export interface RunOptions {
   onStdout?: ConsoleSink;
@@ -176,10 +184,6 @@ export class DeviceClient {
 
   async upload(path: string, bytes: Uint8Array, opts: UploadRunOptions): Promise<UploadResult> {
     validatePath(path, opts.policy);
-    const outSink = opts.onStdout ? (t: string) => opts.onStdout!(t) : null;
-    const errSink = opts.onStderr ? (t: string) => opts.onStderr!(t) : null;
-    this.proto.setStdoutSink(outSink);
-    this.proto.setStderrSink(errSink);
     await this.proto.upload(path, bytes, 15000, opts.onProgress);
     opts.onProgress?.(bytes.length, bytes.length);
     if (opts.autoRun) {
@@ -202,6 +206,33 @@ export class DeviceClient {
 
   async rm(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     return this.proto.rm(path, opts.timeoutMs ?? 3000);
+  }
+
+  addStdoutSink(sink: StdoutSink): () => void {
+    return this.proto.addStdoutSink(sink);
+  }
+
+  addStderrSink(sink: StderrSink): () => void {
+    return this.proto.addStderrSink(sink);
+  }
+
+  async exec(code: string): Promise<ExecResult> {
+    // stdout/stderr routed to console via permanent sinks installed at connect time
+    const reply = await this.proto.exec(code);
+    return {
+      ok: reply.kind === "OK",
+      stdout: "",
+      error: reply.kind === "ERR" ? dec.decode(reply.payload) : undefined,
+    };
+  }
+
+  async cmd(cmdId: number, args: Uint8Array = new Uint8Array()): Promise<Uint8Array> {
+    const payload = new Uint8Array(1 + args.length);
+    payload[0] = cmdId;
+    payload.set(args, 1);
+    const reply = await this.proto.cmd(payload);
+    if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
+    return reply.payload;
   }
 }
 

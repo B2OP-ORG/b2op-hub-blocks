@@ -16,7 +16,7 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x11  MTU_REQ    ()                        → OK [mtu:u16 BE]
  *   0x12  RUN        path:utf8                 → OK; then PROG_END (unsolicited)
  *   0x13  STOP       ()                        → OK (FLAGS=NO_ACK: fire-and-forget)
- *   0x14  UPLOAD     [path_len:u8][path][data] → ACK → PROGRESS* → OK
+ *   0x14  UPLOAD     [path_len:u8][path bytes][file_size:u32 BE] → ACK; then stream file_size raw bytes → PROGRESS* → OK
  *   0x15  READ       path:utf8                 → DATA raw bytes
  *   0x16  LS         path:utf8                 → DATA [is_dir:u8][name\0]...
  *   0x17  MV         [src_len:u8][src][dst_len:u8][dst] → OK
@@ -59,6 +59,8 @@ export const KIND = {
   STDERR:     0x31,
   PROG_END:   0x32,
   PROG_START: 0x33,
+  EXEC:       0x34,
+  CMD:        0x35,
 } as const;
 
 export const FLAGS_NO_ACK = 0x01;
@@ -160,6 +162,10 @@ export interface IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void;
   setProgramStartSink(sink: ProgramStartSink | null): void;
   setHelloSink(sink: HelloSink | null): void;
+  /** Add an extra stdout sink; returns unsubscribe function. Multiple sinks allowed. */
+  addStdoutSink(sink: StdoutSink): () => void;
+  /** Add an extra stderr sink; returns unsubscribe function. Multiple sinks allowed. */
+  addStderrSink(sink: StderrSink): () => void;
   isProgramRunning(): boolean;
 
   requestHello(timeoutMs?: number): Promise<void>;
@@ -173,6 +179,10 @@ export interface IHubProtocol {
   mv(src: string, dst: string, timeoutMs?: number): Promise<void>;
   cp(src: string, dst: string, timeoutMs?: number): Promise<void>;
   rm(path: string, timeoutMs?: number): Promise<void>;
+  /** Execute Python source in REPL mode on device. STDOUT arrives via stdout sinks. */
+  exec(code: string, timeoutMs?: number): Promise<FrameReply>;
+  /** Send a binary CMD frame. Reply is KIND_OK or KIND_DATA. */
+  cmd(payload: Uint8Array, timeoutMs?: number): Promise<FrameReply>;
 }
 
 // ── Parse state machine ───────────────────────────────────────────────────────
@@ -222,6 +232,7 @@ interface Waiter {
   idleTimeoutMs: number;
   onProgress?: ProgressSink;
   requestKind: number;
+  onAck?: () => void;
 }
 
 interface SendOptions {
@@ -241,7 +252,9 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   private transport: Transport;
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
+  private extraStdoutSinks = new Set<StdoutSink>();
   private onStderr: StderrSink | null = null;
+  private extraStderrSinks = new Set<StderrSink>();
   private onProgramEnd: ProgramEndSink | null = null;
   private onProgramStart: ProgramStartSink | null = null;
   private onHello: HelloSink | null = null;
@@ -274,6 +287,8 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
       w.reject(new Error("Disposed"));
     }
     this.waiters.clear();
+    this.extraStdoutSinks.clear();
+    this.extraStderrSinks.clear();
     if (this.programRunning) {
       this.programRunning = false;
       this.onProgramEnd?.({ ok: false, message: "disconnected" });
@@ -285,6 +300,14 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void   { this.onProgramEnd = sink; }
   setProgramStartSink(sink: ProgramStartSink | null): void { this.onProgramStart = sink; }
   setHelloSink(sink: HelloSink | null): void             { this.onHello = sink; }
+  addStdoutSink(sink: StdoutSink): () => void {
+    this.extraStdoutSinks.add(sink);
+    return () => this.extraStdoutSinks.delete(sink);
+  }
+  addStderrSink(sink: StderrSink): () => void {
+    this.extraStderrSinks.add(sink);
+    return () => this.extraStderrSinks.delete(sink);
+  }
   isProgramRunning(): boolean                     { return this.programRunning; }
 
   // ── Public commands ─────────────────────────────────────────────────────────
@@ -335,11 +358,46 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   ): Promise<void> {
     const pathBytes = enc.encode(path);
     if (pathBytes.length > 255) throw new Error(`path too long: ${path}`);
-    const payload = new Uint8Array(1 + pathBytes.length + bytes.length);
+
+    // UPLOAD frame payload: [path_len:u8][path bytes][file_size:u32 BE]
+    const payload = new Uint8Array(1 + pathBytes.length + 4);
     payload[0] = pathBytes.length;
     payload.set(pathBytes, 1);
-    payload.set(bytes, 1 + pathBytes.length);
-    const reply = await this.sendRequest(KIND.UPLOAD, 0, payload, { timeoutMs: idleTimeoutMs, onProgress, fast: false });
+    new DataView(payload.buffer).setUint32(1 + pathBytes.length, bytes.length, false);
+
+    const seq = this.nextSeq();
+    const frame = makeFrame(KIND.UPLOAD, seq, 0, payload);
+
+    const p = new Promise<FrameReply>((resolve, reject) => {
+      const w: Waiter = {
+        resolve,
+        reject,
+        idleTimeoutMs,
+        onProgress,
+        requestKind: KIND.UPLOAD,
+        onAck: () => {
+          // Stream raw file bytes (unframed) after device ACKs the header frame.
+          this.sending = this.sending
+            .then(() => this.transport.write(bytes))
+            .catch((e) => { console.error("[protocol] upload data write failed", e); });
+        },
+      };
+      w.timer = setTimeout(() => {
+        this.waiters.delete(seq);
+        console.warn(`[proto] TIMEOUT UPLOAD seq=${seq}`);
+        reject(new Error("protocol timeout"));
+      }, idleTimeoutMs);
+      this.waiters.set(seq, w);
+    });
+
+    this.sending = this.sending
+      .then(() => {
+        console.log(`[proto] → UPLOAD seq=${seq} path=${path} size=${bytes.length}`);
+        return this.transport.write(frame);
+      })
+      .catch((e) => { console.error("[protocol] write failed", e); });
+
+    const reply = await p;
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
   }
 
@@ -370,6 +428,14 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   async rm(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
+  }
+
+  async exec(code: string, timeoutMs = 10000): Promise<FrameReply> {
+    return this.sendRequest(KIND.EXEC, 0, enc.encode(code), { timeoutMs });
+  }
+
+  async cmd(payload: Uint8Array, timeoutMs = 5000): Promise<FrameReply> {
+    return this.sendRequest(KIND.CMD, 0, payload, { timeoutMs });
   }
 
   // ── Private send helpers ────────────────────────────────────────────────────
@@ -471,6 +537,7 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
       case KIND.ACK:
         console.log(`[proto] ← ACK seq=${seq}`);
         this.resetWaiterTimer(seq);
+        this.waiters.get(seq)?.onAck?.();
         break;
 
       case KIND.PROGRESS: {
@@ -494,13 +561,19 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
         this.resolveWaiter(seq, { kind: "DATA", payload });
         break;
 
-      case KIND.STDOUT:
-        this.onStdout?.(dec.decode(payload));
+      case KIND.STDOUT: {
+        const text = dec.decode(payload);
+        this.onStdout?.(text);
+        for (const s of this.extraStdoutSinks) s(text);
         break;
+      }
 
-      case KIND.STDERR:
-        this.onStderr?.(dec.decode(payload));
+      case KIND.STDERR: {
+        const errText = dec.decode(payload);
+        this.onStderr?.(errText);
+        for (const s of this.extraStderrSinks) s(errText);
         break;
+      }
 
       case KIND.PROG_END:
         if (this.programRunning) {

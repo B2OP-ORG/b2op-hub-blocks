@@ -22,13 +22,13 @@ const DEVICE_NAMES: Record<number, string> = {
   1: "Simple Motor", 2: "Train Motor", 8: "Light",
   20: "Voltage", 21: "Current", 22: "Buzzer", 23: "Hub LED",
   34: "Tilt", 35: "Motion", 37: "Color+Dist",
-  38: "Med Motor", 39: "MoveHub Motor", 40: "MoveHub Tilt",
-  41: "Duplo Motor", 46: "L Linear", 47: "XL Linear",
-  48: "Med Angular", 49: "L Angular", 54: "Gesture",
+  38: "Medium Motor", 39: "MoveHub Motor", 40: "MoveHub Tilt",
+  41: "Duplo Motor", 46: "Large Linear", 47: "XL Linear",
+  48: "Medium Angular", 49: "Large Angular", 54: "Gesture",
   55: "Remote Btn", 56: "Remote RSSI", 57: "Accel", 58: "Gyro",
   59: "Tilt", 60: "Temp", 61: "Color", 62: "Distance",
-  63: "Force", 75: "Med Angular (G)", 76: "L Angular (G)",
-  100: "EV3 Med", 101: "EV3 Large",
+  63: "Force", 75: "Medium Angular (Grey)", 76: "Large Angular (Grey)",
+  100: "EV3 Medium", 101: "EV3 Large",
 };
 
 function portColor(type: number): string {
@@ -145,9 +145,9 @@ export function DevicePanel() {
   return (
     <div style={{
       ...BASE,
-      position: "fixed", top: 0, right: 0, bottom: 0, width: 300,
+      width: 300, height: "100%",
       background: "#071018", borderLeft: "1px solid #0e7490",
-      color: "#dff5fb", display: "flex", flexDirection: "column", zIndex: 200,
+      color: "#dff5fb", display: "flex", flexDirection: "column",
     }}>
       {/* Header */}
       <div style={{
@@ -203,15 +203,13 @@ export function DevicePanel() {
           {/* Buttons */}
           <div style={{ padding: "10px 12px", borderBottom: "1px solid #132a34" }}>
             <div style={{ color: "#4cc3ff", marginBottom: 8, fontWeight: 600 }}>Buttons</div>
-            {/* D-pad layout: center on its own row, then up/down/left/right in cross */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              <Btn label="center" pressed={!!buttonState["center"]} />
+            <div style={{ display: "flex", justifyContent: "center" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, width: 120 }}>
                 <div />
                 <Btn label="up" pressed={!!buttonState["up"]} />
                 <div />
                 <Btn label="left" pressed={!!buttonState["left"]} />
-                <div />
+                <Btn label="center" pressed={!!buttonState["center"]} />
                 <Btn label="right" pressed={!!buttonState["right"]} />
                 <div />
                 <Btn label="down" pressed={!!buttonState["down"]} />

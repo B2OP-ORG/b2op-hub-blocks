@@ -81,7 +81,8 @@ interface ToPythonPromptState { hasRaw: boolean; roundTripOk: boolean; source: s
 export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const { project, setProject, device, connection, connectionError, running,
     setDevice, setConnection, setRunning, appendConsole, pythonPreview,
-    boardName, boardVersion, fwVersion } = useApp();
+    boardName, boardVersion, fwVersion, editorSettings,
+    setReplOpen, setDevicePanelOpen } = useApp();
   const [switchPrompt, setSwitchPrompt] = useState<PromptState | null>(null);
   const [toPythonPrompt, setToPythonPrompt] = useState<ToPythonPromptState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -156,6 +157,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         setRunning(true);
         appendConsole("info", `[program running: ${info.path}]\n`);
       });
+      client.addStdoutSink((t) => appendConsole("out", t));
+      client.addStderrSink((t) => appendConsole("err", t));
       await client.connect();
       setDevice(client);
       setConnection("connected");
@@ -189,7 +192,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     const code = project.type === "python" ? project.source : pythonPreview;
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
-    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    const path = (editorSettings.allowRoot ? "/" : "/sd/") + base + ".py";
     cancelRef.current = false;
     transferStartRef.current = Date.now();
     setBusy(true);
@@ -198,9 +201,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       const bytes = new TextEncoder().encode(code);
       setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
-        policy: { allowRoot: project.settings.allowRoot },
+        policy: { allowRoot: editorSettings.allowRoot },
         autoRun: true,
-        onStdout: (t) => appendConsole("out", t),
         onProgress: (sent, total) => {
           if (cancelRef.current) throw new Error("Cancelled");
           setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
@@ -238,7 +240,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
     const code = project.type === "python" ? project.source : pythonPreview;
     if (!code.trim()) return;
     const base = sanitizeFilename(project.title);
-    const path = (project.settings.allowRoot ? "/" : "/sd/") + base + ".py";
+    const path = (editorSettings.allowRoot ? "/" : "/sd/") + base + ".py";
     cancelRef.current = false;
     transferStartRef.current = Date.now();
     setBusy(true);
@@ -247,9 +249,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       const bytes = new TextEncoder().encode(code);
       setUploadProgress({ label: `Uploading ${base}.py…`, sent: 0, total: bytes.length });
       await device.upload(path, bytes, {
-        policy: { allowRoot: project.settings.allowRoot },
+        policy: { allowRoot: editorSettings.allowRoot },
         autoRun: false,
-        onStdout: (t) => appendConsole("out", t),
         onProgress: (sent, total) => {
           if (cancelRef.current) throw new Error("Cancelled");
           setUploadProgress({ label: `Uploading ${base}.py…`, sent, total });
@@ -396,6 +397,25 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
               </button>
             </>
           )}
+          <div style={divider} />
+          <button type="button" style={dis(btn, busy)} disabled={busy}
+            onClick={() => setDevicePanelOpen(true)} title="Device diagnostics panel">
+            Device
+          </button>
+          <button type="button" style={dis(btn, busy || running)} disabled={busy || running}
+            onClick={() => setReplOpen(true)} title="Open REPL / Console">
+            REPL
+          </button>
+          <button type="button"
+            style={{
+              ...btn,
+              ...(project.settings.liveMode ? { background: dark ? "#3a2a05" : "rgba(255,200,30,0.25)", border: dark ? "1px solid #7a5a10" : "1px solid rgba(255,200,30,0.6)", color: dark ? "#ffd166" : "#7a5a10" } : {}),
+            }}
+            disabled={busy}
+            onClick={() => useApp.getState().updateSettings({ liveMode: !project.settings.liveMode })}
+            title="Toggle Pyodide live mode for this file">
+            {project.settings.liveMode ? "⚡ Live" : "Live"}
+          </button>
         </>
       )}
 

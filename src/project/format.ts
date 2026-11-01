@@ -5,23 +5,33 @@ export type LspMode = "off" | "worker" | "remote";
 export const PROJECT_FORMAT = "b2op-hub-blocks";
 export const PROJECT_VERSION = "2.0.0";
 
-export interface ProjectSettings {
+// ── Editor settings (global, persisted in localStorage) ──────────────────────
+
+export interface EditorSettings {
   showAdvanced: boolean;
   allowRoot: boolean;
-  autoreloadInLive: boolean;
   lspMode: LspMode;
   lspRemoteUrl: string;
-  /** Fixed scale for blocks in the flyout (toolbox). 1.0 = default Blockly size. */
   toolboxBlockScale: number;
 }
 
-export const DEFAULT_SETTINGS: ProjectSettings = {
+export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showAdvanced: false,
   allowRoot: false,
-  autoreloadInLive: false,
   lspMode: "worker",
   lspRemoteUrl: "ws://localhost:3001",
   toolboxBlockScale: 0.75,
+};
+
+// ── Project settings (per-file, saved inside project JSON) ───────────────────
+
+export interface ProjectSettings {
+  /** When true, Run executes generated Python in Pyodide and sends KIND_CMD frames to the device. */
+  liveMode: boolean;
+}
+
+export const DEFAULT_SETTINGS: ProjectSettings = {
+  liveMode: false,
 };
 
 export interface BlocksProject {

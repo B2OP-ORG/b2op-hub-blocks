@@ -14,9 +14,9 @@ const row: React.CSSProperties = {
 };
 
 export function SettingsModal({ onClose }: Props) {
-  const settings = useApp((s) => s.project.settings);
+  const settings = useApp((s) => s.editorSettings);
   const project = useApp((s) => s.project);
-  const update = useApp((s) => s.updateSettings);
+  const update = useApp((s) => s.updateEditorSettings);
   const dark = project.type === "python";
   const [fwNotifs, setFwNotifs] = useState(() => localStorage.getItem("b2op.suppressFwUpdates") !== "true");
 

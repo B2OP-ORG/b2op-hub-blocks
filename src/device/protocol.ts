@@ -59,6 +59,8 @@ export const KIND = {
   STDERR:     0x31,
   PROG_END:   0x32,
   PROG_START: 0x33,
+  EXEC:       0x34,
+  CMD:        0x35,
 } as const;
 
 export const FLAGS_NO_ACK = 0x01;
@@ -160,6 +162,10 @@ export interface IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void;
   setProgramStartSink(sink: ProgramStartSink | null): void;
   setHelloSink(sink: HelloSink | null): void;
+  /** Add an extra stdout sink; returns unsubscribe function. Multiple sinks allowed. */
+  addStdoutSink(sink: StdoutSink): () => void;
+  /** Add an extra stderr sink; returns unsubscribe function. Multiple sinks allowed. */
+  addStderrSink(sink: StderrSink): () => void;
   isProgramRunning(): boolean;
 
   requestHello(timeoutMs?: number): Promise<void>;
@@ -173,6 +179,10 @@ export interface IHubProtocol {
   mv(src: string, dst: string, timeoutMs?: number): Promise<void>;
   cp(src: string, dst: string, timeoutMs?: number): Promise<void>;
   rm(path: string, timeoutMs?: number): Promise<void>;
+  /** Execute Python source in REPL mode on device. STDOUT arrives via stdout sinks. */
+  exec(code: string, timeoutMs?: number): Promise<FrameReply>;
+  /** Send a binary CMD frame. Reply is KIND_OK or KIND_DATA. */
+  cmd(payload: Uint8Array, timeoutMs?: number): Promise<FrameReply>;
 }
 
 // ── Parse state machine ───────────────────────────────────────────────────────
@@ -242,7 +252,9 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   private transport: Transport;
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
+  private extraStdoutSinks = new Set<StdoutSink>();
   private onStderr: StderrSink | null = null;
+  private extraStderrSinks = new Set<StderrSink>();
   private onProgramEnd: ProgramEndSink | null = null;
   private onProgramStart: ProgramStartSink | null = null;
   private onHello: HelloSink | null = null;
@@ -275,6 +287,8 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
       w.reject(new Error("Disposed"));
     }
     this.waiters.clear();
+    this.extraStdoutSinks.clear();
+    this.extraStderrSinks.clear();
     if (this.programRunning) {
       this.programRunning = false;
       this.onProgramEnd?.({ ok: false, message: "disconnected" });
@@ -286,6 +300,14 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void   { this.onProgramEnd = sink; }
   setProgramStartSink(sink: ProgramStartSink | null): void { this.onProgramStart = sink; }
   setHelloSink(sink: HelloSink | null): void             { this.onHello = sink; }
+  addStdoutSink(sink: StdoutSink): () => void {
+    this.extraStdoutSinks.add(sink);
+    return () => this.extraStdoutSinks.delete(sink);
+  }
+  addStderrSink(sink: StderrSink): () => void {
+    this.extraStderrSinks.add(sink);
+    return () => this.extraStderrSinks.delete(sink);
+  }
   isProgramRunning(): boolean                     { return this.programRunning; }
 
   // ── Public commands ─────────────────────────────────────────────────────────
@@ -406,6 +428,14 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   async rm(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
+  }
+
+  async exec(code: string, timeoutMs = 10000): Promise<FrameReply> {
+    return this.sendRequest(KIND.EXEC, 0, enc.encode(code), { timeoutMs });
+  }
+
+  async cmd(payload: Uint8Array, timeoutMs = 5000): Promise<FrameReply> {
+    return this.sendRequest(KIND.CMD, 0, payload, { timeoutMs });
   }
 
   // ── Private send helpers ────────────────────────────────────────────────────
@@ -531,13 +561,19 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
         this.resolveWaiter(seq, { kind: "DATA", payload });
         break;
 
-      case KIND.STDOUT:
-        this.onStdout?.(dec.decode(payload));
+      case KIND.STDOUT: {
+        const text = dec.decode(payload);
+        this.onStdout?.(text);
+        for (const s of this.extraStdoutSinks) s(text);
         break;
+      }
 
-      case KIND.STDERR:
-        this.onStderr?.(dec.decode(payload));
+      case KIND.STDERR: {
+        const errText = dec.decode(payload);
+        this.onStderr?.(errText);
+        for (const s of this.extraStderrSinks) s(errText);
         break;
+      }
 
       case KIND.PROG_END:
         if (this.programRunning) {

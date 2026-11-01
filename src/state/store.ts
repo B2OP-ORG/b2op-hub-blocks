@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import type { AnyProject, ProjectSettings } from "../project/format";
+import type { AnyProject, ProjectSettings, EditorSettings } from "../project/format";
 import { DEFAULT_SETTINGS, newBlocksProject } from "../project/format";
+import { loadEditorSettings, saveEditorSettings } from "../project/storage";
 import type { DeviceClient } from "../device/deviceClient";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -44,6 +45,18 @@ interface AppState {
   boardVersion: string;
   fwVersion: string;
 
+  // UI panel state
+  replOpen: boolean;
+  devicePanelOpen: boolean;
+
+  // Live device state (polled by LiveModePanel)
+  batteryMv: number;
+  batteryPct: number;
+  buttonState: Record<string, boolean>;
+  orientation: { pitch: number; yaw: number; roll: number };
+  sensorValues: Record<string, number[]>;
+  deviceType: Record<string, number>;
+
   // Tab management
   openTab: (project: AnyProject, devicePath?: string) => void;
   closeTab: (id: string) => void;
@@ -64,6 +77,21 @@ interface AppState {
   appendConsole: (kind: ConsoleEntry["kind"], text: string) => void;
   clearConsole: () => void;
   setBoardInfo: (name: string, version: string, fwVersion: string) => void;
+
+  // Global editor settings (persisted in localStorage)
+  editorSettings: EditorSettings;
+  updateEditorSettings: (patch: Partial<EditorSettings>) => void;
+
+  // Panel toggles
+  setReplOpen: (v: boolean) => void;
+  setDevicePanelOpen: (v: boolean) => void;
+
+  // Device state setters (called by LiveModePanel polling)
+  setBattery: (mv: number, pct: number) => void;
+  setButtonState: (state: Record<string, boolean>) => void;
+  setOrientation: (o: { pitch: number; yaw: number; roll: number }) => void;
+  setSensorValue: (port: string, vals: number[]) => void;
+  setDeviceType: (port: string, t: number) => void;
 }
 
 const MAX_CONSOLE = 500;
@@ -84,6 +112,17 @@ export const useApp = create<AppState>((set) => ({
   boardName: "",
   boardVersion: "",
   fwVersion: "",
+
+  editorSettings: loadEditorSettings(),
+
+  replOpen: false,
+  devicePanelOpen: false,
+  batteryMv: 0,
+  batteryPct: 0,
+  buttonState: {},
+  orientation: { pitch: 0, yaw: 0, roll: 0 },
+  sensorValues: {},
+  deviceType: {},
 
   openTab: (project, devicePath) => set((s) => {
     if (devicePath) {
@@ -210,6 +249,20 @@ export const useApp = create<AppState>((set) => ({
     }),
 
   clearConsole: () => set({ console: [] }),
+
+  updateEditorSettings: (patch) => set((s) => {
+    const editorSettings = { ...s.editorSettings, ...patch };
+    saveEditorSettings(editorSettings);
+    return { editorSettings };
+  }),
+
+  setReplOpen: (replOpen) => set({ replOpen }),
+  setDevicePanelOpen: (devicePanelOpen) => set({ devicePanelOpen }),
+  setBattery: (batteryMv, batteryPct) => set({ batteryMv, batteryPct }),
+  setButtonState: (buttonState) => set({ buttonState }),
+  setOrientation: (orientation) => set({ orientation }),
+  setSensorValue: (port, vals) => set((s) => ({ sensorValues: { ...s.sensorValues, [port]: vals } })),
+  setDeviceType: (port, t) => set((s) => ({ deviceType: { ...s.deviceType, [port]: t } })),
 }));
 
 export { DEFAULT_SETTINGS };

@@ -198,11 +198,12 @@ export function TabBar() {
   return (
     <>
       <div
+        className={dark ? "tabbar-dark" : "tabbar-light"}
         style={{
           display: "flex",
           alignItems: "flex-end",
           gap: 2,
-          padding: "4px 8px 0",
+          padding: "2px 8px 0",
           background: barBg,
           borderBottom: `1px solid ${barBorder}`,
           overflowX: "auto",
@@ -212,7 +213,6 @@ export function TabBar() {
       >
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
-          const unsaved = tab.savedSnapshot !== JSON.stringify(tab.project);
           const badge = tab.project.type === "blocks" ? "B" : "P";
           const isRenaming = renamingTabId === tab.id;
 
@@ -254,7 +254,6 @@ export function TabBar() {
                 />
               ) : (
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}>
-                  {unsaved && <span style={{ color: teal, marginRight: 3 }}>●</span>}
                   {tab.project.title}
                 </span>
               )}

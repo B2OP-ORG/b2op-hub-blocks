@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as Blockly from "blockly/core";
 import {
-  ArrowUpCircle, Bluetooth, Code2, Cpu, FolderOpen, Layers,
+  ArrowUpCircle, Bluetooth, Circle, Code2, Cpu, FolderOpen, Layers,
   Play, Power, Settings, Square, Upload, Zap,
 } from "lucide-react";
 import { BleTransport, bleSupported } from "../transport/ble";
@@ -94,10 +94,61 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const [busy, setBusy] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ label: string; sent: number; total: number } | null>(null);
+  const [compactLevel, setCompactLevel] = useState(0);
+  const [, forceUpdate] = useState(0);
+  const [showStatusPopover, setShowStatusPopover] = useState(false);
   const cancelRef = useRef(false);
   const transferStartRef = useRef(0);
+  const headerRef = useRef<HTMLElement>(null);
+  const compactLevelRef = useRef(0);
   const dark = project.type === "python";
   const liveMode = project.settings.liveMode;
+
+  useEffect(() => { compactLevelRef.current = compactLevel; }, [compactLevel]);
+
+  // After every render: if overflowing, step up one level (pre-paint, no flicker)
+  useLayoutEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    if (el.scrollWidth > el.clientWidth && compactLevel < 3) {
+      setCompactLevel(compactLevel + 1);
+    }
+  });
+
+  // ResizeObserver: on width increase try stepping down; on any change force a re-render
+  // so useLayoutEffect above can detect overflow at the new container size.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    let prevWidth = el.clientWidth;
+    const obs = new ResizeObserver(([entry]) => {
+      const w = entry.contentRect.width;
+      if (w > prevWidth && compactLevelRef.current > 0) {
+        setCompactLevel(l => Math.max(l - 1, 0));
+      } else if (w !== prevWidth) {
+        forceUpdate(n => n + 1);
+      }
+      prevWidth = w;
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  // Close status popover on outside click
+  useEffect(() => {
+    if (!showStatusPopover) return;
+    const close = () => setShowStatusPopover(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [showStatusPopover]);
+
+  // showLabel(hideAt): text visible until compactLevel reaches hideAt
+  // level 1 = hide toggles (Device/Live)
+  // level 2 = hide secondary actions (Upload/Files)
+  // level 3 = hide primary actions + mode toggle
+  const showLabel = (hideAt: number) => compactLevel < hideAt;
+  const iconPad = (hideAt: number): React.CSSProperties =>
+    compactLevel >= hideAt ? { padding: "4px 6px" } : {};
 
   // ── Mode toggle ──────────────────────────────────────────────────────────────
 
@@ -397,16 +448,18 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
 
   return (
     <header
+      ref={headerRef}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 5,
-        padding: "6px 12px",
+        padding: "4px 12px",
         background: headerBg,
         color: dark ? "#dff5fb" : "#ffffff",
         borderBottom: `1px solid ${headerBorder}`,
         flexWrap: "nowrap",
-        minHeight: 42,
+        minHeight: 36,
+        overflow: "hidden",
       }}
     >
       {/* Brand */}
@@ -416,13 +469,13 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
 
       <div style={divider} />
 
-      {/* Mode toggle */}
+      {/* Mode toggle — text hides at level 3 */}
       <button type="button" onClick={toggleType}
-        style={project.type === "blocks" ? blocksModeBtn : pythonModeBtn}
+        style={{ ...(project.type === "blocks" ? blocksModeBtn : pythonModeBtn), ...iconPad(3) }}
         title="Switch editor mode">
         {project.type === "blocks"
-          ? <><Layers size={13} /> Blocks</>
-          : <><Code2 size={13} /> Python</>}
+          ? <><Layers size={13} />{showLabel(3) && " Blocks"}</>
+          : <><Code2 size={13} />{showLabel(3) && " Python"}</>}
       </button>
 
       <div style={divider} />
@@ -431,63 +484,66 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       {!device ? (
         <button
           type="button"
-          style={dis(primaryBtn, busy || !bleSupported())}
+          style={{ ...dis(primaryBtn, busy || !bleSupported()), ...iconPad(3) }}
           disabled={busy || !bleSupported()}
           onClick={(e) => connect(e.shiftKey && serialSupported() ? "serial" : "ble")}
           title={bleSupported() ? "Connect via Bluetooth · hold Shift for USB" : "Web Bluetooth unsupported"}
         >
-          <Bluetooth size={13} /> BLE
+          <Bluetooth size={13} />{showLabel(3) && " BLE"}
         </button>
       ) : (
         <>
-          <button type="button" style={dis(warnBtn, busy)} disabled={busy} onClick={disconnect}
+          {/* Primary actions — text hides at level 3 */}
+          <button type="button" style={{ ...dis(warnBtn, busy), ...iconPad(3) }} disabled={busy} onClick={disconnect}
             title="Disconnect device">
-            <Power size={13} /> Disconnect
+            <Power size={13} />{showLabel(3) && " Disconnect"}
           </button>
-          <button type="button" style={dis(successBtn, busy || running)} disabled={busy || running}
+          <button type="button" style={{ ...dis(successBtn, busy || running), ...iconPad(3) }} disabled={busy || running}
             onClick={run} title={running ? "Stop the running program first" : "Run program"}>
-            <Play size={13} /> Run
+            <Play size={13} />{showLabel(3) && " Run"}
           </button>
-          <button type="button" style={dis(dangerBtn, busy || !running)} disabled={busy || !running}
+          <button type="button" style={{ ...dis(dangerBtn, busy || !running), ...iconPad(3) }} disabled={busy || !running}
             onClick={stop} title={!running ? "No program running" : "Stop program"}>
-            <Square size={13} /> Stop
+            <Square size={13} />{showLabel(3) && " Stop"}
           </button>
           {!running && (
             <>
-              <button type="button" style={dis(indigoBtn, busy)} disabled={busy} onClick={upload}
+              {/* Secondary actions — text hides at level 2 */}
+              <button type="button" style={{ ...dis(indigoBtn, busy), ...iconPad(2) }} disabled={busy} onClick={upload}
                 title="Upload without running">
-                <Upload size={13} /> Upload
+                <Upload size={13} />{showLabel(2) && " Upload"}
               </button>
-              <button type="button" style={dis(violetBtn, busy)} disabled={busy}
+              <button type="button" style={{ ...dis(violetBtn, busy), ...iconPad(2) }} disabled={busy}
                 onClick={() => setShowBrowser(true)} title="Browse device filesystem">
-                <FolderOpen size={13} /> Files
+                <FolderOpen size={13} />{showLabel(2) && " Files"}
               </button>
             </>
           )}
 
           <div style={divider} />
 
-          {/* Toggles */}
+          {/* Toggles — text hides at level 1 */}
           <button type="button"
-            style={dis(devicePanelOpen ? deviceActiveBtn : btn, busy)}
+            style={{ ...dis(devicePanelOpen ? deviceActiveBtn : btn, busy), ...iconPad(1) }}
             disabled={busy}
             onClick={() => setDevicePanelOpen(!devicePanelOpen)}
             title="Toggle device panel">
-            <Cpu size={13} /> Device
+            <Cpu size={13} />{showLabel(1) && " Device"}
           </button>
           <button type="button"
-            style={dis(liveMode ? liveActiveBtn : btn, busy)}
+            style={{ ...dis(liveMode ? liveActiveBtn : btn, busy), ...iconPad(1) }}
             disabled={busy}
             onClick={() => useApp.getState().updateSettings({ liveMode: !liveMode })}
             title="Toggle Pyodide live mode for this file">
-            <Zap size={13} /> Live
+            <Zap size={13} />{showLabel(1) && " Live"}
           </button>
         </>
       )}
 
       {/* Status + right side */}
-      <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-        {connection === "connected" && boardName && (
+      <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexShrink: 0, position: "relative" }}>
+        {/* Board info — hidden at level 3 */}
+        {showLabel(3) && connection === "connected" && boardName && (
           <span style={{ fontSize: 11, opacity: 0.75, color: dark ? "#a0cce0" : "#e0f4ff" }}>
             {boardName}{boardVersion ? ` ${boardVersion}` : ""}{fwVersion ? ` (${fwVersion})` : ""}
           </span>
@@ -498,7 +554,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
             onClick={onOpenFwUpdate}
             title="Firmware update available"
             style={{
-              padding: "3px 9px",
+              padding: showLabel(3) ? "3px 9px" : "3px 6px",
               borderRadius: 999,
               fontWeight: 600,
               fontSize: 12,
@@ -511,20 +567,73 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
               gap: 4,
             }}
           >
-            <ArrowUpCircle size={12} /> Update
+            <ArrowUpCircle size={12} />{showLabel(3) && " Update"}
           </button>
         )}
-        <span style={{
-          fontWeight: 600,
-          fontSize: 12,
-          padding: "3px 9px",
-          borderRadius: 999,
-          background: badgeBg(statusKind),
-          color: badgeFg(statusKind),
-          border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
-        }}>
-          {statusText}
-        </span>
+
+        {/* Status badge — text pill at levels 0-2, colored icon at level 3 */}
+        {compactLevel < 3 ? (
+          <span style={{
+            fontWeight: 600,
+            fontSize: 12,
+            padding: "3px 9px",
+            borderRadius: 999,
+            background: badgeBg(statusKind),
+            color: badgeFg(statusKind),
+            border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
+          }}>
+            {statusText}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              title={statusText}
+              onClick={(e) => { e.stopPropagation(); setShowStatusPopover(v => !v); }}
+              style={{
+                background: badgeBg(statusKind),
+                border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 999,
+                padding: "4px 6px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <Circle
+                size={12}
+                style={{ fill: badgeFg(statusKind), color: badgeFg(statusKind) }}
+              />
+            </button>
+            {showStatusPopover && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 6px)",
+                  right: 32,
+                  background: dark ? "#0d1c24" : "#065a72",
+                  border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.25)",
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  color: dark ? "#dff5fb" : "#ffffff",
+                  zIndex: 200,
+                  whiteSpace: "nowrap",
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+                  pointerEvents: "auto",
+                }}
+              >
+                <div style={{ fontWeight: 700, color: badgeFg(statusKind) }}>{statusText}</div>
+                {connection === "connected" && boardName && (
+                  <div style={{ opacity: 0.75, marginTop: 3 }}>
+                    {boardName}{boardVersion ? ` ${boardVersion}` : ""}{fwVersion ? ` (${fwVersion})` : ""}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </span>
 
       {/* Settings */}

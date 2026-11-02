@@ -7,6 +7,22 @@ body {
 }
 button { font: inherit; }
 
+.tabbar-light {
+  scrollbar-width: thin;
+  scrollbar-color: #0e7490 #d4eaf1;
+}
+.tabbar-light::-webkit-scrollbar { height: 4px; }
+.tabbar-light::-webkit-scrollbar-track { background: #d4eaf1; }
+.tabbar-light::-webkit-scrollbar-thumb { background: #0e7490; border-radius: 2px; }
+
+.tabbar-dark {
+  scrollbar-width: thin;
+  scrollbar-color: #0e7490 #0a0f13;
+}
+.tabbar-dark::-webkit-scrollbar { height: 4px; }
+.tabbar-dark::-webkit-scrollbar-track { background: #0a0f13; }
+.tabbar-dark::-webkit-scrollbar-thumb { background: #0e7490; border-radius: 2px; }
+
 :root {
   --cyan-100: #cceff6;
   --cyan-200: #67e8f9;

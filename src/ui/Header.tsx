@@ -334,8 +334,8 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
 
   const btn: React.CSSProperties = {
     padding: "4px 10px",
-    border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.35)",
-    background: dark ? "#111a20" : "rgba(255,255,255,0.12)",
+    border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.55)",
+    background: dark ? "#111a20" : "rgba(255,255,255,0.20)",
     color: dark ? "#dff5fb" : "#ffffff",
     cursor: "pointer",
     borderRadius: 6,
@@ -349,87 +349,84 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const dis = (base: React.CSSProperties, disabled: boolean): React.CSSProperties =>
     disabled ? { ...base, opacity: 0.45, cursor: "not-allowed" } : base;
 
-  // Actions
   const primaryBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#0c3a4a" : "rgba(255,255,255,0.22)",
-    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.55)",
+    background: dark ? "#0c3a4a" : "rgba(255,255,255,0.28)",
+    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.75)",
   };
 
   const successBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#0f3e21" : "rgba(30,160,80,0.35)",
-    border: dark ? "1px solid #1a5a30" : "1px solid rgba(80,220,120,0.6)",
-    color: dark ? "#a9dcbc" : "#e0fff0",
+    background: dark ? "#0f3e21" : "rgba(20,140,70,0.55)",
+    border: dark ? "1px solid #1a5a30" : "1px solid rgba(80,230,130,0.85)",
+    color: dark ? "#a9dcbc" : "#ffffff",
   };
 
   const dangerBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#4a1414" : "rgba(200,30,30,0.35)",
-    border: dark ? "1px solid #6a1c1c" : "1px solid rgba(255,100,100,0.6)",
-    color: dark ? "#ffb0b0" : "#ffe8e8",
+    background: dark ? "#4a1414" : "rgba(190,30,30,0.55)",
+    border: dark ? "1px solid #6a1c1c" : "1px solid rgba(255,110,110,0.85)",
+    color: dark ? "#ffb0b0" : "#ffffff",
   };
 
   const warnBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#3c1a04" : "rgba(180,90,0,0.3)",
-    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.5)",
-    color: dark ? "#fde68a" : "#fef3c7",
+    background: dark ? "#3c1a04" : "rgba(200,100,0,0.55)",
+    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.85)",
+    color: dark ? "#fde68a" : "#ffffff",
   };
 
   const indigoBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#1e1b4b" : "rgba(99,102,241,0.25)",
-    border: dark ? "1px solid #3730a3" : "1px solid rgba(129,140,248,0.5)",
-    color: dark ? "#a5b4fc" : "#e0e7ff",
+    background: dark ? "#1e1b4b" : "rgba(90,100,255,0.50)",
+    border: dark ? "1px solid #3730a3" : "1px solid rgba(150,160,255,0.80)",
+    color: dark ? "#a5b4fc" : "#ffffff",
   };
 
   const violetBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#2e1065" : "rgba(139,92,246,0.2)",
-    border: dark ? "1px solid #5b21b6" : "1px solid rgba(167,139,250,0.5)",
-    color: dark ? "#c4b5fd" : "#ede9fe",
+    background: dark ? "#2e1065" : "rgba(130,80,250,0.45)",
+    border: dark ? "1px solid #5b21b6" : "1px solid rgba(180,150,255,0.80)",
+    color: dark ? "#c4b5fd" : "#ffffff",
   };
 
-  // Mode button — tinted to signal the current mode
   const blocksModeBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#0c3040" : "rgba(255,255,255,0.22)",
-    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.55)",
-    color: dark ? "#67e8f9" : "#e0f9ff",
+    background: dark ? "#0c3040" : "rgba(255,255,255,0.28)",
+    border: dark ? "1px solid #155e75" : "1px solid rgba(255,255,255,0.75)",
+    color: dark ? "#67e8f9" : "#ffffff",
   };
 
   const pythonModeBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#3c1a04" : "rgba(120,53,15,0.25)",
-    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.5)",
-    color: dark ? "#fde68a" : "#fef3c7",
+    background: dark ? "#3c1a04" : "rgba(200,100,0,0.50)",
+    border: dark ? "1px solid #78350f" : "1px solid rgba(251,191,36,0.80)",
+    color: dark ? "#fde68a" : "#ffffff",
   };
 
-  // Toggles — distinct active/inactive appearance
   const deviceActiveBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#0c3040" : "rgba(14,116,144,0.4)",
-    border: dark ? "1px solid #0e7490" : "1px solid rgba(14,116,144,0.7)",
-    color: dark ? "#67e8f9" : "#cffafe",
+    background: dark ? "#0c3040" : "rgba(0,180,220,0.45)",
+    border: dark ? "1px solid #0e7490" : "1px solid rgba(100,230,255,0.80)",
+    color: dark ? "#67e8f9" : "#ffffff",
   };
 
   const liveActiveBtn: React.CSSProperties = {
     ...btn,
-    background: dark ? "#3c2a05" : "rgba(180,130,0,0.3)",
-    border: dark ? "1px solid #92400e" : "1px solid rgba(251,191,36,0.7)",
-    color: dark ? "#fcd34d" : "#fef3c7",
+    background: dark ? "#3c2a05" : "rgba(200,140,0,0.55)",
+    border: dark ? "1px solid #92400e" : "1px solid rgba(251,191,36,0.90)",
+    color: dark ? "#fcd34d" : "#ffffff",
   };
 
   // Status badge
   const badgeBg = (k: "ok" | "err" | "idle" | "run") =>
     dark
       ? k === "ok" ? "#0f3e21" : k === "err" ? "#4a1414" : k === "run" ? "#3a2a05" : "#111a20"
-      : k === "ok" ? "rgba(60,200,100,0.25)" : k === "err" ? "rgba(220,50,50,0.25)" : k === "run" ? "rgba(255,200,30,0.25)" : "rgba(255,255,255,0.15)";
+      : k === "ok" ? "rgba(20,140,70,0.55)" : k === "err" ? "rgba(190,30,30,0.55)" : k === "run" ? "rgba(180,130,0,0.55)" : "rgba(255,255,255,0.22)";
   const badgeFg = (k: "ok" | "err" | "idle" | "run") =>
     dark
       ? k === "ok" ? "#a9dcbc" : k === "err" ? "#ffb0b0" : k === "run" ? "#ffd166" : "#dff5fb"
-      : k === "ok" ? "#c0ffe0" : k === "err" ? "#ffc0c0" : k === "run" ? "#fff2a0" : "#e0f4ff";
+      : "#ffffff";
   const statusKind: "ok" | "err" | "idle" | "run" =
     connection === "connected" ? (running ? "run" : "ok") : connection === "error" ? "err" : "idle";
   const statusText =
@@ -463,11 +460,11 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       }}
     >
       {/* Brand */}
-      <strong style={{ letterSpacing: 0.4, fontSize: 13, flexShrink: 0, marginRight: 2 }}>
+      {/* <strong style={{ letterSpacing: 0.4, fontSize: 13, flexShrink: 0, marginRight: 2 }}>
         b2op
       </strong>
 
-      <div style={divider} />
+      <div style={divider} /> */}
 
       {/* Mode toggle — text hides at level 3 */}
       <button type="button" onClick={toggleType}

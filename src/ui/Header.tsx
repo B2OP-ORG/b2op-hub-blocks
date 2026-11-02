@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as Blockly from "blockly/core";
 import {
   ArrowUpCircle, Bluetooth, Circle, Code2, Cpu, FolderOpen, Layers,
@@ -101,6 +102,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const transferStartRef = useRef(0);
   const headerRef = useRef<HTMLElement>(null);
   const compactLevelRef = useRef(0);
+  const badgeBtnRef = useRef<HTMLButtonElement>(null);
   const dark = project.type === "python";
   const liveMode = project.settings.liveMode;
 
@@ -584,6 +586,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
         ) : (
           <>
             <button
+              ref={badgeBtnRef}
               type="button"
               title={statusText}
               onClick={(e) => { e.stopPropagation(); setShowStatusPopover(v => !v); }}
@@ -602,23 +605,22 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
                 style={{ fill: badgeFg(statusKind), color: badgeFg(statusKind) }}
               />
             </button>
-            {showStatusPopover && (
+            {showStatusPopover && createPortal(
               <div
                 onClick={(e) => e.stopPropagation()}
                 style={{
-                  position: "absolute",
-                  top: "calc(100% + 6px)",
-                  right: 32,
+                  position: "fixed",
+                  top: (badgeBtnRef.current?.getBoundingClientRect().bottom ?? 0) + 6,
+                  right: window.innerWidth - (badgeBtnRef.current?.getBoundingClientRect().right ?? 0),
                   background: dark ? "#0d1c24" : "#065a72",
                   border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.25)",
                   borderRadius: 8,
                   padding: "8px 12px",
                   fontSize: 12,
                   color: dark ? "#dff5fb" : "#ffffff",
-                  zIndex: 200,
+                  zIndex: 9999,
                   whiteSpace: "nowrap",
                   boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-                  pointerEvents: "auto",
                 }}
               >
                 <div style={{ fontWeight: 700, color: badgeFg(statusKind) }}>{statusText}</div>
@@ -628,7 +630,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
                   </div>
                 )}
               </div>
-            )}
+            , document.body)}
           </>
         )}
       </span>

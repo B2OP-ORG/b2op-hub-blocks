@@ -99,3 +99,55 @@ export function newPythonProject(title = "Untitled"): PythonProject {
     source: "",
   };
 }
+
+// ── Multi-file project ────────────────────────────────────────────────────────
+
+export interface ProjectFile {
+  id: string;
+  name: string;    // "main.py"
+  content: string; // may start with BLOCKS_HEADER_RE match
+}
+
+export const BLOCKS_HEADER_RE = /^# __blocks__: (.+)/;
+
+export function getBlocksWorkspace(file: ProjectFile): unknown | null {
+  const m = file.content.match(BLOCKS_HEADER_RE);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+export function fileToProject(file: ProjectFile, settings: ProjectSettings, createdAt: string): AnyProject {
+  const title = file.name.replace(/\.py$/, "");
+  const workspace = getBlocksWorkspace(file);
+  if (workspace !== null) {
+    return { format: "b2op-hub-blocks", version: PROJECT_VERSION, type: "blocks", title, createdAt, settings, workspace };
+  }
+  return { format: "b2op-hub-blocks", version: PROJECT_VERSION, type: "python", title, createdAt, settings, source: file.content };
+}
+
+export function projectToFileContent(project: AnyProject, currentPythonPreview: string): string {
+  if (project.type === "blocks") {
+    return `# __blocks__: ${JSON.stringify(project.workspace)}\n${currentPythonPreview}`;
+  }
+  return project.source;
+}
+
+export interface MultiFileProject {
+  format: "b2op-hub-v3";
+  version: "3.0.0";
+  title: string;
+  createdAt: string;
+  settings: ProjectSettings;
+  files: ProjectFile[];
+}
+
+export function newMultiFileProject(title = "Untitled"): MultiFileProject {
+  return {
+    format: "b2op-hub-v3",
+    version: "3.0.0",
+    title,
+    createdAt: new Date().toISOString(),
+    settings: { ...DEFAULT_SETTINGS },
+    files: [{ id: crypto.randomUUID(), name: "main.py", content: "" }],
+  };
+}

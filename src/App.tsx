@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { Header } from "./ui/Header";
 import { TabBar } from "./ui/TabBar";
+import { FileBrowser } from "./ui/FileBrowser";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { Workspace } from "./ui/Workspace";
 import { SettingsModal } from "./ui/SettingsModal";
 import { FirmwareUpdatePrompt } from "./ui/FirmwareUpdatePrompt";
 import { FirmwareUpdatePage } from "./ui/FirmwareUpdatePage";
 import { useApp } from "./state/store";
-import { loadSavedTabs, saveTabs } from "./project/storage";
+import { loadMultiFileProject, saveMultiFileProject } from "./project/storage";
+import { fileToProject } from "./project/format";
 import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
 
@@ -19,21 +21,22 @@ export default function App() {
   const [showUpdatePage, setShowUpdatePage] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ latestFw: string } | null>(null);
   const project = useApp((s) => s.project);
-  const activeTabId = useApp((s) => s.activeTabId);
+  const activeFileId = useApp((s) => s.activeFileId);
   const connection = useApp((s) => s.connection);
   const boardName = useApp((s) => s.boardName);
   const boardVersion = useApp((s) => s.boardVersion);
   const fwVersion = useApp((s) => s.fwVersion);
 
   useEffect(() => {
-    const saved = loadSavedTabs();
-    if (saved) {
+    const loaded = loadMultiFileProject();
+    if (loaded) {
+      const activeFile = loaded.mfp.files.find((x) => x.id === loaded.activeFileId) ?? loaded.mfp.files[0];
       useApp.setState({
-        tabs: saved.tabs,
-        activeTabId: saved.activeTabId,
-        project: saved.tabs.find((t) => t.id === saved.activeTabId)?.project ?? saved.tabs[0].project,
-        pythonPreview: saved.tabs.find((t) => t.id === saved.activeTabId)?.pythonPreview ?? "",
-        savedSnapshot: saved.tabs.find((t) => t.id === saved.activeTabId)?.savedSnapshot ?? "",
+        mfp: loaded.mfp,
+        openFileIds: loaded.openFileIds,
+        activeFileId: loaded.activeFileId,
+        savedSnapshot: JSON.stringify(loaded.mfp),
+        project: fileToProject(activeFile, loaded.mfp.settings, loaded.mfp.createdAt),
       });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -41,7 +44,7 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(() => {
       const s = useApp.getState();
-      saveTabs(s.tabs, s.activeTabId);
+      saveMultiFileProject(s.mfp, s.openFileIds, s.activeFileId);
     }, 5000);
     return () => clearInterval(id);
   }, []);
@@ -62,8 +65,7 @@ export default function App() {
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       const s = useApp.getState();
-      const anyUnsaved = s.tabs.some((t) => t.savedSnapshot !== JSON.stringify(t.project));
-      if (anyUnsaved) {
+      if (JSON.stringify(s.mfp) !== s.savedSnapshot) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -79,11 +81,16 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenFwUpdate={updateInfo ? () => setShowUpdatePrompt(true) : undefined}
         />
-        <TabBar />
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <ErrorBoundary>
-            <Workspace key={activeTabId + ":" + project.type} />
-          </ErrorBoundary>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+          <FileBrowser />
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <TabBar />
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ErrorBoundary>
+                <Workspace key={activeFileId + ":" + project.type} />
+              </ErrorBoundary>
+            </div>
+          </div>
         </div>
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
         {showUpdatePrompt && updateInfo && (

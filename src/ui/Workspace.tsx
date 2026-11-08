@@ -7,7 +7,10 @@ import { DevicePanel } from "./DevicePanel";
 import { Drawer, DRAWER_HANDLE } from "./Drawer";
 
 export function Workspace() {
-  const { project, setProject, setPythonPreview, pythonPreview } = useApp();
+  const { project, pythonPreview } = useApp();
+  const setBlocksContent = useApp((s) => s.setBlocksContent);
+  const updateFile = useApp((s) => s.updateFile);
+  const activeFileId = useApp((s) => s.activeFileId);
   const editorSettings = useApp((s) => s.editorSettings);
   const devicePanelOpen = useApp((s) => s.devicePanelOpen);
   const [pySize, setPySize] = useState(0);
@@ -15,26 +18,26 @@ export function Workspace() {
 
   const onBlockChange = useCallback(
     (state: unknown, python: string) => {
-      setPythonPreview(python);
-      const current = useApp.getState().project;
-      if (current.type === "blocks") {
-        setProject({ ...current, workspace: state });
-      }
+      setBlocksContent(state, python);
     },
-    [setProject, setPythonPreview],
+    [setBlocksContent],
   );
 
-  const onPythonChange = (source: string) => {
-    if (project.type !== "python") return;
-    setProject({ ...project, source });
-  };
+  const onPythonChange = useCallback(
+    (source: string) => {
+      updateFile(activeFileId, source);
+    },
+    [updateFile, activeFileId],
+  );
 
-  // Blockly + Monaco recompute layout on window resize; nudge them when
-  // drawers open/close so the workspace fills correctly.
+  // Blockly + Monaco recompute layout on window resize when drawers change.
   useEffect(() => {
     const id = requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
     return () => cancelAnimationFrame(id);
   }, [pySize, conSize, project.type, devicePanelOpen]);
+
+  // LSP URI is stable per file (uses file ID, not filename).
+  const lspUri = `file:///workspace/${activeFileId}.py`;
 
   if (project.type === "blocks") {
     const rightCol = pySize + DRAWER_HANDLE;
@@ -91,7 +94,11 @@ export function Workspace() {
           }}
         >
           <div style={{ background: "#0b1216", minWidth: 0, minHeight: 0 }}>
-            <MonacoView value={project.source} onChange={onPythonChange} />
+            <MonacoView
+              value={project.source}
+              onChange={onPythonChange}
+              lspUri={lspUri}
+            />
           </div>
           <div style={{ minWidth: 0, minHeight: 0 }}>
             <Drawer side="bottom" label="Console" storageKey="drawer.console" defaultSize={220} dark onSizeChange={setConSize}>

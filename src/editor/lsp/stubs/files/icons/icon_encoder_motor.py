@@ -4,10 +4,24 @@ import lvgl as lv
 def draw(parent):
     obj = lv.obj(parent)
     obj.set_size(16, 16)
-    obj.set_style_radius(3, 0)
-    obj.set_style_bg_color(lv.color_hex(0x334155), 0)
+    obj.set_style_radius(8, 0)
+    obj.set_style_bg_color(lv.color_hex(0x0F4C75), 0)
     obj.set_style_bg_opa(lv.OPA.COVER, 0)
-    obj.set_style_border_color(lv.color_hex(0x64748B), 0)
+    obj.set_style_border_color(lv.color_hex(0x22D3EE), 0)
     obj.set_style_border_width(1, 0)
     obj.set_style_pad_all(0, 0)
+    lbl = lv.label(obj)
+    lbl.set_text("E")
+    lbl.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
+    lbl.align(lv.ALIGN.CENTER, -1, 0)
+    # 3 tick marks on the right edge
+    for i, dy in enumerate((-4, 0, 4)):
+        tick = lv.obj(obj)
+        tick.set_size(3, 1)
+        tick.set_style_radius(0, 0)
+        tick.set_style_bg_color(lv.color_hex(0x22D3EE), 0)
+        tick.set_style_bg_opa(lv.OPA.COVER, 0)
+        tick.set_style_border_width(0, 0)
+        tick.set_style_pad_all(0, 0)
+        tick.align(lv.ALIGN.RIGHT_MID, -1, dy)
     return obj

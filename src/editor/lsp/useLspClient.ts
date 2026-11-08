@@ -1,29 +1,44 @@
-import { useEffect } from "react";
+// Singleton LSP service — one pyright worker lives for the whole session.
+// Multiple MonacoViews share the same service by calling openDocument/closeDocument.
+
+import { useEffect, useRef, useState } from "react";
 import type * as monaco from "monaco-editor";
 import { useApp } from "../../state/store";
-import { createWorkerTransport, createWsTransport, type Transport } from "./transport";
-import { startLspClient, type LspClient } from "./lspClient";
+import { createWorkerTransport, createWsTransport } from "./transport";
+import { startLspService, type LspService } from "./lspClient";
 
-/**
- * Mounts an LSP client on the given Monaco model according to the current
- * project's LSP settings. Handles reconnection when the mode / URL changes.
- * No-op when mode = "off".
- */
-export function useLspClient(
-  monacoNs: typeof monaco | null,
-  model: monaco.editor.ITextModel | null,
-): void {
+// Module-level singleton so the pyright worker isn't re-spawned on remounts.
+let _singleton: { key: string; service: LspService } | null = null;
+
+export function useLspService(monacoNs: typeof monaco | null): LspService | null {
   const mode = useApp((s) => s.editorSettings.lspMode);
   const remoteUrl = useApp((s) => s.editorSettings.lspRemoteUrl);
   const appendConsole = useApp((s) => s.appendConsole);
+  const [service, setService] = useState<LspService | null>(null);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
-    if (!monacoNs || !model || mode === "off") return;
-    let client: LspClient | null = null;
-    let cancelled = false;
+    if (!monacoNs || mode === "off") {
+      setService(null);
+      return;
+    }
+
+    const key = `${mode}::${remoteUrl}`;
+
+    if (_singleton?.key === key) {
+      setService(_singleton.service);
+      return;
+    }
+
+    // Tear down old singleton before creating a new one.
+    _singleton?.service.dispose();
+    _singleton = null;
+    setService(null);
+
+    cancelledRef.current = false;
 
     (async () => {
-      let transport: Transport;
+      let transport;
       try {
         transport =
           mode === "worker"
@@ -33,16 +48,20 @@ export function useLspClient(
         appendConsole("err", `LSP transport failed: ${(e as Error).message}`);
         return;
       }
-      if (cancelled) {
+      if (cancelledRef.current) {
         transport.dispose();
         return;
       }
-      client = startLspClient(monacoNs, model, transport);
+      const svc = startLspService(monacoNs, transport);
+      _singleton = { key, service: svc };
+      setService(svc);
     })();
 
     return () => {
-      cancelled = true;
-      client?.dispose();
+      cancelledRef.current = true;
+      // Don't dispose the singleton — it persists across remounts.
     };
-  }, [monacoNs, model, mode, remoteUrl, appendConsole]);
+  }, [monacoNs, mode, remoteUrl, appendConsole]);
+
+  return service;
 }

@@ -1,8 +1,12 @@
 import { create } from "zustand";
-import type { AnyProject, ProjectSettings, EditorSettings } from "../project/format";
-import { DEFAULT_SETTINGS, newBlocksProject } from "../project/format";
+import type { AnyProject, ProjectSettings, EditorSettings, MultiFileProject, ProjectFile } from "../project/format";
+import {
+  DEFAULT_SETTINGS, newBlocksProject, newMultiFileProject,
+  fileToProject, projectToFileContent,
+} from "../project/format";
 import { loadEditorSettings, saveEditorSettings } from "../project/storage";
 import type { DeviceClient } from "../device/deviceClient";
+import { sanitizeFilename } from "../utils/sanitize";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -12,6 +16,8 @@ interface ConsoleEntry {
   kind: "out" | "err" | "info";
 }
 
+// ── Legacy Tab type kept for storage.ts compat ───────────────────────────────
+
 export interface Tab {
   id: string;
   project: AnyProject;
@@ -20,7 +26,7 @@ export interface Tab {
   pythonPreview: string;
 }
 
-function makeTab(project: AnyProject, devicePath?: string): Tab {
+export function makeTab(project: AnyProject, devicePath?: string): Tab {
   return {
     id: crypto.randomUUID(),
     project,
@@ -30,12 +36,20 @@ function makeTab(project: AnyProject, devicePath?: string): Tab {
   };
 }
 
+// ── Store ─────────────────────────────────────────────────────────────────────
+
 interface AppState {
-  tabs: Tab[];
-  activeTabId: string;
+  // ── Multi-file project ──────────────────────────────────────────────────
+  mfp: MultiFileProject;
+  openFileIds: string[];
+  activeFileId: string;
+  savedSnapshot: string; // JSON.stringify(mfp) at last save
+
+  // ── Derived / compat shims (updated whenever activeFileId/mfp changes) ──
   project: AnyProject;
   pythonPreview: string;
-  savedSnapshot: string;
+
+  // ── Device / connection ─────────────────────────────────────────────────
   device: DeviceClient | null;
   connection: ConnectionState;
   connectionError: string | null;
@@ -45,11 +59,11 @@ interface AppState {
   boardVersion: string;
   fwVersion: string;
 
-  // UI panel state
+  // ── UI panel state ──────────────────────────────────────────────────────
   replOpen: boolean;
   devicePanelOpen: boolean;
 
-  // Live device state (polled by LiveModePanel)
+  // ── Live device state ───────────────────────────────────────────────────
   batteryMv: number;
   batteryPct: number;
   buttonState: Record<string, boolean>;
@@ -57,20 +71,34 @@ interface AppState {
   sensorValues: Record<string, number[]>;
   deviceType: Record<string, number>;
 
-  // Tab management
-  openTab: (project: AnyProject, devicePath?: string) => void;
-  closeTab: (id: string) => void;
-  activateTab: (id: string) => void;
-  renameTab: (id: string, title: string) => void;
+  // ── File management ─────────────────────────────────────────────────────
+  openFile: (id: string) => void;
+  closeFile: (id: string) => void;
+  updateFile: (id: string, content: string) => void;
+  renameFile: (id: string, name: string) => void;
+  newFile: (name?: string) => void;
+  deleteFile: (id: string) => void;
 
-  // Per-active-tab mutations (keep existing interface)
+  // ── Blocks content update (workspace + generated python together) ────────
+  setBlocksContent: (workspace: unknown, python: string) => void;
+
+  // ── Compat shims (keep existing call sites working) ─────────────────────
+  // These map to the active file's content
   setProject: (p: AnyProject) => void;
   loadProject: (p: AnyProject) => void;
   markSaved: () => void;
   setPythonPreview: (s: string) => void;
   updateSettings: (patch: Partial<ProjectSettings>) => void;
 
-  // Global
+  // Legacy tab API (used by FileBrowserModal, TabBar, App restore)
+  tabs: Tab[];
+  activeTabId: string;
+  openTab: (project: AnyProject, devicePath?: string) => void;
+  closeTab: (id: string) => void;
+  activateTab: (id: string) => void;
+  renameTab: (id: string, title: string) => void;
+
+  // ── Global ──────────────────────────────────────────────────────────────
   setDevice: (d: DeviceClient | null) => void;
   setConnection: (s: ConnectionState, err?: string) => void;
   setRunning: (r: boolean) => void;
@@ -78,15 +106,11 @@ interface AppState {
   clearConsole: () => void;
   setBoardInfo: (name: string, version: string, fwVersion: string) => void;
 
-  // Global editor settings (persisted in localStorage)
   editorSettings: EditorSettings;
   updateEditorSettings: (patch: Partial<EditorSettings>) => void;
 
-  // Panel toggles
   setReplOpen: (v: boolean) => void;
   setDevicePanelOpen: (v: boolean) => void;
-
-  // Device state setters (called by LiveModePanel polling)
   setBattery: (mv: number, pct: number) => void;
   setButtonState: (state: Record<string, boolean>) => void;
   setOrientation: (o: { pitch: number; yaw: number; roll: number }) => void;
@@ -96,14 +120,37 @@ interface AppState {
 
 const MAX_CONSOLE = 500;
 
-const _initialTab = makeTab(newBlocksProject());
+function deriveProject(mfp: MultiFileProject, activeFileId: string): AnyProject {
+  const file = mfp.files.find((f) => f.id === activeFileId) ?? mfp.files[0];
+  if (!file) return { ...newBlocksProject(), settings: mfp.settings };
+  return fileToProject(file, mfp.settings, mfp.createdAt);
+}
 
-export const useApp = create<AppState>((set) => ({
-  tabs: [_initialTab],
-  activeTabId: _initialTab.id,
-  project: _initialTab.project,
+// Map from file IDs to legacy Tab IDs (for the compat shim)
+function mfpToTabs(mfp: MultiFileProject, openFileIds: string[]): Tab[] {
+  return openFileIds.map((id) => {
+    const file = mfp.files.find((f) => f.id === id);
+    if (!file) return makeTab(newBlocksProject());
+    return makeTab(fileToProject(file, mfp.settings, mfp.createdAt));
+  });
+}
+
+const _initial = newMultiFileProject();
+const _initialProject = deriveProject(_initial, _initial.files[0].id);
+
+export const useApp = create<AppState>((set, get) => ({
+  mfp: _initial,
+  openFileIds: [_initial.files[0].id],
+  activeFileId: _initial.files[0].id,
+  savedSnapshot: JSON.stringify(_initial),
+
+  project: _initialProject,
   pythonPreview: "",
-  savedSnapshot: _initialTab.savedSnapshot,
+
+  // Legacy compat
+  tabs: mfpToTabs(_initial, [_initial.files[0].id]),
+  activeTabId: _initial.files[0].id,
+
   device: null,
   connection: "disconnected",
   connectionError: null,
@@ -124,115 +171,168 @@ export const useApp = create<AppState>((set) => ({
   sensorValues: {},
   deviceType: {},
 
-  openTab: (project, devicePath) => set((s) => {
-    if (devicePath) {
-      const existing = s.tabs.find((t) => t.devicePath === devicePath);
-      if (existing) {
-        return {
-          activeTabId: existing.id,
-          project: existing.project,
-          pythonPreview: existing.pythonPreview,
-          savedSnapshot: existing.savedSnapshot,
-        };
-      }
-    }
-    const tab = makeTab(project, devicePath);
-    return {
-      tabs: [...s.tabs, tab],
-      activeTabId: tab.id,
-      project: tab.project,
-      pythonPreview: tab.pythonPreview,
-      savedSnapshot: tab.savedSnapshot,
-    };
-  }),
+  // ── File management ───────────────────────────────────────────────────────
 
-  closeTab: (id) => set((s) => {
-    if (s.tabs.length === 1) {
-      // Replace with a fresh tab rather than leaving zero tabs
-      const fresh = makeTab(newBlocksProject());
-      return {
-        tabs: [fresh],
-        activeTabId: fresh.id,
-        project: fresh.project,
-        pythonPreview: fresh.pythonPreview,
-        savedSnapshot: fresh.savedSnapshot,
-      };
-    }
-    const idx = s.tabs.findIndex((t) => t.id === id);
-    const tabs = s.tabs.filter((t) => t.id !== id);
-    let activeTabId = s.activeTabId;
-    if (activeTabId === id) {
-      const newIdx = Math.min(idx, tabs.length - 1);
-      activeTabId = tabs[newIdx].id;
-    }
-    const active = tabs.find((t) => t.id === activeTabId)!;
+  openFile: (id) => set((s) => {
+    const file = s.mfp.files.find((f) => f.id === id);
+    if (!file) return {};
+    const openFileIds = s.openFileIds.includes(id) ? s.openFileIds : [...s.openFileIds, id];
+    const project = fileToProject(file, s.mfp.settings, s.mfp.createdAt);
     return {
-      tabs,
-      activeTabId,
-      project: active.project,
-      pythonPreview: active.pythonPreview,
-      savedSnapshot: active.savedSnapshot,
-    };
-  }),
-
-  activateTab: (id) => set((s) => {
-    const tab = s.tabs.find((t) => t.id === id);
-    if (!tab) return {};
-    return {
+      openFileIds,
+      activeFileId: id,
+      project,
+      tabs: mfpToTabs(s.mfp, openFileIds),
       activeTabId: id,
-      project: tab.project,
-      pythonPreview: tab.pythonPreview,
-      savedSnapshot: tab.savedSnapshot,
     };
   }),
 
-  renameTab: (id, title) => set((s) => {
-    const tabs = s.tabs.map((t) =>
-      t.id === id ? { ...t, project: { ...t.project, title } } : t,
-    );
-    const project = id === s.activeTabId ? { ...s.project, title } : s.project;
-    return { tabs, project };
+  closeFile: (id) => set((s) => {
+    const openFileIds = s.openFileIds.filter((x) => x !== id);
+    if (openFileIds.length === 0) {
+      // Always keep at least one file open
+      const fallbackId = s.mfp.files.find((f) => f.id !== id)?.id ?? s.mfp.files[0]?.id ?? id;
+      const newOpen = [fallbackId];
+      const project = deriveProject(s.mfp, fallbackId);
+      return { openFileIds: newOpen, activeFileId: fallbackId, project, tabs: mfpToTabs(s.mfp, newOpen), activeTabId: fallbackId };
+    }
+    const activeFileId = s.activeFileId === id
+      ? openFileIds[Math.min(s.openFileIds.indexOf(id), openFileIds.length - 1)]
+      : s.activeFileId;
+    const project = deriveProject(s.mfp, activeFileId);
+    return { openFileIds, activeFileId, project, tabs: mfpToTabs(s.mfp, openFileIds), activeTabId: activeFileId };
   }),
 
-  setProject: (project) => set((s) => ({
-    project,
-    tabs: s.tabs.map((t) => t.id === s.activeTabId ? { ...t, project } : t),
-  })),
+  updateFile: (id, content) => set((s) => {
+    const files = s.mfp.files.map((f) => f.id === id ? { ...f, content } : f);
+    const mfp = { ...s.mfp, files };
+    const project = id === s.activeFileId ? fileToProject({ id, name: s.mfp.files.find((f) => f.id === id)!.name, content }, mfp.settings, mfp.createdAt) : s.project;
+    return { mfp, project };
+  }),
 
-  loadProject: (project) => set((s) => {
-    // Preserve global settings — loaded file doesn't override them
-    const merged = { ...project, settings: s.project.settings };
-    const savedSnapshot = JSON.stringify(merged);
+  renameFile: (id, name) => set((s) => {
+    // Ensure .py extension
+    const safeName = name.endsWith(".py") ? name : name + ".py";
+    const files = s.mfp.files.map((f) => f.id === id ? { ...f, name: safeName } : f);
+    const mfp = { ...s.mfp, files };
+    const project = id === s.activeFileId ? fileToProject(files.find((f) => f.id === id)!, mfp.settings, mfp.createdAt) : s.project;
+    return { mfp, project, tabs: mfpToTabs(mfp, s.openFileIds) };
+  }),
+
+  newFile: (name) => set((s) => {
+    const baseName = name ? (name.endsWith(".py") ? name : name + ".py") : "untitled.py";
+    // Avoid name collisions
+    let finalName = baseName;
+    let n = 1;
+    while (s.mfp.files.some((f) => f.name === finalName)) {
+      finalName = baseName.replace(/\.py$/, `_${n++}.py`);
+    }
+    const file: ProjectFile = { id: crypto.randomUUID(), name: finalName, content: "" };
+    const files = [...s.mfp.files, file];
+    const mfp = { ...s.mfp, files };
+    const openFileIds = [...s.openFileIds, file.id];
     return {
-      project: merged,
-      savedSnapshot,
-      tabs: s.tabs.map((t) =>
-        t.id === s.activeTabId ? { ...t, project: merged, savedSnapshot } : t,
-      ),
+      mfp,
+      openFileIds,
+      activeFileId: file.id,
+      project: fileToProject(file, mfp.settings, mfp.createdAt),
+      tabs: mfpToTabs(mfp, openFileIds),
+      activeTabId: file.id,
     };
   }),
 
-  markSaved: () => set((s) => {
-    const savedSnapshot = JSON.stringify(s.project);
-    return {
-      savedSnapshot,
-      tabs: s.tabs.map((t) =>
-        t.id === s.activeTabId ? { ...t, savedSnapshot } : t,
-      ),
-    };
+  deleteFile: (id) => set((s) => {
+    if (s.mfp.files.length <= 1) return {}; // can't delete last file
+    const files = s.mfp.files.filter((f) => f.id !== id);
+    const mfp = { ...s.mfp, files };
+    const openFileIds = s.openFileIds.filter((x) => x !== id);
+    const safeOpen = openFileIds.length > 0 ? openFileIds : [files[0].id];
+    const activeFileId = s.activeFileId === id ? safeOpen[safeOpen.length - 1] : s.activeFileId;
+    const project = deriveProject(mfp, activeFileId);
+    return { mfp, openFileIds: safeOpen, activeFileId, project, tabs: mfpToTabs(mfp, safeOpen), activeTabId: activeFileId };
   }),
 
-  setPythonPreview: (pythonPreview) => set((s) => ({
-    pythonPreview,
-    tabs: s.tabs.map((t) => t.id === s.activeTabId ? { ...t, pythonPreview } : t),
-  })),
+  setBlocksContent: (workspace, python) => set((s) => {
+    const id = s.activeFileId;
+    const fileName = s.mfp.files.find((f) => f.id === id)?.name ?? "main.py";
+    const content = `# __blocks__: ${JSON.stringify(workspace)}\n${python}`;
+    const files = s.mfp.files.map((f) => f.id === id ? { ...f, content } : f);
+    const mfp = { ...s.mfp, files };
+    const project = { ...fileToProject({ id, name: fileName, content }, mfp.settings, mfp.createdAt) };
+    return { mfp, project, pythonPreview: python };
+  }),
+
+  // ── Compat shims ───────────────────────────────────────────────────────────
+
+  setProject: (p) => set((s) => {
+    const id = s.activeFileId;
+    const existingFile = s.mfp.files.find((f) => f.id === id);
+    if (!existingFile) return {};
+    const content = projectToFileContent(p, s.pythonPreview);
+    // Rename if title changed
+    const newName = p.title !== existingFile.name.replace(/\.py$/, "")
+      ? sanitizeFilename(p.title) + ".py"
+      : existingFile.name;
+    const files = s.mfp.files.map((f) => f.id === id ? { ...f, name: newName, content } : f);
+    const mfp = { ...s.mfp, settings: p.settings ?? s.mfp.settings, files };
+    return { mfp, project: p, tabs: mfpToTabs(mfp, s.openFileIds) };
+  }),
+
+  loadProject: (p) => set((s) => {
+    // Replace active file with this project (preserves settings)
+    const merged = { ...p, settings: s.mfp.settings };
+    const id = s.activeFileId;
+    const existingFile = s.mfp.files.find((f) => f.id === id);
+    const name = existingFile?.name ?? sanitizeFilename(merged.title) + ".py";
+    const content = projectToFileContent(merged, "");
+    const files = s.mfp.files.map((f) => f.id === id ? { ...f, name, content } : f);
+    const mfp = { ...s.mfp, files };
+    const savedSnapshot = JSON.stringify(mfp);
+    return { mfp, project: merged, savedSnapshot, tabs: mfpToTabs(mfp, s.openFileIds) };
+  }),
+
+  markSaved: () => set((s) => ({ savedSnapshot: JSON.stringify(s.mfp) })),
+
+  setPythonPreview: (pythonPreview) => set({ pythonPreview }),
 
   updateSettings: (patch) => set((s) => {
-    const settings = { ...s.project.settings, ...patch };
-    const tabs = s.tabs.map((t) => ({ ...t, project: { ...t.project, settings } }));
+    const settings = { ...s.mfp.settings, ...patch };
+    const mfp = { ...s.mfp, settings };
     const project = { ...s.project, settings };
-    return { project, tabs };
+    return { mfp, project };
   }),
+
+  // ── Legacy tab API ─────────────────────────────────────────────────────────
+
+  openTab: (project, devicePath) => set((s) => {
+    // If same devicePath already open, activate that file
+    if (devicePath) {
+      const existing = s.mfp.files.find((f) => f.name === sanitizeFilename(project.title) + ".py");
+      if (existing) {
+        const openFileIds = s.openFileIds.includes(existing.id) ? s.openFileIds : [...s.openFileIds, existing.id];
+        const proj = fileToProject(existing, s.mfp.settings, s.mfp.createdAt);
+        return { openFileIds, activeFileId: existing.id, project: proj, tabs: mfpToTabs(s.mfp, openFileIds), activeTabId: existing.id };
+      }
+    }
+    const name = sanitizeFilename(project.title) + ".py";
+    const content = projectToFileContent(project, "");
+    const file: ProjectFile = { id: crypto.randomUUID(), name, content };
+    const files = [...s.mfp.files, file];
+    const mfp = { ...s.mfp, files };
+    const openFileIds = [...s.openFileIds, file.id];
+    return {
+      mfp, openFileIds, activeFileId: file.id,
+      project, tabs: mfpToTabs(mfp, openFileIds), activeTabId: file.id,
+    };
+  }),
+
+  closeTab: (id) => { get().closeFile(id); },
+
+  activateTab: (id) => { get().openFile(id); },
+
+  renameTab: (id, title) => { get().renameFile(id, sanitizeFilename(title) + ".py"); },
+
+  // ── Global ─────────────────────────────────────────────────────────────────
 
   setDevice: (device) => set({ device }),
   setConnection: (connection, err) => set({ connection, connectionError: err ?? null }),
@@ -266,5 +366,3 @@ export const useApp = create<AppState>((set) => ({
 }));
 
 export { DEFAULT_SETTINGS };
-// Expose makeTab for use in storage.ts restoration
-export { makeTab };

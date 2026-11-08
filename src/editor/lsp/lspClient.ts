@@ -1,19 +1,9 @@
-// Thin LSP client that:
-//   1. Speaks LSP JSON-RPC to a Transport (worker or ws).
-//   2. Registers Monaco providers (completion / hover / signatureHelp)
-//      that forward to the server.
-//   3. Applies publishDiagnostics as Monaco markers.
-//
-// We deliberately do NOT use `monaco-languageclient` — that library requires
-// swapping monaco-editor for @codingame/monaco-vscode-editor-api and pulling
-// in the whole vscode-api shim. The stub-driven worker + this minimal client
-// give us completion / hover / signature / diagnostics against @monaco-editor/react
-// with no editor-package swap.
+// Multi-document LSP service. One instance per transport (singleton per session).
+// Registers Monaco providers once; tracks open documents; routes diagnostics by URI.
 
 import type * as monaco from "monaco-editor";
 import type { RpcMessage, Transport } from "./transport";
 
-const URI = "file:///workspace/main.py";
 const LANGUAGE_ID = "python";
 const OWNER = "b2op-hub-lsp";
 
@@ -22,27 +12,24 @@ interface Pending {
   reject: (e: unknown) => void;
 }
 
-export interface LspClient {
+export interface LspService {
   dispose(): void;
-  updateDocument(text: string): void;
+  openDocument(model: monaco.editor.ITextModel): void;
+  closeDocument(uri: string): void;
 }
 
-export function startLspClient(
+export function startLspService(
   monacoNs: typeof monaco,
-  model: monaco.editor.ITextModel,
   transport: Transport,
-): LspClient {
+): LspService {
   let nextId = 1;
   const pending = new Map<number, Pending>();
   const disposables: monaco.IDisposable[] = [];
+  const openModels = new Map<string, monaco.editor.ITextModel>();
   let disposed = false;
   let ready = false;
   const queue: RpcMessage[] = [];
 
-  // `initialize` must send immediately — the client can't become `ready`
-  // until it receives the initialize response, and the server can't respond
-  // if the request stays in our queue. Every other request/notification
-  // waits for `ready` so we honor the LSP handshake ordering.
   function request<T>(method: string, params: unknown, force = false): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const id = nextId++;
@@ -73,11 +60,9 @@ export function startLspClient(
     }
   });
 
-  transport.onClose(() => {
-    if (!disposed) dispose();
-  });
+  transport.onClose(() => { if (!disposed) dispose(); });
 
-  // ── LSP handshake ────────────────────────────────────────────────────────
+  // LSP handshake (once per service lifetime)
   request<unknown>(
     "initialize",
     {
@@ -99,14 +84,6 @@ export function startLspClient(
     .then(() => {
       ready = true;
       notify("initialized", {}, /* force */ true);
-      const initial = model.getValue();
-      notify(
-        "textDocument/didOpen",
-        {
-          textDocument: { uri: URI, languageId: LANGUAGE_ID, version: 1, text: initial },
-        },
-        /* force */ true,
-      );
       for (const m of queue) transport.send(m);
       queue.length = 0;
     })
@@ -115,25 +92,15 @@ export function startLspClient(
       console.error("[b2op-hub-lsp] initialize failed", err);
     });
 
-  // ── Monaco → LSP wiring ─────────────────────────────────────────────────
-  let version = 1;
-  disposables.push(
-    model.onDidChangeContent(() => {
-      version++;
-      notify("textDocument/didChange", {
-        textDocument: { uri: URI, version },
-        contentChanges: [{ text: model.getValue() }],
-      });
-    }),
-  );
+  // ── Monaco providers (registered once for all Python models) ─────────────
 
   disposables.push(
     monacoNs.languages.registerCompletionItemProvider(LANGUAGE_ID, {
       triggerCharacters: ["."],
       async provideCompletionItems(mdl, position) {
-        if (mdl !== model) return { suggestions: [] };
+        const uri = mdl.uri.toString();
         const resp = (await request<LspCompletionList>("textDocument/completion", {
-          textDocument: { uri: URI },
+          textDocument: { uri },
           position: { line: position.lineNumber - 1, character: position.column - 1 },
         }).catch(() => ({ items: [] }))) as LspCompletionList;
         const word = mdl.getWordUntilPosition(position);
@@ -157,9 +124,9 @@ export function startLspClient(
   disposables.push(
     monacoNs.languages.registerHoverProvider(LANGUAGE_ID, {
       async provideHover(mdl, position) {
-        if (mdl !== model) return null;
+        const uri = mdl.uri.toString();
         const resp = (await request<LspHover | null>("textDocument/hover", {
-          textDocument: { uri: URI },
+          textDocument: { uri },
           position: { line: position.lineNumber - 1, character: position.column - 1 },
         }).catch(() => null)) as LspHover | null;
         if (!resp || !resp.contents) return null;
@@ -177,9 +144,9 @@ export function startLspClient(
     monacoNs.languages.registerSignatureHelpProvider(LANGUAGE_ID, {
       signatureHelpTriggerCharacters: ["(", ","],
       async provideSignatureHelp(mdl, position) {
-        if (mdl !== model) return null;
+        const uri = mdl.uri.toString();
         const resp = (await request<LspSignatureHelp | null>("textDocument/signatureHelp", {
-          textDocument: { uri: URI },
+          textDocument: { uri },
           position: { line: position.lineNumber - 1, character: position.column - 1 },
         }).catch(() => null)) as LspSignatureHelp | null;
         if (!resp || !resp.signatures?.length) return null;
@@ -204,7 +171,9 @@ export function startLspClient(
   );
 
   function applyDiagnostics(params: { uri: string; diagnostics: LspDiagnostic[] }): void {
-    if (params.uri !== URI) return;
+    const monacoUri = monacoNs.Uri.parse(params.uri);
+    const model = monacoNs.editor.getModel(monacoUri);
+    if (!model) return;
     const markers: monaco.editor.IMarkerData[] = params.diagnostics.map((d) => ({
       startLineNumber: d.range.start.line + 1,
       startColumn: d.range.start.character + 1,
@@ -217,42 +186,82 @@ export function startLspClient(
     monacoNs.editor.setModelMarkers(model, OWNER, markers);
   }
 
+  function openDocument(model: monaco.editor.ITextModel): void {
+    const uri = model.uri.toString();
+    if (openModels.has(uri)) return;
+    openModels.set(uri, model);
+    notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: LANGUAGE_ID, version: model.getVersionId(), text: model.getValue() },
+    });
+    const d = model.onDidChangeContent(() => {
+      notify("textDocument/didChange", {
+        textDocument: { uri, version: model.getVersionId() },
+        contentChanges: [{ text: model.getValue() }],
+      });
+    });
+    disposables.push(d);
+  }
+
+  function closeDocument(uri: string): void {
+    if (!openModels.has(uri)) return;
+    openModels.delete(uri);
+    notify("textDocument/didClose", { textDocument: { uri } });
+    const monacoUri = monacoNs.Uri.parse(uri);
+    const model = monacoNs.editor.getModel(monacoUri);
+    if (model) monacoNs.editor.setModelMarkers(model, OWNER, []);
+  }
+
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    for (const d of disposables) d.dispose();
-    monacoNs.editor.setModelMarkers(model, OWNER, []);
-    try {
-      notify("textDocument/didClose", { textDocument: { uri: URI } });
-    } catch {
-      // ignore
+    for (const uri of openModels.keys()) {
+      try { notify("textDocument/didClose", { textDocument: { uri } }); } catch { /* ignore */ }
     }
+    openModels.clear();
+    for (const d of disposables) d.dispose();
     transport.dispose();
     pending.clear();
   }
 
-  return {
-    dispose,
-    updateDocument(text) {
-      version++;
-      notify("textDocument/didChange", {
-        textDocument: { uri: URI, version },
-        contentChanges: [{ text }],
-      });
-    },
-  };
+  return { dispose, openDocument, closeDocument };
 }
 
-/**
- * LSP CompletionItemKind uses different numeric values than Monaco's
- * CompletionItemKind enum. Without translation, every icon renders as a
- * different symbol than intended (and the suggest widget's per-kind icon
- * colours never apply). This maps the LSP enum → Monaco enum.
- */
-function lspKindToMonaco(
-  m: typeof monaco,
-  kind: number | undefined,
-): monaco.languages.CompletionItemKind {
+// ── LSP wire types (subset used) ─────────────────────────────────────────────
+
+interface LspCompletionItem {
+  label: string;
+  kind?: number;
+  detail?: string;
+  documentation?: string | { kind: string; value: string };
+  insertText?: string;
+}
+interface LspCompletionList {
+  isIncomplete?: boolean;
+  items?: LspCompletionItem[];
+}
+interface LspHover {
+  contents:
+    | string
+    | { kind: string; value: string }
+    | Array<string | { language?: string; value: string }>;
+}
+interface LspSignatureHelp {
+  signatures: Array<{
+    label: string;
+    documentation?: string | { kind: string; value: string };
+    parameters?: Array<{ label: string }>;
+  }>;
+  activeSignature?: number;
+  activeParameter?: number;
+}
+interface LspDiagnostic {
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  severity?: number;
+  message: string;
+  source?: string;
+}
+
+function lspKindToMonaco(m: typeof monaco, kind: number | undefined): monaco.languages.CompletionItemKind {
   const K = m.languages.CompletionItemKind;
   switch (kind) {
     case 1: return K.Text;
@@ -292,39 +301,4 @@ function severityOf(m: typeof monaco, sev: number | undefined): monaco.MarkerSev
     case 4: return m.MarkerSeverity.Hint;
     default: return m.MarkerSeverity.Info;
   }
-}
-
-// ── LSP wire types (subset used) ────────────────────────────────────────────
-
-interface LspCompletionItem {
-  label: string;
-  kind?: number;
-  detail?: string;
-  documentation?: string | { kind: string; value: string };
-  insertText?: string;
-}
-interface LspCompletionList {
-  isIncomplete?: boolean;
-  items?: LspCompletionItem[];
-}
-interface LspHover {
-  contents:
-    | string
-    | { kind: string; value: string }
-    | Array<string | { language?: string; value: string }>;
-}
-interface LspSignatureHelp {
-  signatures: Array<{
-    label: string;
-    documentation?: string | { kind: string; value: string };
-    parameters?: Array<{ label: string }>;
-  }>;
-  activeSignature?: number;
-  activeParameter?: number;
-}
-interface LspDiagnostic {
-  range: { start: { line: number; character: number }; end: { line: number; character: number } };
-  severity?: number;
-  message: string;
-  source?: string;
 }

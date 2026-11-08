@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/store";
-import { newPythonProject } from "../project/format";
+import { newPythonProject, newBlocksProject, getBlocksWorkspace, type ProjectFile } from "../project/format";
 import type { DirEntry } from "../device/protocol";
 
 interface Props {
@@ -180,7 +180,12 @@ export function FileBrowserModal({ onClose }: Props) {
         },
       });
       const title = name.replace(/\.py$/, "");
-      openTab({ ...newPythonProject(title), source }, fullPath);
+      const probe: ProjectFile = { id: "", name, content: source };
+      const workspace = getBlocksWorkspace(probe);
+      const project = workspace
+        ? { ...newBlocksProject(title), workspace }
+        : { ...newPythonProject(title), source };
+      openTab(project, fullPath);
       appendConsole("info", `[load ← ${fullPath} (${source.length}B)]\n`);
       onClose();
     } catch (e) {

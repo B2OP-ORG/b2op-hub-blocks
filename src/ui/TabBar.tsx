@@ -1,71 +1,71 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/store";
+import { getBlocksWorkspace } from "../project/format";
 import { downloadProject, pickFile } from "../project/download";
-import { newBlocksProject, newPythonProject, parseProject } from "../project/format";
+import { newPythonProject, parseProject } from "../project/format";
 
 interface MenuPos { x: number; y: number; }
 
 export function TabBar() {
-  const tabs = useApp((s) => s.tabs);
-  const activeTabId = useApp((s) => s.activeTabId);
-  const activateTab = useApp((s) => s.activateTab);
-  const closeTab = useApp((s) => s.closeTab);
-  const openTab = useApp((s) => s.openTab);
-  const renameTab = useApp((s) => s.renameTab);
+  const mfp = useApp((s) => s.mfp);
+  const openFileIds = useApp((s) => s.openFileIds);
+  const activeFileId = useApp((s) => s.activeFileId);
+  const savedSnapshot = useApp((s) => s.savedSnapshot);
+  const openFile = useApp((s) => s.openFile);
+  const closeFile = useApp((s) => s.closeFile);
+  const renameFile = useApp((s) => s.renameFile);
+  const newFile = useApp((s) => s.newFile);
   const loadProject = useApp((s) => s.loadProject);
   const markSaved = useApp((s) => s.markSaved);
   const activeProject = useApp((s) => s.project);
   const dark = activeProject.type === "python";
 
-  // + button dropdown
-  const addBtnRef = useRef<HTMLButtonElement>(null);
-  const [newMenuPos, setNewMenuPos] = useState<MenuPos | null>(null);
-
-  // Right-click context menu
-  const [contextMenu, setContextMenu] = useState<{ tabId: string } & MenuPos | null>(null);
-
-  // Inline rename
-  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ fileId: string } & MenuPos | null>(null);
+  const [renamingFileId, setRenamingFileId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Close menus on outside click
+  const savedMfp = (() => { try { return JSON.parse(savedSnapshot); } catch { return null; } })();
+
   useEffect(() => {
-    const close = () => { setNewMenuPos(null); setContextMenu(null); };
+    const close = () => setContextMenu(null);
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, []);
 
   useEffect(() => {
-    if (!renamingTabId) return;
-    const id = setTimeout(() => {
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
-    }, 0);
+    if (!renamingFileId) return;
+    const id = setTimeout(() => { renameInputRef.current?.focus(); renameInputRef.current?.select(); }, 0);
     return () => clearTimeout(id);
-  }, [renamingTabId]);
+  }, [renamingFileId]);
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  const isFileDirty = (fileId: string): boolean => {
+    const current = mfp.files.find((f) => f.id === fileId);
+    const saved = savedMfp?.files?.find((f: { id: string }) => f.id === fileId);
+    if (!current) return false;
+    if (!saved) return true;
+    return current.content !== saved.content || current.name !== saved.name;
+  };
 
   const commitRename = () => {
-    if (renamingTabId && renameValue.trim()) {
-      renameTab(renamingTabId, renameValue.trim());
+    if (renamingFileId && renameValue.trim()) {
+      renameFile(renamingFileId, renameValue.trim());
     }
-    setRenamingTabId(null);
+    setRenamingFileId(null);
   };
 
-  const startRename = (tabId: string) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab) return;
-    setRenamingTabId(tabId);
-    setRenameValue(tab.project.title);
+  const startRename = (fileId: string) => {
+    const file = mfp.files.find((f) => f.id === fileId);
+    if (!file) return;
+    setRenamingFileId(fileId);
+    setRenameValue(file.name.replace(/\.py$/, ""));
   };
 
-  const openFileIntoTab = async (tabId: string) => {
+  const openFileIntoTab = async (fileId: string) => {
     const file = await pickFile(".json,.blocksproj.json,.py");
     if (!file) return;
     const text = await file.text();
-    activateTab(tabId);
+    openFile(fileId);
     if (file.name.endsWith(".py")) {
       loadProject({ ...newPythonProject(file.name.replace(/\.py$/, "")), source: text });
     } else {
@@ -81,14 +81,20 @@ export function TabBar() {
     }
   };
 
-  const saveTab = (tabId: string) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab) return;
-    downloadProject(tab.project);
-    if (tabId === activeTabId) markSaved();
+  const saveFile = (fileId: string) => {
+    const file = mfp.files.find((f) => f.id === fileId);
+    if (!file) return;
+    const ws = getBlocksWorkspace(file);
+    if (ws) {
+      const proj = { type: "blocks" as const, format: "b2op-hub-blocks" as const, version: "2.0.0", title: file.name.replace(/\.py$/, ""), createdAt: mfp.createdAt, settings: mfp.settings, workspace: ws };
+      downloadProject(proj);
+    } else {
+      downloadProject({ type: "python" as const, format: "b2op-hub-blocks" as const, version: "2.0.0", title: file.name.replace(/\.py$/, ""), createdAt: mfp.createdAt, settings: mfp.settings, source: file.content });
+    }
+    if (fileId === activeFileId) markSaved();
   };
 
-  // ── Colours ───────────────────────────────────────────────────────────────────
+  // ── Colours ────────────────────────────────────────────────────────────────
 
   const barBg = dark ? "#0a0f13" : "#d4eaf1";
   const barBorder = dark ? "#164e63" : "#b6dbe4";
@@ -100,6 +106,7 @@ export function TabBar() {
   const menuBg = dark ? "#0b1216" : "#ffffff";
   const menuBorder = dark ? "#164e63" : "#b6dbe4";
   const menuShadow = dark ? "0 4px 16px rgba(0,0,0,0.5)" : "0 4px 16px rgba(0,111,143,0.18)";
+  const dirtyColor = dark ? "#7dd3fc" : "#0e7490";
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     display: "flex",
@@ -122,16 +129,6 @@ export function TabBar() {
     overflow: "hidden",
     flexShrink: 0,
   });
-
-  const badgeStyle: React.CSSProperties = {
-    fontSize: 10,
-    padding: "1px 4px",
-    borderRadius: 3,
-    background: dark ? "#164e63" : "#cce9f3",
-    color: dark ? "#7dd3fc" : "#0e7490",
-    fontWeight: 700,
-    flexShrink: 0,
-  };
 
   const closeBtnStyle: React.CSSProperties = {
     marginLeft: 2,
@@ -187,13 +184,7 @@ export function TabBar() {
     fontSize: 13,
   };
 
-  const menuDivider: React.CSSProperties = {
-    height: 1,
-    background: tabBorder,
-    margin: "3px 0",
-  };
-
-  // ── Render ────────────────────────────────────────────────────────────────────
+  const menuDivider: React.CSSProperties = { height: 1, background: tabBorder, margin: "3px 0" };
 
   return (
     <>
@@ -211,21 +202,22 @@ export function TabBar() {
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {tabs.map((tab) => {
-          const active = tab.id === activeTabId;
-          const badge = tab.project.type === "blocks" ? "B" : "P";
-          const isRenaming = renamingTabId === tab.id;
+        {openFileIds.map((fileId) => {
+          const file = mfp.files.find((f) => f.id === fileId);
+          if (!file) return null;
+          const active = fileId === activeFileId;
+          const dirty = isFileDirty(fileId);
+          const isRenaming = renamingFileId === fileId;
 
           return (
             <div
-              key={tab.id}
+              key={fileId}
               style={tabStyle(active)}
-              onClick={(e) => { e.stopPropagation(); if (!isRenaming) activateTab(tab.id); }}
+              onClick={(e) => { e.stopPropagation(); if (!isRenaming) openFile(fileId); }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
-                setNewMenuPos(null);
+                setContextMenu({ fileId, x: e.clientX, y: e.clientY });
               }}
             >
               {isRenaming ? (
@@ -235,7 +227,7 @@ export function TabBar() {
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") setRenamingTabId(null);
+                    if (e.key === "Escape") setRenamingFileId(null);
                     e.stopPropagation();
                   }}
                   onBlur={commitRename}
@@ -253,16 +245,18 @@ export function TabBar() {
                   }}
                 />
               ) : (
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}>
-                  {tab.project.title}
-                </span>
+                <>
+                  {dirty && <span style={{ color: dirtyColor, fontSize: 10, marginRight: 1 }}>●</span>}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}>
+                    {file.name}
+                  </span>
+                </>
               )}
-              <span style={badgeStyle}>{badge}</span>
               <button
                 type="button"
                 style={closeBtnStyle}
-                onMouseDown={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                title="Close tab"
+                onMouseDown={(e) => { e.stopPropagation(); closeFile(fileId); }}
+                title="Close"
               >
                 ×
               </button>
@@ -270,61 +264,36 @@ export function TabBar() {
           );
         })}
 
-        {/* + button */}
         <button
-          ref={addBtnRef}
           type="button"
           style={addBtnStyle}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            const rect = addBtnRef.current!.getBoundingClientRect();
-            setNewMenuPos(newMenuPos ? null : { x: rect.left, y: rect.bottom + 2 });
-            setContextMenu(null);
-          }}
-          title="New tab"
+          onMouseDown={(e) => { e.stopPropagation(); newFile(); }}
+          title="New file"
         >
-          + ▾
+          +
         </button>
       </div>
 
-      {/* New-tab dropdown — fixed position, above editor area */}
-      {newMenuPos && (
-        <div
-          style={{ ...menuStyle, top: newMenuPos.y, left: newMenuPos.x }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button type="button" style={menuItemStyle}
-            onMouseDown={() => { openTab(newBlocksProject()); setNewMenuPos(null); }}>
-            New Blocks tab
-          </button>
-          <button type="button" style={menuItemStyle}
-            onMouseDown={() => { openTab(newPythonProject()); setNewMenuPos(null); }}>
-            New Python tab
-          </button>
-        </div>
-      )}
-
-      {/* Right-click context menu — fixed position */}
       {contextMenu && (
         <div
           style={{ ...menuStyle, top: contextMenu.y, left: contextMenu.x }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button type="button" style={menuItemStyle}
-            onMouseDown={() => { startRename(contextMenu.tabId); setContextMenu(null); }}>
+            onMouseDown={() => { startRename(contextMenu.fileId); setContextMenu(null); }}>
             Rename
           </button>
           <button type="button" style={menuItemStyle}
-            onMouseDown={() => { openFileIntoTab(contextMenu.tabId); setContextMenu(null); }}>
+            onMouseDown={() => { openFileIntoTab(contextMenu.fileId); setContextMenu(null); }}>
             Open…
           </button>
           <button type="button" style={menuItemStyle}
-            onMouseDown={() => { saveTab(contextMenu.tabId); setContextMenu(null); }}>
+            onMouseDown={() => { saveFile(contextMenu.fileId); setContextMenu(null); }}>
             Save
           </button>
           <div style={menuDivider} />
           <button type="button" style={{ ...menuItemStyle, color: dark ? "#ffb0b0" : "#b91c1c" }}
-            onMouseDown={() => { closeTab(contextMenu.tabId); setContextMenu(null); }}>
+            onMouseDown={() => { closeFile(contextMenu.fileId); setContextMenu(null); }}>
             Close
           </button>
         </div>

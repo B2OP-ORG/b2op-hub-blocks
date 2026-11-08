@@ -11,8 +11,8 @@ from lpf2.local import port as _local_port
 from lpf2.devices import hub_led as _hub_led
 from lpf2.devices import accelerometer as _accelerometer
 from lpf2.devices import gyroscope as _gyroscope
-from machine import SDCard
-from typing import Iterable, NoReturn, Optional, Union
+from machine import SDCard, I2C
+from typing import Iterable, NoReturn, Optional
 
 fw_version: str
 """Firmware build version string."""
@@ -201,6 +201,18 @@ class _lcd_module:
         """Send an arbitrary command + optional data payload. For probing panels."""
         ...
 
+    def loop(self) -> None:
+        """Run one LVGL timer-handler cycle.
+
+        Call this repeatedly from a dedicated thread at ~5 ms intervals.
+        The thread must have a stack of at least 24 KB — LVGL glyph
+        rasterisation and GC collection consume significantly more stack
+        than the protocol poll thread.
+
+        ``hub.lcd.init()`` must have been called first.
+        """
+        ...
+
 class _video_module:
     """MJPEG-in-AVI video player on the 160x128 ST7735 LCD.
 
@@ -217,9 +229,9 @@ class _video_module:
         ...
 
     def play_av(self, path: str, *, block: bool = True) -> None:
-        """Play an MJPEG-in-AVI file with embedded PCM audio via NS4168.
+        """Play an MJPEG-in-AVI file with embedded PCM audio via the I2S audio amplifier.
 
-        Only available on boards that have an NS4168 amplifier; on others
+        Only available on boards that have an I2S audio amplifier; on others
         the audio track is silently ignored.
         If ``block=False`` returns immediately.
         """
@@ -235,15 +247,15 @@ class _video_module:
 
 
 class _audio_module:
-    """PCM/WAV audio player and synthesiser via NS4168 I2S Class-D amplifier.
+    """PCM/WAV audio player and synthesiser via on-board I2S audio amplifier.
 
-    Only present on boards where ``hub.board.HAS_NS4168 == 1``.
+    Only present on boards where ``hub.board.HAS_AUDIO == 1``.
     Paths must be absolute (e.g. ``/sd/sound.wav``).
     """
 
     def play(self, path: str, *, rate: int = 44100, bits: int = 16,
              channels: int = 1, block: bool = True) -> None:
-        """Stream a PCM or WAV file to the NS4168.
+        """Stream a PCM or WAV file to the I2S audio amplifier.
 
         WAV files are auto-detected: ``rate``, ``bits``, and ``channels`` are
         read from the file header and the keyword arguments are ignored.
@@ -325,8 +337,8 @@ class _buttons_module:
 
     Level readers (``center``/``up``/``down``/``left``/``right``)
     return the current held state. Callbacks fire on rising edge
-    (release-then-press) inside :meth:`poll`, which the Python main
-    loop must call to drive them.
+    (release-then-press) and are dispatched automatically by the
+    C background task (``hub_main_task``).
     """
 
     def center(self) -> bool:
@@ -370,53 +382,6 @@ class _buttons_module:
         """Unregister the callback for ``name``."""
         ...
 
-    def poll(self) -> None:
-        """Sample all buttons and dispatch pending rising-edge callbacks.
-
-        Must be called from the Python main loop for callbacks to run.
-        """
-        ...
-
-    def _snapshot(self) -> object:
-        """Detach and return the current callback registry (or None if empty),
-        leaving the registry cleared.
-
-        Pair with :meth:`_restore` to swap in a scratch registry for a
-        nested context (e.g. running a user program without letting
-        outer callbacks fire).
-        """
-        ...
-    def _restore(self, snapshot: object) -> None:
-        """Reinstall a registry captured by :meth:`_snapshot`."""
-        ...
-
-class _pwm_module:
-    """Generic PWM driver accessed via logical pins.
-
-    Takes logical-pin values from ``hub.board`` constants (e.g.
-    ``hub.board.LCD_BACKLIGHT_PIN``). The driver dispatches ESP32 pins
-    to LEDC and PCA9685 pins to the chip driver transparently.
-
-    Duty is 12-bit (``0..MAX_DUTY`` = ``0..4095``).
-    """
-
-    MAX_DUTY: int
-    """Maximum duty value (4095; 12-bit resolution)."""
-
-    def configure(self, pin: int, freq_hz: int) -> None:
-        """Configure ``pin`` for PWM at ``freq_hz`` Hz.
-
-        Must be called before :meth:`set` or :meth:`off` on a pin.
-        For PCA9685 pins the prescaler is chip-wide; changing it
-        affects all other PCA9685 channels.
-        """
-        ...
-    def set(self, pin: int, duty: int) -> None:
-        """Set ``pin`` to 12-bit ``duty`` (``0..MAX_DUTY``)."""
-        ...
-    def off(self, pin: int) -> None:
-        """Drive ``pin`` fully off (zero duty)."""
-        ...
 
 class _battery_module:
     """Battery voltage + charging status.
@@ -452,88 +417,32 @@ class _battery_module:
         """True when charger is present and the charge cycle has completed."""
         ...
 
-class _i2c:
-    """Shared internal I2C bus (``Wire1`` on the C++ side).
+class _settings_module:
+    """Persistent hub settings stored in ``/settings.json``.
 
-    Same bus as the PCA9685, SC16IS750 (I2C variant), the BNO085 IMU
-    and the on-board Grove connector. Public API mirrors
-    :class:`machine.I2C` (hardware variant) one-to-one — anything
-    written for ``machine.I2C`` works unchanged.
-
-    The Arduino-ESP32 ``TwoWire`` driver serialises individual
-    transactions with a per-bus mutex, so calls from Python and from
-    the C++ hub tick are safe to interleave at transaction
-    granularity. A second recursive mutex on the Python side keeps
-    compound ops (``readfrom_mem`` = write memaddr + repeated-start
-    read) from being split by another Python caller.
-
-    Do not instantiate — use the pre-built ``hub.i2c`` singleton.
+    All fields are read-writable; call ``save()`` to persist changes.
+    Settings are loaded at startup by ``hub_app_run()``.
     """
 
-    def init(
-        self,
-        *,
-        scl: Optional[int] = None,
-        sda: Optional[int] = None,
-        freq: int = -1,
-    ) -> None:
-        """Re-configure the bus.
+    allow_full_fs: bool
+    """If ``True`` the file browser root is ``/``; otherwise ``/sd``."""
+    usb_msc: bool
+    """If ``True`` USB Mass Storage Class is started on boot."""
+    ble_adv: bool
+    """If ``True`` BLE advertising starts on boot (default ``True``)."""
+    show_batt_pct: bool
+    """If ``True`` the menu header shows battery percentage."""
 
-        ``scl`` / ``sda`` are fixed to the hub's internal I2C pins;
-        passing a different value raises :class:`ValueError`. ``freq``
-        (Hz) is applied via ``TwoWire::setClock``.
-        """
+    def save(self) -> None:
+        """Write current settings to ``/settings.json``."""
         ...
 
-    def scan(self) -> list[int]:
-        """Return the 7-bit addresses that responded to a probe (``0x08``..``0x77``)."""
-        ...
-
-    def readfrom(self, addr: int, nbytes: int, stop: bool = True) -> bytes:
-        """Read ``nbytes`` from ``addr``. Raises ``OSError(ENODEV)`` on NACK."""
-        ...
-
-    def readfrom_into(self, addr: int, buf: bytearray, stop: bool = True) -> None:
-        """Read ``len(buf)`` bytes from ``addr`` into ``buf``."""
-        ...
-
-    def writeto(self, addr: int, buf: bytes, stop: bool = True) -> int:
-        """Write ``buf`` to ``addr``. Returns the number of bytes written."""
-        ...
-
-    def writevto(
-        self, addr: int, vector: Iterable[bytes], stop: bool = True
-    ) -> int:
-        """Write a scatter/gather ``vector`` of buffers in one transaction."""
-        ...
-
-    def readfrom_mem(
-        self, addr: int, memaddr: int, nbytes: int, *, addrsize: int = 8
-    ) -> bytes:
-        """Read ``nbytes`` from register ``memaddr`` on ``addr``.
-
-        ``addrsize`` is 8 or 16 (big-endian on the wire). Uses a
-        repeated-start between the memaddr write and the read.
-        """
-        ...
-
-    def readfrom_mem_into(
-        self, addr: int, memaddr: int, buf: bytearray, *, addrsize: int = 8
-    ) -> None:
-        """As :meth:`readfrom_mem` but into a pre-allocated ``buf``."""
-        ...
-
-    def writeto_mem(
-        self, addr: int, memaddr: int, buf: bytes, *, addrsize: int = 8
-    ) -> None:
-        """Write ``buf`` to register ``memaddr`` on ``addr``."""
-        ...
 
 class _board_module:
     """1:1 mirror of the board's ``Board.h`` via ``BOARD_INT_EXPORTS`` /
     ``BOARD_STR_EXPORTS``. All integer constants are encoded as logical
     pins (``MAKE_PIN``) or logical buses (``MAKE_BUS``); use
-    ``hub.board.*`` values with ``hub.pwm`` / ``hub.i2c`` directly.
+    ``hub.board.*`` values with ``hub.i2c`` directly.
     Attributes set to ``0`` / ``PIN_NONE`` on this board are still
     present but meaningless.
     """
@@ -611,6 +520,10 @@ class _board_module:
     # LCD
     HAS_LCD: int
     LCD_DC_PIN: int
+
+    # Audio amplifier
+    HAS_AUDIO: int
+    AUDIO_BUS: int
     LCD_TE_PIN: int
     LCD_RST_PIN: int
     LCD_CS_PIN: int
@@ -699,15 +612,20 @@ lcd: _lcd_module
 video: _video_module
 """MJPEG-in-AVI video player (see :class:`_video_module`). Only present when board has an LCD."""
 audio: _audio_module
-"""Raw-PCM audio player via NS4168 I2S amp (see :class:`_audio_module`). Only present when board has NS4168."""
+"""Raw-PCM audio player via on-board I2S audio amplifier (see :class:`_audio_module`). Only present on boards where ``hub.board.HAS_AUDIO == 1``."""
 buttons: _buttons_module
 """Button API (see :class:`_buttons_module`)."""
 battery: _battery_module
 """Battery voltage + charging status (see :class:`_battery_module`)."""
-pwm: _pwm_module
-"""On-board PCA9685 PWM driver (see :class:`_pwm_module`)."""
-i2c: _i2c
-"""Shared internal I2C bus (Grove + on-board devices). See :class:`_i2c`."""
+settings: _settings_module
+"""Persistent hub settings (see :class:`_settings_module`)."""
+i2c: I2C
+"""External connector I2C bus (may be shared with on-board devices).
+
+Same object as ``machine.I2C(hub.board.HUB_I2C_MODULE_BUS)`` — a pre-initialised :class:`machine.I2C`
+singleton. Pins are fixed by the board; ``scl``/``sda`` kwargs to
+``hub.i2c.init()`` are accepted but ignored.
+"""
 
 def sd_card() -> Optional[SDCard]:
     """Return the mounted ``machine.SDCard`` instance, or ``None`` if no SD card is present.
@@ -738,6 +656,15 @@ def set_usb_msc(enabled: bool) -> None:
     """
     ...
 
+def exit() -> NoReturn:
+    """Exit the currently running user program cleanly.
+
+    Raises ``SystemExit`` inside the program. The C runner catches it and
+    shows a "Done" result screen, identical to the program returning
+    normally. Use this instead of ``raise SystemExit`` for clarity.
+    """
+    ...
+
 def powerOff() -> NoReturn:
     """Turn the hub off immediately. Does not return.
 
@@ -751,130 +678,4 @@ def powerOff() -> NoReturn:
     """
     ...
 
-def set_framed_output(enabled: bool) -> None:
-    """Enable/disable C-level stdout framing (`#FR:OUT <len>\\n<bytes>`).
 
-    When enabled, every ``mp_hal_stdout_tx_strn`` call is wrapped so the host
-    protocol parser can separate program output from binary frames. Used by
-    the HubProtocol layer since ``sys.stdout`` is an immutable dummy in this
-    build and can't be replaced from Python.
-    """
-    ...
-
-def raw_write(buf: bytes) -> int:
-    """Write bytes to stdout bypassing the framing wrapper. Returns bytes written.
-
-    Flushes any pending framed output first so raw bytes never interleave
-    inside a framed payload.
-    """
-    ...
-
-def flush_output() -> None:
-    """Flush any buffered framed stdout data as a `#FR:OUT` frame."""
-    ...
-
-def set_frame_sink(cb: Optional[Callable[[bytes], None]]) -> None:
-    """Register a callback that mirrors framed and raw stdout bytes elsewhere.
-
-    Called from ``mp_hal_stdout_tx_strn`` under the GIL after every framed
-    flush and every :func:`raw_write`. Used to forward the same byte stream
-    to BLE NUS (since ``os.dupterm`` only exposes slot 0 = REPL on this port).
-    Pass ``None`` to detach. Exceptions inside the callback are swallowed.
-    """
-    ...
-
-def _ble_drain() -> None:
-    """Pump the NimBLE event queue from mp_task without going through the scheduler.
-
-    Called by ``ble_uart.read_rx()`` inside ``_read_exact`` while the MicroPython
-    scheduler is locked, so BLE IRQ callbacks (which arrive via ``mp_sched_schedule``)
-    can still be serviced.
-    """
-    ...
-
-def ble_conn_update(conn_handle: int, min_ms: int, max_ms: int) -> None:
-    """Request a BLE connection parameter update from the peripheral side.
-
-    Calls NimBLE ``ble_gap_update_params``.  The central may accept or ignore
-    the request — no exception is raised either way.
-
-    Args:
-        conn_handle: BLE connection handle (from ``_IRQ_CENTRAL_CONNECT`` /
-            ``_IRQ_MTU_EXCHANGED``).
-        min_ms: Minimum desired connection interval in milliseconds.
-        max_ms: Maximum desired connection interval in milliseconds.
-    """
-    ...
-
-def ble_set_phy_2m(conn_handle: int) -> None:
-    """Request a PHY update to LE 2M on an active BLE connection.
-
-    Calls NimBLE ``ble_gap_set_prefered_le_phy`` with ``BLE_GAP_LE_PHY_2M_MASK``
-    for both TX and RX.  Doubles raw link throughput compared to the default 1M
-    PHY.  The central may ignore the request.
-
-    Args:
-        conn_handle: BLE connection handle (from ``_IRQ_CENTRAL_CONNECT``).
-    """
-    ...
-
-_PollName = Literal["poll"]
-_PollFn = Callable[[], None]
-
-@overload
-def on(name: _PollName) -> Callable[[_PollFn], _PollFn]:
-    """Decorator form: ``@hub.on("poll")``."""
-    ...
-
-@overload
-def on(name: _PollName, fn: _PollFn) -> _PollFn:
-    """Direct form: ``hub.on("poll", my_fn)``."""
-    ...
-
-def on(name: _PollName, fn: Optional[_PollFn] = None) -> Union[Callable[[_PollFn], _PollFn], _PollFn]:
-    """Register a callback for a firmware event. Currently only ``"poll"`` is supported.
-
-    ``"poll"`` callbacks are scheduled on mp_task via ``mp_sched_schedule`` every
-    ~20 ms by the C firmware loop. They run even while a user script is executing.
-    """
-    ...
-
-def _request_stop() -> None:
-    """Schedule a KeyboardInterrupt on the MicroPython task.
-
-    Used by the protocol STOP frame handler to interrupt a running script
-    from outside (e.g. host sends STOP over USB/BLE). The interrupt fires
-    at the next VM checkpoint; the runner catches it as a clean exit.
-    Sets an internal flag so hub_poll_c re-fires KI every scheduler cycle
-    until _clear_stop_request() is called, preventing FIFO callbacks (e.g.
-    BLE IRQ) from permanently consuming the interrupt.
-    """
-    ...
-
-def _clear_stop_request() -> None:
-    """Clear the stop-request flag set by _request_stop().
-
-    Called by runner.run_program() in its finally block after exec() returns,
-    so hub_poll_c stops re-firing KeyboardInterrupt once the program has ended.
-    """
-    ...
-
-def _sched_lock() -> None:
-    """Lock the MicroPython scheduler (calls mp_sched_lock).
-
-    Paired with _sched_unlock(). Call in a finally block after _sched_unlock()
-    to restore the scheduler state expected by the outer mp_sched_run_pending
-    caller (e.g. after exec() returns in runner.run_program).
-    """
-    ...
-
-def _sched_unlock() -> None:
-    """Unlock the MicroPython scheduler if currently locked (calls mp_sched_unlock).
-
-    No-op if the scheduler is not locked. Call before exec(user_code) in
-    runner.run_program so that hub_poll static nodes can fire at VM branch
-    points during user script execution, enabling USB STOP delivery.
-    """
-    ...
-
-# --- shim overlay (scripts/stubs-overlay) ------------------------

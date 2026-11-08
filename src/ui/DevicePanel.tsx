@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useApp } from "../state/store";
+import { usePalette } from "./theme";
 import { CmdId, ParseReply, PORT_IDX, type PortIdx } from "../device/cmdHelpers";
 
 const PORTS: Array<{ name: string; idx: PortIdx }> = [
@@ -53,7 +54,8 @@ const BASE: React.CSSProperties = {
 export function DevicePanel() {
   const device = useApp((s) => s.device);
   const liveMode = useApp((s) => s.project.settings.liveMode);
-  const setDevicePanelOpen = useApp((s) => s.setDevicePanelOpen);
+  const p = usePalette();
+  const updateSettings = useApp((s) => s.updateSettings);
   const batteryMv = useApp((s) => s.batteryMv);
   const batteryPct = useApp((s) => s.batteryPct);
   const buttonState = useApp((s) => s.buttonState);
@@ -142,45 +144,46 @@ export function DevicePanel() {
   const battV = (batteryMv / 1000).toFixed(2);
   const bColor = batteryColor(batteryPct);
 
+  const heading = p.dark ? "#4cc3ff" : "#0e7490";
+  const valueColor = p.dark ? "#a0d8e8" : "#0b3b48";
+  const sep = p.dark ? "#132a34" : "#cfe7ee";
+
   return (
     <div style={{
       ...BASE,
-      width: 300, height: "100%",
-      background: "#071018", borderLeft: "1px solid #0e7490",
-      color: "#dff5fb", display: "flex", flexDirection: "column",
+      width: "100%", height: "100%",
+      background: p.dark ? "#071018" : p.panelBg,
+      color: p.text, display: "flex", flexDirection: "column", minHeight: 0,
     }}>
-      {/* Header */}
-      <div style={{
-        padding: "6px 12px", background: "#0b3b48", borderBottom: "1px solid #0e7490",
-        display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: 700,
-      }}>
-        <span>Device</span>
-        <button type="button" onClick={() => setDevicePanelOpen(false)} style={{
-          background: "transparent", color: "#dff5fb", border: "1px solid #0e7490",
-          padding: "2px 8px", cursor: "pointer", borderRadius: 4, fontWeight: 600, fontSize: 12,
-        }}>✕</button>
-      </div>
-
       {!device && (
-        <div style={{ padding: 12, color: "#4a7080" }}>No device connected</div>
+        <div style={{ padding: 12, color: p.dimText }}>No hub connected.</div>
       )}
 
       {device && !liveMode && (
-        <div style={{ padding: 12, color: "#4a7080" }}>Enable live mode to poll device</div>
+        <div style={{ padding: 12, color: p.dimText, lineHeight: 1.5 }}>
+          Live device data needs live mode.{" "}
+          <button
+            type="button"
+            onClick={() => updateSettings({ liveMode: true })}
+            style={{ background: p.accent, color: "#fff", border: "none", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontWeight: 600 }}
+          >
+            Enable live mode
+          </button>
+        </div>
       )}
 
       {device && liveMode && (
         <div style={{ flex: 1, overflowY: "auto" }}>
 
           {/* Battery */}
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid #132a34" }}>
-            <div style={{ color: "#4cc3ff", marginBottom: 6, fontWeight: 600 }}>Battery</div>
+          <div style={{ padding: "10px 12px", borderBottom: `1px solid ${sep}` }}>
+            <div style={{ color: heading, marginBottom: 6, fontWeight: 600 }}>Battery</div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 11 }}>
-              <span style={{ color: "#a0d8e8" }}>{battV} V</span>
+              <span style={{ color: valueColor }}>{battV} V</span>
               <span style={{ color: bColor, fontWeight: 700 }}>{batteryPct}%</span>
             </div>
             {/* Slider track */}
-            <div style={{ position: "relative", height: 8, background: "#132a34", borderRadius: 4 }}>
+            <div style={{ position: "relative", height: 8, background: sep, borderRadius: 4 }}>
               <div style={{
                 position: "absolute", left: 0, top: 0, bottom: 0,
                 width: `${batteryPct}%`,
@@ -201,8 +204,8 @@ export function DevicePanel() {
           </div>
 
           {/* Buttons */}
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid #132a34" }}>
-            <div style={{ color: "#4cc3ff", marginBottom: 8, fontWeight: 600 }}>Buttons</div>
+          <div style={{ padding: "10px 12px", borderBottom: `1px solid ${sep}` }}>
+            <div style={{ color: heading, marginBottom: 8, fontWeight: 600 }}>Buttons</div>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, width: 120 }}>
                 <div />
@@ -219,8 +222,8 @@ export function DevicePanel() {
           </div>
 
           {/* Orientation */}
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid #132a34" }}>
-            <div style={{ color: "#4cc3ff", marginBottom: 6, fontWeight: 600 }}>Orientation</div>
+          <div style={{ padding: "10px 12px", borderBottom: `1px solid ${sep}` }}>
+            <div style={{ color: heading, marginBottom: 6, fontWeight: 600 }}>Orientation</div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <AxisVal label="P" value={orientation.pitch} color="#f97316" />
               <AxisVal label="Y" value={orientation.yaw}   color="#a855f7" />
@@ -230,7 +233,7 @@ export function DevicePanel() {
 
           {/* Ports */}
           <div style={{ padding: "10px 12px" }}>
-            <div style={{ color: "#4cc3ff", marginBottom: 8, fontWeight: 600 }}>Ports</div>
+            <div style={{ color: heading, marginBottom: 8, fontWeight: 600 }}>Ports</div>
             {PORTS.map(({ name }) => {
               const vals = sensorValues[name];
               const type = deviceType[name];
@@ -239,9 +242,9 @@ export function DevicePanel() {
               const label = connected ? (DEVICE_NAMES[type] ?? `0x${type.toString(16).padStart(4, "0")}`) : "(—)";
               return (
                 <div key={name} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "baseline" }}>
-                  <span style={{ color: "#4cc3ff", minWidth: 38, fontWeight: 600 }}>{name}</span>
+                  <span style={{ color: heading, minWidth: 38, fontWeight: 600 }}>{name}</span>
                   <span style={{ color, flex: 1, marginLeft: 6, fontSize: 11 }}>{label}</span>
-                  <span style={{ color: "#a0d8e8", textAlign: "right", fontSize: 11 }}>
+                  <span style={{ color: valueColor, textAlign: "right", fontSize: 11 }}>
                     {vals && vals.length > 0
                       ? vals.length === 1
                         ? vals[0].toFixed(1)

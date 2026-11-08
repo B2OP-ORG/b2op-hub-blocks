@@ -22,6 +22,7 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x17  MV         [src_len:u8][src][dst_len:u8][dst] → OK
  *   0x18  CP         [src_len:u8][src][dst_len:u8][dst] → OK
  *   0x19  RM         path:utf8                 → OK
+ *   0x1A  MKDIR      path:utf8                 → OK  (mkdir -p; OK if already a dir)
  *
  * Device → Host:
  *   0x20  HELLO      [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
@@ -49,6 +50,7 @@ export const KIND = {
   MV:         0x17,
   CP:         0x18,
   RM:         0x19,
+  MKDIR:      0x1A,
   HELLO:      0x20,
   OK:         0x21,
   ERR:        0x22,
@@ -179,6 +181,7 @@ export interface IHubProtocol {
   mv(src: string, dst: string, timeoutMs?: number): Promise<void>;
   cp(src: string, dst: string, timeoutMs?: number): Promise<void>;
   rm(path: string, timeoutMs?: number): Promise<void>;
+  mkdir(path: string, timeoutMs?: number): Promise<void>;
   /** Execute Python source in REPL mode on device. STDOUT arrives via stdout sinks. */
   exec(code: string, timeoutMs?: number): Promise<FrameReply>;
   /** Send a binary CMD frame. Reply is KIND_OK or KIND_DATA. */
@@ -428,6 +431,11 @@ export class HubProtocolV1_0_0 implements IHubProtocol {
   async rm(path: string, timeoutMs = 3000): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
+  }
+
+  async mkdir(path: string, timeoutMs = 3000): Promise<void> {
+    const reply = await this.sendRequest(KIND.MKDIR, 0, enc.encode(path), { timeoutMs });
+    if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MKDIR failed");
   }
 
   async exec(code: string, timeoutMs = 10000): Promise<FrameReply> {

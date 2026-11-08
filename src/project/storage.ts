@@ -1,215 +1,257 @@
 import type { AnyProject, EditorSettings, MultiFileProject, ProjectFile } from "./format";
-import { parseProject, DEFAULT_EDITOR_SETTINGS, DEFAULT_SETTINGS } from "./format";
-import type { Tab } from "../state/store";
-import { makeTab } from "../state/store";
+import { parseProject, mergeEditorSettings, DEFAULT_EDITOR_SETTINGS, DEFAULT_SETTINGS, normalizeProject, withBlocksHeader } from "./format";
 import { sanitizeFilename } from "../utils/sanitize";
 
+// ── Keys ──────────────────────────────────────────────────────────────────────
+
+const KEY_PROJECT_INDEX = "b2op.projects";
+const projectKey = (id: string) => `b2op.project.${id}`;
+const KEY_LAST_DEVICE = "b2op.lastDeviceName";
+const KEY_EDITOR_SETTINGS = "b2op.editorSettings";
+const KEY_SIDEBAR = "b2op.sidebar";
+
+// Legacy keys (read-only, for migration; never deleted).
 const KEY_AUTOSAVE = "b2op.autosave";
 const KEY_TABS = "b2op.tabs";
 const KEY_PROJECT_V3 = "b2op.project.v3";
 const KEY_OPEN_FILES = "b2op.openFiles";
-const KEY_LAST_DEVICE = "b2op.lastDeviceName";
-const KEY_EDITOR_SETTINGS = "b2op.editorSettings";
 
-interface SavedTabs {
+// ── Project index ─────────────────────────────────────────────────────────────
+
+export interface ProjectMeta {
+  id: string;
+  title: string;
+  updatedAt: string;
+  fileCount: number;
+}
+
+interface ProjectIndex {
   version: 1;
-  tabs: Array<{ project: AnyProject; devicePath?: string }>;
-  activeIndex: number;
+  activeProjectId: string;
+  projects: ProjectMeta[];
 }
 
-export function loadSavedTabs(): { tabs: Tab[]; activeTabId: string } | null {
-  try {
-    // Try new multi-tab format first
-    const raw = localStorage.getItem(KEY_TABS);
-    if (raw) {
-      const saved = JSON.parse(raw) as SavedTabs;
-      if (saved.version === 1 && Array.isArray(saved.tabs) && saved.tabs.length > 0) {
-        const tabs: Tab[] = [];
-        for (const entry of saved.tabs) {
-          const result = parseProject(entry.project);
-          if (result && !result.stale) {
-            tabs.push(makeTab(result.project, entry.devicePath));
-          }
-        }
-        if (tabs.length > 0) {
-          const activeIndex = Math.min(saved.activeIndex, tabs.length - 1);
-          return { tabs, activeTabId: tabs[activeIndex].id };
-        }
-      }
-    }
-
-    // Migrate old single-project autosave
-    const legacy = localStorage.getItem(KEY_AUTOSAVE);
-    if (legacy) {
-      const result = parseProject(JSON.parse(legacy));
-      if (result && !result.stale) {
-        const tab = makeTab(result.project);
-        return { tabs: [tab], activeTabId: tab.id };
-      }
-    }
-  } catch {
-    // corrupt storage — fall through
-  }
-  return null;
+export function metaOf(p: MultiFileProject): ProjectMeta {
+  return { id: p.id, title: p.title, updatedAt: p.updatedAt, fileCount: p.files.length };
 }
 
-export function saveTabs(tabs: Tab[], activeTabId: string): void {
-  try {
-    const activeIndex = Math.max(0, tabs.findIndex((t) => t.id === activeTabId));
-    const saved: SavedTabs = {
-      version: 1,
-      tabs: tabs.map((t) => ({ project: t.project, devicePath: t.devicePath })),
-      activeIndex,
-    };
-    localStorage.setItem(KEY_TABS, JSON.stringify(saved));
-  } catch {
-    // storage quota — silent
-  }
+export interface LoadedWorkspace {
+  projects: ProjectMeta[];
+  active: MultiFileProject;
 }
 
-// Keep legacy exports so any remaining callers compile
-export function loadAutosave(): AnyProject | null {
+function readIndex(): ProjectIndex | null {
   try {
-    const raw = localStorage.getItem(KEY_AUTOSAVE);
+    const raw = localStorage.getItem(KEY_PROJECT_INDEX);
     if (!raw) return null;
-    const result = parseProject(JSON.parse(raw));
-    if (!result || result.stale) return null;
-    return result.project;
+    const idx = JSON.parse(raw) as ProjectIndex;
+    if (idx.version !== 1 || !Array.isArray(idx.projects)) return null;
+    return idx;
   } catch {
     return null;
   }
 }
 
-export function saveAutosave(project: AnyProject): void {
+function writeIndex(projects: ProjectMeta[], activeProjectId: string): void {
   try {
-    localStorage.setItem(KEY_AUTOSAVE, JSON.stringify(project));
+    const idx: ProjectIndex = { version: 1, activeProjectId, projects };
+    localStorage.setItem(KEY_PROJECT_INDEX, JSON.stringify(idx));
+  } catch { /* quota */ }
+}
+
+export function loadProject(id: string): MultiFileProject | null {
+  try {
+    const raw = localStorage.getItem(projectKey(id));
+    if (!raw) return null;
+    return normalizeProject(JSON.parse(raw));
   } catch {
-    // storage quota — silent
+    return null;
   }
 }
 
-export function loadLastDeviceName(): string | null {
-  return localStorage.getItem(KEY_LAST_DEVICE);
+/** Persist one project. Returns false when storage is full / unavailable. */
+export function saveProject(p: MultiFileProject): boolean {
+  try {
+    localStorage.setItem(projectKey(p.id), JSON.stringify(p));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export function saveLastDeviceName(name: string): void {
-  localStorage.setItem(KEY_LAST_DEVICE, name);
+export function removeProject(id: string): void {
+  try { localStorage.removeItem(projectKey(id)); } catch { /* ignore */ }
 }
 
-export interface LoadedProject {
-  mfp: MultiFileProject;
-  openFileIds: string[];
-  activeFileId: string;
+export function saveProjectIndex(projects: ProjectMeta[], activeProjectId: string): void {
+  writeIndex(projects, activeProjectId);
 }
 
-export function loadMultiFileProject(): LoadedProject | null {
+/**
+ * Load the project list and the active project. Migrates from the older
+ * single-project storage formats on first run. Returns null when nothing is
+ * stored (fresh install) — the caller then creates a default project.
+ */
+export function loadWorkspace(): LoadedWorkspace | null {
+  const idx = readIndex();
+  if (idx && idx.projects.length > 0) {
+    // Drop index entries whose data is gone.
+    const projects = idx.projects.filter((m) => {
+      try { return localStorage.getItem(projectKey(m.id)) != null; } catch { return false; }
+    });
+    const activeId = projects.some((m) => m.id === idx.activeProjectId) ? idx.activeProjectId : projects[0]?.id;
+    const active = activeId ? loadProject(activeId) : null;
+    if (active) return { projects, active };
+  }
+
+  const migrated = migrateLegacy();
+  if (!migrated) return null;
+  saveProject(migrated);
+  const projects = [metaOf(migrated)];
+  writeIndex(projects, migrated.id);
+  return { projects, active: migrated };
+}
+
+interface SavedTabs {
+  version: 1;
+  tabs: Array<{ project: unknown; devicePath?: string }>;
+  activeIndex: number;
+}
+
+/** Build a project from the pre-multi-project storage keys, if any exist. */
+export function migrateLegacy(): MultiFileProject | null {
   try {
     const raw = localStorage.getItem(KEY_PROJECT_V3);
     if (raw) {
-      const mfp = JSON.parse(raw) as MultiFileProject;
-      if (mfp.format === "b2op-hub-v3" && Array.isArray(mfp.files) && mfp.files.length > 0) {
-        let openFileIds: string[] = [];
-        let activeFileId = mfp.files[0].id;
+      const mfp = normalizeProject(JSON.parse(raw));
+      if (mfp && mfp.files.length > 0) {
         try {
           const openRaw = localStorage.getItem(KEY_OPEN_FILES);
           if (openRaw) {
             const saved = JSON.parse(openRaw) as { openFileIds: string[]; activeFileId: string };
-            const validOpen = saved.openFileIds.filter((id) => mfp.files.some((f) => f.id === id));
-            if (validOpen.length > 0) {
-              openFileIds = validOpen;
-              activeFileId = mfp.files.find((f) => f.id === saved.activeFileId) ? saved.activeFileId : validOpen[0];
+            const valid = (saved.openFileIds ?? []).filter((id) => mfp.files.some((f) => f.id === id));
+            if (valid.length > 0) {
+              mfp.openFileIds = valid;
+              mfp.activeFileId = valid.includes(saved.activeFileId) ? saved.activeFileId : valid[0];
             }
           }
         } catch { /* corrupt */ }
-        if (openFileIds.length === 0) openFileIds = [activeFileId];
-        return { mfp, openFileIds, activeFileId };
+        return mfp;
       }
     }
 
-    // Migrate from old tabs format
+    const files: ProjectFile[] = [];
+    let title = "Untitled";
+    let settings = { ...DEFAULT_SETTINGS };
     const tabsRaw = localStorage.getItem(KEY_TABS);
     if (tabsRaw) {
       const saved = JSON.parse(tabsRaw) as SavedTabs;
-      if (saved.version === 1 && Array.isArray(saved.tabs) && saved.tabs.length > 0) {
-        const files: ProjectFile[] = [];
+      if (saved.version === 1 && Array.isArray(saved.tabs)) {
         for (const entry of saved.tabs) {
           const result = parseProject(entry.project);
           if (!result) continue;
-          const p = result.project;
-          const name = sanitizeFilename(p.title) + ".py";
-          const content = p.type === "blocks"
-            ? `# __blocks__: ${JSON.stringify(p.workspace)}\n`
-            : p.source;
-          files.push({ id: crypto.randomUUID(), name, content });
-        }
-        if (files.length > 0) {
-          const activeIndex = Math.min(saved.activeIndex, files.length - 1);
-          const mfp: MultiFileProject = {
-            format: "b2op-hub-v3",
-            version: "3.0.0",
-            title: "Untitled",
-            createdAt: new Date().toISOString(),
-            settings: { ...DEFAULT_SETTINGS },
-            files,
-          };
-          const activeFileId = files[activeIndex].id;
-          return { mfp, openFileIds: [activeFileId], activeFileId };
+          files.push(legacyToFile(result.project));
         }
       }
     }
-
-    // Migrate old single autosave
-    const legacy = localStorage.getItem(KEY_AUTOSAVE);
-    if (legacy) {
-      const result = parseProject(JSON.parse(legacy));
-      if (result && !result.stale) {
-        const p = result.project;
-        const name = sanitizeFilename(p.title) + ".py";
-        const content = p.type === "blocks"
-          ? `# __blocks__: ${JSON.stringify(p.workspace)}\n`
-          : p.source;
-        const file: ProjectFile = { id: crypto.randomUUID(), name, content };
-        const mfp: MultiFileProject = {
-          format: "b2op-hub-v3",
-          version: "3.0.0",
-          title: p.title,
-          createdAt: new Date().toISOString(),
-          settings: p.settings,
-          files: [file],
-        };
-        return { mfp, openFileIds: [file.id], activeFileId: file.id };
+    if (files.length === 0) {
+      const legacy = localStorage.getItem(KEY_AUTOSAVE);
+      if (legacy) {
+        const result = parseProject(JSON.parse(legacy));
+        if (result && !result.stale) {
+          files.push(legacyToFile(result.project));
+          title = result.project.title;
+          settings = result.project.settings;
+        }
       }
     }
-  } catch { /* corrupt */ }
-  return null;
+    if (files.length === 0) return null;
+    // De-duplicate names.
+    const seen = new Set<string>();
+    for (const f of files) {
+      let n = f.name, i = 1;
+      while (seen.has(n)) n = f.name.replace(/\.py$/, `_${i++}.py`);
+      f.name = n;
+      seen.add(n);
+    }
+    return normalizeProject({
+      format: "b2op-hub-v3",
+      version: "3.0.0",
+      title,
+      settings,
+      files,
+      openFileIds: [files[0].id],
+      activeFileId: files[0].id,
+    });
+  } catch {
+    return null;
+  }
 }
 
-export function saveMultiFileProject(mfp: MultiFileProject, openFileIds: string[], activeFileId: string): void {
+function legacyToFile(p: AnyProject): ProjectFile {
+  const name = sanitizeFilename(p.title) + ".py";
+  return p.type === "blocks"
+    ? { id: crypto.randomUUID(), name, content: withBlocksHeader(p.workspace, ""), mode: "blocks" }
+    : { id: crypto.randomUUID(), name, content: p.source, mode: "python" };
+}
+
+// ── Misc ──────────────────────────────────────────────────────────────────────
+
+export function loadLastDeviceName(): string | null {
+  try { return localStorage.getItem(KEY_LAST_DEVICE); } catch { return null; }
+}
+
+export function saveLastDeviceName(name: string): void {
+  try { localStorage.setItem(KEY_LAST_DEVICE, name); } catch { /* ignore */ }
+}
+
+// ── Sidebar layout (per-browser UI state, not a setting) ─────────────────────
+
+export interface SidebarLayout {
+  activeTab: string;
+  collapsed: boolean;
+  width: number;
+}
+
+export const DEFAULT_SIDEBAR_WIDTH = 240;
+
+export function loadSidebarLayout(): SidebarLayout {
+  const def: SidebarLayout = { activeTab: "explorer", collapsed: false, width: DEFAULT_SIDEBAR_WIDTH };
   try {
-    localStorage.setItem(KEY_PROJECT_V3, JSON.stringify(mfp));
-    localStorage.setItem(KEY_OPEN_FILES, JSON.stringify({ openFileIds, activeFileId }));
-  } catch { /* quota */ }
+    const raw = localStorage.getItem(KEY_SIDEBAR);
+    if (!raw) return def;
+    const p = JSON.parse(raw) as Partial<SidebarLayout>;
+    return {
+      activeTab: typeof p.activeTab === "string" ? p.activeTab : def.activeTab,
+      collapsed: typeof p.collapsed === "boolean" ? p.collapsed : def.collapsed,
+      width: typeof p.width === "number" && Number.isFinite(p.width) ? p.width : def.width,
+    };
+  } catch {
+    return def;
+  }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+export function saveSidebarLayout(l: SidebarLayout): void {
+  try { localStorage.setItem(KEY_SIDEBAR, JSON.stringify(l)); } catch { /* ignore */ }
+}
+
+// ── Editor settings ───────────────────────────────────────────────────────────
 
 export function loadEditorSettings(): EditorSettings {
   try {
     const raw = localStorage.getItem(KEY_EDITOR_SETTINGS);
-    if (raw) {
-      return { ...DEFAULT_EDITOR_SETTINGS, ...JSON.parse(raw) };
-    }
+    if (raw) return mergeEditorSettings(JSON.parse(raw));
     // Migrate: pull known fields from the first saved project's settings if present.
     const tabsRaw = localStorage.getItem(KEY_TABS) ?? localStorage.getItem(KEY_AUTOSAVE);
     if (tabsRaw) {
       const parsed = JSON.parse(tabsRaw);
       const src = (parsed?.tabs?.[0]?.project?.settings ?? parsed?.settings) as Partial<EditorSettings> | undefined;
-      if (src) return { ...DEFAULT_EDITOR_SETTINGS, ...src };
+      if (src) return mergeEditorSettings(src);
     }
   } catch {
     // corrupt storage
   }
-  return { ...DEFAULT_EDITOR_SETTINGS };
+  return mergeEditorSettings(DEFAULT_EDITOR_SETTINGS);
 }
 
 export function saveEditorSettings(settings: EditorSettings): void {

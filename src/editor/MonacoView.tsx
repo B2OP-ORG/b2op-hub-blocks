@@ -8,7 +8,9 @@ import * as monacoApi from "monaco-editor/esm/vs/editor/editor.api.js";
 import type * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { useLspService } from "./lsp/useLspClient";
-import { EDITOR_THEME, ensureShiki } from "./shikiSetup";
+import { editorTheme, ensureShiki } from "./shikiSetup";
+import { useApp } from "../state/store";
+import type { MonacoSettings } from "../project/format";
 import { registerPythonLanguageConfig } from "./pythonLanguage";
 
 (self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
@@ -21,14 +23,56 @@ const monacoInstance = monacoApi as unknown as typeof monaco;
 
 loader.config({ monaco: monacoInstance });
 registerPythonLanguageConfig(monacoInstance);
-// Resolves to the theme to use; falls back to vs-dark if Shiki fails to load.
-const themeReady: Promise<string> = ensureShiki(monacoInstance).then(
-  () => EDITOR_THEME,
+// Resolves to whether Shiki themes are available; falls back to vs/vs-dark.
+const themeReady: Promise<boolean> = ensureShiki(monacoInstance).then(
+  () => true,
   (err) => {
     console.error("[editor] Shiki highlighting failed to load", err);
-    return "vs-dark";
+    return false;
   },
 );
+
+/** Editor-level options derived from the user's settings. */
+export function monacoEditorOptions(m: MonacoSettings): monaco.editor.IEditorOptions {
+  return {
+    fontSize: m.fontSize,
+    ...(m.fontFamily.trim() ? { fontFamily: m.fontFamily } : {}),
+    fontLigatures: m.fontLigatures,
+    lineHeight: m.lineHeight,
+    wordWrap: m.wordWrap,
+    wordWrapColumn: m.wordWrapColumn,
+    lineNumbers: m.lineNumbers,
+    minimap: { enabled: m.minimap, side: m.minimapSide },
+    renderWhitespace: m.renderWhitespace,
+    renderLineHighlight: m.renderLineHighlight,
+    cursorStyle: m.cursorStyle,
+    cursorBlinking: m.cursorBlinking,
+    cursorSmoothCaretAnimation: m.cursorSmoothCaretAnimation,
+    smoothScrolling: m.smoothScrolling,
+    scrollBeyondLastLine: m.scrollBeyondLastLine,
+    mouseWheelZoom: m.mouseWheelZoom,
+    bracketPairColorization: { enabled: m.bracketPairColorization },
+    guides: { bracketPairs: m.bracketPairGuides, indentation: m.indentationGuides },
+    autoClosingBrackets: m.autoClosingBrackets,
+    autoClosingQuotes: m.autoClosingQuotes,
+    folding: m.folding,
+    stickyScroll: { enabled: m.stickyScroll },
+    quickSuggestions: m.quickSuggestions,
+    suggest: { showStatusBar: true, preview: m.suggestPreview },
+    acceptSuggestionOnEnter: m.acceptSuggestionOnEnter,
+    parameterHints: { enabled: m.parameterHints },
+  };
+}
+
+/** Model-level (indentation) options. */
+function applyModelOptions(model: monaco.editor.ITextModel | null, m: MonacoSettings) {
+  if (!model) return;
+  if (m.detectIndentation) {
+    model.detectIndentation(m.insertSpaces, m.tabSize);
+  } else {
+    model.updateOptions({ tabSize: m.tabSize, indentSize: m.tabSize, insertSpaces: m.insertSpaces });
+  }
+}
 
 function expandSuggestDetails(editor: monaco.editor.IStandaloneCodeEditor): void {
   const controller = editor.getContribution("editor.contrib.suggestController") as unknown as {
@@ -62,7 +106,11 @@ interface Props {
 export function MonacoView({ value, language = "python", readOnly = false, onChange, lspUri }: Props) {
   const [monacoNs, setMonacoNs] = useState<Monaco | null>(null);
   const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
-  const [theme, setTheme] = useState<string | null>(null);
+  const [shikiOk, setShikiOk] = useState<boolean | null>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const settings = useApp((s) => s.editorSettings.monaco);
+  const dark = useApp((s) => s.editorSettings.darkMode);
+  const theme = shikiOk === null ? null : shikiOk ? editorTheme(dark) : dark ? "vs-dark" : "vs";
   const lspUriRef = useRef(lspUri);
   lspUriRef.current = lspUri;
 
@@ -80,9 +128,15 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
 
   useEffect(() => {
     let cancelled = false;
-    themeReady.then((t) => { if (!cancelled) setTheme(t); });
+    themeReady.then((ok) => { if (!cancelled) setShikiOk(ok); });
     return () => { cancelled = true; };
   }, []);
+
+  // Live-apply setting changes.
+  useEffect(() => {
+    editorRef.current?.updateOptions({ ...monacoEditorOptions(settings), detectIndentation: settings.detectIndentation, tabSize: settings.tabSize, insertSpaces: settings.insertSpaces });
+    applyModelOptions(model, settings);
+  }, [settings, model]);
 
   // Wait for Shiki so the editor never flashes uncoloured text.
   if (!theme) return null;
@@ -98,6 +152,7 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
       theme={theme}
       onChange={(v) => onChange?.(v ?? "")}
       onMount={(editor, m) => {
+        editorRef.current = editor;
         setMonacoNs(m);
         setModel(editor.getModel());
         // `path` changes (tab switch) swap the model under the same editor.
@@ -105,18 +160,13 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
         expandSuggestDetails(editor);
       }}
       options={{
+        ...monacoEditorOptions(settings),
+        detectIndentation: settings.detectIndentation,
+        tabSize: settings.tabSize,
+        insertSpaces: settings.insertSpaces,
         readOnly,
-        minimap: { enabled: false },
-        fontSize: 13,
         automaticLayout: true,
-        scrollBeyondLastLine: false,
-        wordWrap: "on",
-        bracketPairColorization: { enabled: true },
         "semanticHighlighting.enabled": true,
-        suggest: {
-          showStatusBar: true,
-          preview: true,
-        },
       }}
     />
   );

@@ -103,7 +103,11 @@ export class MockTransport implements Transport {
   private discCbs = new Set<() => void>();
   private ps: ParseState = freshState();
   public files: Record<string, Uint8Array>;
+  /** Explicitly created (possibly empty) directories, without trailing slash. */
+  public dirs = new Set<string>();
   private _nextStdout: string;
+  /** Raw file bytes still expected after an UPLOAD header was ACKed. */
+  private pendingUpload: { seq: number; path: string; buf: Uint8Array; off: number } | null = null;
 
   constructor(opts: MockOptions = {}) {
     this.files = { ...(opts.files ?? {}) };
@@ -140,8 +144,30 @@ export class MockTransport implements Transport {
   async write(chunk: Uint8Array): Promise<void> {
     if (!this._connected) throw new Error("Not connected");
     for (let i = 0; i < chunk.length; ) {
+      const up = this.pendingUpload;
+      if (up) {
+        // UPLOAD body: unframed raw bytes following the ACK.
+        const take = Math.min(up.buf.length - up.off, chunk.length - i);
+        up.buf.set(chunk.subarray(i, i + take), up.off);
+        up.off += take;
+        i += take;
+        if (up.off === up.buf.length) this.finishUpload();
+        continue;
+      }
       i = this.feedByte(chunk[i], i, chunk);
     }
+  }
+
+  private finishUpload(): void {
+    const up = this.pendingUpload;
+    if (!up) return;
+    this.pendingUpload = null;
+    const total = up.buf.length;
+    for (let off = PROGRESS_EVERY; off < total; off += PROGRESS_EVERY) {
+      this.emit(frameProgress(up.seq, off, total));
+    }
+    this.files[up.path] = up.buf;
+    this.emit(frameOk(up.seq));
   }
 
   // Returns the new index after consuming bytes.
@@ -246,27 +272,15 @@ export class MockTransport implements Transport {
         break;
       }
       case KIND.UPLOAD: {
+        // [path_len:u8][path][file_size:u32 BE] → ACK, then file_size raw bytes → PROGRESS* → OK
         if (payload.length < 1) { this.reply(frameErr(seq, "UPLOAD: empty payload")); break; }
         const pathLen = payload[0];
-        if (1 + pathLen > payload.length) { this.reply(frameErr(seq, "UPLOAD: path_len overflow")); break; }
+        if (1 + pathLen + 4 > payload.length) { this.reply(frameErr(seq, "UPLOAD: bad header")); break; }
         const path = dec.decode(payload.subarray(1, 1 + pathLen));
-        const data = payload.subarray(1 + pathLen);
+        const size = new DataView(payload.buffer, payload.byteOffset + 1 + pathLen, 4).getUint32(0, false);
+        this.pendingUpload = { seq, path, buf: new Uint8Array(size), off: 0 };
         this.reply(frameAck(seq));
-        const total = data.length;
-        let offset = 0;
-        const CHUNK = PROGRESS_EVERY;
-        const emitProgress = () => {
-          while (offset < total) {
-            const next = Math.min(offset + CHUNK, total);
-            offset = next;
-            if (offset < total) {
-              this.emit(frameProgress(seq, offset, total));
-            }
-          }
-          this.files[path] = data;
-          this.emit(frameOk(seq));
-        };
-        queueMicrotask(emitProgress);
+        if (size === 0) queueMicrotask(() => this.finishUpload());
         break;
       }
       case KIND.READ: {
@@ -292,6 +306,11 @@ export class MockTransport implements Transport {
             const dir = rel.slice(0, sep);
             if (!seen.has(dir)) { seen.add(dir); entries.push({ name: dir, isDir: true }); }
           }
+        }
+        for (const d of this.dirs) {
+          if (!d.startsWith(prefix)) continue;
+          const name = d.slice(prefix.length).split("/")[0];
+          if (name && !seen.has(name)) { seen.add(name); entries.push({ name, isDir: true }); }
         }
         // Pack [is_dir:u8][name\0]...
         const parts: Uint8Array[] = entries.map(e => {
@@ -331,6 +350,18 @@ export class MockTransport implements Transport {
         const path = dec.decode(payload);
         if (!this.files[path]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
         delete this.files[path];
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.MKDIR: {
+        const path = dec.decode(payload).replace(/\/+$/, "");
+        if (!path.startsWith("/")) { if (!noAck) this.reply(frameErr(seq, "MKDIR: relative path")); break; }
+        if (this.files[path]) { if (!noAck) this.reply(frameErr(seq, `not a directory: ${path}`)); break; }
+        let cur = "";
+        for (const seg of path.split("/").filter(Boolean)) {
+          cur += "/" + seg;
+          this.dirs.add(cur);
+        }
         if (!noAck) this.reply(frameOk(seq));
         break;
       }

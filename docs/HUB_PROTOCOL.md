@@ -104,6 +104,35 @@ Client-side and device-side both reject:
 
 ---
 
+## 4a. MKDIR (binary frame kind `0x1A`)
+
+Host → device, same frame layout and SEQ/ACK rules as `RM` (`0x19`).
+
+- **Payload:** absolute path, UTF-8, no terminator (e.g. `/sd/my_project/lib`).
+- **Semantics:** `mkdir -p`. Every missing segment is created from the root down. Reply `OK` (empty payload) when the path ends up as a directory, including when it already existed (idempotent). Reply `ERR <reason>` if a segment exists as a file (`not a directory: <seg>`) or `os.mkdir` raises (pass the OSError text through).
+- **Path policy:** same allowlist as UPLOAD (see §4); reject empty/relative paths and `..` segments. Reply `ERR busy` while a user program is running, like the other FS ops.
+- **Compatibility:** no `proto_ver` bump. Firmware without MKDIR answers `ERR unknown kind: 0x1a`; the web app then reports that the firmware must be updated (or the directory created manually). The web app only sends MKDIR for directories that `LS` shows are missing.
+- **Used by:** project uploads, which mirror a project into `/sd/<project>/` including subfolders.
+
+Reference implementation (MicroPython):
+
+```python
+def mkdir_p(path):
+    cur = ""
+    for seg in path.strip("/").split("/"):
+        cur += "/" + seg
+        try:
+            if not (os.stat(cur)[0] & 0x4000):
+                raise OSError("not a directory: " + cur)
+        except OSError as e:
+            if e.args and e.args[0] == 2:  # ENOENT
+                os.mkdir(cur)
+            else:
+                raise
+```
+
+---
+
 ## 5. STOP semantics
 
 STOP is asynchronous: it sets `runner._stop_flag`. The runner checks the flag before each loop iteration. Long `time.sleep_ms` calls inside `loop()` delay the response — programs should sleep in ≤ 100 ms chunks.

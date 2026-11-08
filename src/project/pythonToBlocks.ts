@@ -1,3 +1,4 @@
+import { stripBlocksHeader } from "./format";
 /**
  * Best-effort Python → Blockly translator used when switching a Python project
  * back to Blocks mode. Handles:
@@ -1014,6 +1015,8 @@ function chain(specs: BlockSpec[]): BlockSpec | undefined {
 const VERSION_RE = /^#\s*b2op-hub-blocks\s+v2\.\d+\.\d+\s*$/;
 
 export function pythonToBlocks(source: string): Translation {
+  // The blocks header line is storage metadata, not program code.
+  source = stripBlocksHeader(source);
   const lines = parseLines(source);
 
   // Reject Python not tagged as b2op-hub-blocks v2.x — return as opaque raw block.

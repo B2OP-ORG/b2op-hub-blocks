@@ -208,6 +208,15 @@ export class DeviceClient {
     return this.proto.rm(path, opts.timeoutMs ?? 3000);
   }
 
+  async mkdir(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
+    return this.proto.mkdir(path, opts.timeoutMs ?? 3000);
+  }
+
+  /** Start an already-uploaded program on the device. */
+  async runFile(path: string): Promise<void> {
+    await this.proto.runProgram(path);
+  }
+
   addStdoutSink(sink: StdoutSink): () => void {
     return this.proto.addStdoutSink(sink);
   }

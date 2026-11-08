@@ -17,7 +17,7 @@ interface Props {
 }
 
 export function FirmwareUpdatePage({ onBack }: Props) {
-  const dark = useApp((s) => s.project.type === "python");
+  const dark = useApp((s) => s.editorSettings.darkMode);
   const boardName = useApp((s) => s.boardName);
   const boardVersion = useApp((s) => s.boardVersion);
 

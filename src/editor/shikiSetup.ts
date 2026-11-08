@@ -1,5 +1,5 @@
 // Syntax highlighting via Shiki: VS Code's TextMate Python grammar and the
-// Dark+ theme, bridged into Monaco by @shikijs/monaco. Uses the JavaScript
+// Dark+/Light+ themes, bridged into Monaco by @shikijs/monaco. Uses the JavaScript
 // regex engine so no Oniguruma WASM is shipped.
 //
 // On top of that, the LSP (basedpyright) supplies semantic tokens — module
@@ -12,7 +12,11 @@ import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import { shikiToMonaco, textmateThemeToMonacoTheme } from "@shikijs/monaco";
 
-export const EDITOR_THEME = "dark-plus";
+export const DARK_THEME = "dark-plus";
+export const LIGHT_THEME = "light-plus";
+export function editorTheme(dark: boolean): string {
+  return dark ? DARK_THEME : LIGHT_THEME;
+}
 
 /**
  * Semantic token type (or `type.modifier`) → TextMate scopes, in priority
@@ -80,7 +84,7 @@ let ready: Promise<void> | null = null;
 export function ensureShiki(m: typeof monaco): Promise<void> {
   ready ??= (async () => {
     const highlighter = await createHighlighterCore({
-      themes: [import("@shikijs/themes/dark-plus")],
+      themes: [import("@shikijs/themes/dark-plus"), import("@shikijs/themes/light-plus")],
       langs: [import("@shikijs/langs/python")],
       engine: createJavaScriptRegexEngine(),
     });
@@ -93,14 +97,15 @@ export function ensureShiki(m: typeof monaco): Promise<void> {
     // tokenizer keeps using its original rule map, so TextMate colours are
     // unaffected.
     // @shikijs/monaco types against monaco-editor-core; same shape as ours.
-    const base = textmateThemeToMonacoTheme(
-      highlighter.getTheme(EDITOR_THEME),
-    ) as unknown as monaco.editor.IStandaloneThemeData;
-    m.editor.defineTheme(EDITOR_THEME, {
-      ...base,
-      rules: [...base.rules, ...semanticRules(base.rules)],
-    });
-    m.editor.setTheme(EDITOR_THEME);
+    for (const name of [DARK_THEME, LIGHT_THEME]) {
+      const base = textmateThemeToMonacoTheme(
+        highlighter.getTheme(name),
+      ) as unknown as monaco.editor.IStandaloneThemeData;
+      m.editor.defineTheme(name, {
+        ...base,
+        rules: [...base.rules, ...semanticRules(base.rules)],
+      });
+    }
   })();
   return ready;
 }

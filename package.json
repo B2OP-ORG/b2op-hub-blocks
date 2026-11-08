@@ -21,6 +21,7 @@
     "blockly": "^12.5.1",
     "browser-basedpyright": "^1.40.2",
     "esp-web-tools": "^10.4.0",
+    "fflate": "^0.8.2",
     "lucide-react": "^1.66.0",
     "monaco-editor": "^0.55.1",
     "monaco-languageclient": "^10.7.0",

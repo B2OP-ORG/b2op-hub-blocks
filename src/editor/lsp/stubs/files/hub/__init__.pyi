@@ -1,9 +1,9 @@
-"""Board-provided hub module.
+"""Everything built into the hub.
 
-Exposes the on-device peripherals: LPF2 ports (`hub.ports`), hub LED,
-IMU (`hub.imu`), buttons, LCD (LVGL), status log and power-off. Objects
-here are singletons created by the C firmware — this module is a stub;
-the real implementation lives in the ESP32 port.
+Start your program with ``import hub``. Then use ``hub.ports`` for
+motors and sensors, ``hub.led`` for the light, ``hub.buttons``,
+``hub.imu`` (motion sensor), ``hub.lcd`` (screen), ``hub.audio``
+(sound), ``hub.battery`` and more.
 """
 
 from lpf2.devices import hub_led as _hub_led
@@ -14,71 +14,61 @@ from typing import NoReturn, Optional
 from . import ports as ports, log as log, buttons as buttons, battery as battery, board as board, imu as imu, lcd as lcd, video as video, audio as audio, settings as settings
 
 fw_version: str
-"""Firmware build version string."""
+"""Which firmware version the hub is running, e.g. ``"2.1.0"``."""
 
 
 led: _hub_led
-"""Built-in hub RGB LED."""
+"""The hub's built-in colored light. Try ``hub.led.setColor(255, 0, 0)`` for red."""
 accelerometer: _accelerometer
-"""Built-in accelerometer wrapped as a Devices.accelerometer."""
+"""The built-in accelerometer: measures pushes and gravity along x, y and z."""
 gyro: _gyroscope
-"""Built-in gyroscope wrapped as a Devices.gyroscope."""
+"""The built-in gyroscope: measures how fast the hub spins around x, y and z."""
 i2c: I2C
-"""External connector I2C bus (may be shared with on-board devices).
+"""The I2C connection on the hub's Grove connector, for extra sensors and gadgets.
 
-Same object as ``machine.I2C(hub.board.HUB_I2C_MODULE_BUS)`` — a pre-initialised :class:`machine.I2C`
-singleton. Pins are fixed by the board; ``scl``/``sda`` kwargs to
-``hub.i2c.init()`` are accepted but ignored.
+It is a ready-to-use ``machine.I2C`` — try ``hub.i2c.scan()`` to list
+what's connected. Some built-in parts of the hub share this connection.
 """
 
 def sd_card() -> Optional[SDCard]:
-    """Return the mounted ``machine.SDCard`` instance, or ``None`` if no SD card is present.
+    """The SD card, or ``None`` if there is no card.
 
-    The card is initialised and mounted at ``/sd`` before ``boot.py`` runs.
-    Returns ``None`` on boards without ``HAS_SD_CARD`` or when mount failed.
+    Files on the card are found under ``/sd``, e.g. ``/sd/song.mid``.
     """
     ...
 
 def sd_remount() -> None:
-    """Unmount the cached SD card handle and re-mount the SD card at ``/sd``.
+    """Re-connect the SD card at ``/sd``.
 
-    Call after disabling USB MSC so the SDMMC host is freed and can be
-    re-initialised via ``machine.SDCard``.
+    Use it after turning off USB drive mode (see :func:`set_usb_msc`) so
+    your program can use the card again.
     """
     ...
 
 def usb_msc_mode() -> bool:
-    """Return ``True`` if USB Mass Storage Class is currently active."""
+    """``True`` while the SD card is shown as a USB drive on your computer."""
     ...
 
 def set_usb_msc(enabled: bool) -> None:
-    """Enable or disable USB Mass Storage Class (SD card).
+    """Show (``True``) or hide (``False``) the SD card as a USB drive on your computer.
 
-    When enabling, the SDMMC host is opened without a VFS mount so TinyUSB
-    can own the SD card. When disabling, the SDMMC host is released so
-    :func:`sd_remount` can re-mount it via MicroPython.
+    While it's shown as a drive, your program can't use the card. After
+    hiding it, call :func:`sd_remount` to use it again.
     """
     ...
 
 def exit() -> NoReturn:
-    """Exit the currently running user program cleanly.
+    """Stop your program right here.
 
-    Raises ``SystemExit`` inside the program. The C runner catches it and
-    shows a "Done" result screen, identical to the program returning
-    normally. Use this instead of ``raise SystemExit`` for clarity.
+    The hub shows "Done", just like when a program reaches its end.
     """
     ...
 
 def powerOff() -> NoReturn:
-    """Turn the hub off immediately. Does not return.
+    """Turn the hub off.
 
-    If the hardware power latch does not hold (e.g. USB power is present),
-    the firmware performs an orderly shutdown: disables LPF2 ports and motor
-    PWM outputs, turns off the LCD backlight, deinitialises BLE and WiFi,
-    signals the MicroPython task to exit (GC runs before the task deletes
-    itself), throttles the CPU to 80 MHz, then enters a low-activity loop
-    that keeps the battery status LED updated. Pressing the right button
-    restarts the firmware.
+    If a USB cable keeps it powered, the hub stops motors, the screen and
+    Bluetooth and goes to sleep instead; press the center button to wake it.
     """
     ...
 

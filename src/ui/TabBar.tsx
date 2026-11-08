@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Pencil, Play, Upload, X } from "lucide-react";
+import { BookOpen, Download, Eye, Pencil, Play, Upload, X } from "lucide-react";
 import { useApp, isFileUnsynced } from "../state/store";
 import { baseName } from "../project/format";
 import { relDirname, relJoin } from "../project/paths";
@@ -20,6 +20,8 @@ export function TabBar() {
   const deviceName = useApp((s) => s.deviceName);
   const openFile = useApp((s) => s.openFile);
   const closeFile = useApp((s) => s.closeFile);
+  const extraTabs = useApp((s) => s.extraTabs);
+  const activeExtraTab = useApp((s) => s.activeExtraTab);
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
   const canDevice = !!device && !running;
@@ -74,7 +76,7 @@ export function TabBar() {
       {openFileIds.map((fileId) => {
         const file = mfp.files.find((f) => f.id === fileId);
         if (!file) return null;
-        const active = fileId === activeFileId;
+        const active = fileId === activeFileId && !activeExtraTab;
         const unsynced = isFileUnsynced(mfp, file, deviceName || undefined);
         const isRenaming = renaming?.id === fileId;
         return (
@@ -123,6 +125,41 @@ export function TabBar() {
               onMouseLeave={(e) => { e.currentTarget.textContent = unsynced ? "●" : "×"; e.currentTarget.style.fontSize = unsynced ? "10px" : "14px"; }}
             >
               {unsynced ? "●" : "×"}
+            </button>
+          </div>
+        );
+      })}
+      {extraTabs.map((t) => {
+        const active = t.id === activeExtraTab;
+        const close = () => useApp.getState().closeExtraTab(t.id);
+        return (
+          <div
+            key={t.id}
+            title={t.kind === "example" ? `Example preview (read-only): ${t.ref}` : `Docs: ${t.title}`}
+            style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "4px 6px 4px 9px",
+              background: active ? tabActiveBg : tabBg, color: p.text,
+              borderTop: `1px solid ${p.border}`, borderLeft: `1px solid ${p.border}`, borderRight: `1px solid ${p.border}`,
+              borderBottom: active ? `2px solid ${p.accent}` : `1px solid ${p.border}`,
+              borderRadius: "4px 4px 0 0", cursor: "pointer", fontWeight: active ? 600 : 400, fontSize: 13, fontStyle: "italic",
+              userSelect: "none", maxWidth: 220, whiteSpace: "nowrap", flexShrink: 0,
+            }}
+            onClick={() => useApp.getState().openExtraTab(t)}
+            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); close(); } }}
+            onContextMenu={(e) => openContextMenu(e, [
+              { label: "Close", icon: <X size={13} />, onSelect: close },
+              { label: "Close others", disabled: extraTabs.length <= 1, onSelect: () => useApp.getState().closeOtherExtraTabs(t.id) },
+            ])}
+          >
+            <span style={{ display: "inline-flex", color: p.dimText, flexShrink: 0 }}>{t.kind === "doc" ? <BookOpen size={12} /> : <Eye size={12} />}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{t.title}</span>
+            <button
+              type="button"
+              title="Close"
+              onClick={(e) => { e.stopPropagation(); close(); }}
+              style={{ marginLeft: 2, background: "none", border: "none", cursor: "pointer", color: p.dimText, fontSize: 14, lineHeight: 1, padding: "0 2px", borderRadius: 3, flexShrink: 0, width: 16 }}
+            >
+              ×
             </button>
           </div>
         );

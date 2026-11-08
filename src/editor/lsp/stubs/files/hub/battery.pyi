@@ -1,32 +1,29 @@
-"""Battery voltage + charging status.
+"""The hub's own battery: how full it is and whether it is charging.
 
-Voltage comes from the on-board resistor divider ADC; charging
-state is decoded from the IP2366's ISTAT (RXD0) and CSTAT (SC16IS750
-P0) open-drain outputs. Values are refreshed on the C-side hub loop
-(every ~2 s).
+Values update about every 2 seconds.
 """
 
 UNKNOWN: int
-"""State value: pins not sampled yet, or both LOW (unusual)."""
+"""State: not known yet."""
 ON_BATTERY: int
-"""State value: no charger present / charger detached."""
+"""State: running on battery, no charger plugged in."""
 CHARGING: int
-"""State value: charge current flowing (ISTAT LOW)."""
+"""State: plugged in and charging."""
 FULLY_CHARGED: int
-"""State value: charger present, charge cycle complete (CSTAT LOW)."""
+"""State: plugged in and the battery is full."""
 
 def voltage() -> int:
-    """Latest pack voltage in millivolts (0 if ADC not configured)."""
+    """Battery voltage in millivolts (1000 mV = 1 V). ``0`` if it can't be measured."""
     ...
 def percent() -> int:
-    """Voltage mapped to 0..100 % via the Lpf2 default linear curve."""
+    """How full the battery is, from 0 to 100 %."""
     ...
 def state() -> int:
-    """Current state: one of the module constants above."""
+    """What the battery is doing: ``UNKNOWN``, ``ON_BATTERY``, ``CHARGING`` or ``FULLY_CHARGED``."""
     ...
 def charging() -> bool:
-    """True when charge current is actively flowing."""
+    """``True`` while the battery is charging."""
     ...
 def fully_charged() -> bool:
-    """True when charger is present and the charge cycle has completed."""
+    """``True`` when a charger is plugged in and the battery is full."""
     ...

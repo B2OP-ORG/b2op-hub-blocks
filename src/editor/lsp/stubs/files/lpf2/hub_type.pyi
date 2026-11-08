@@ -1,4 +1,4 @@
-"""LPF2 hub-type identifiers (LWP ``HubType``)."""
+"""Kinds of LEGO hubs, as returned by :meth:`lpf2.hub.getHubType`."""
 
 UNKNOWNHUB: int = 0
 """Unknown or unset hub type."""

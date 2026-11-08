@@ -1,9 +1,11 @@
-"""On-board buttons: 5-way + power.
+"""The hub's buttons: a 5-way pad (up, down, left, right and center).
 
-Level readers (``center``/``up``/``down``/``left``/``right``)
-return the current held state. Callbacks fire on rising edge
-(release-then-press) and are dispatched automatically by the
-C background task (``hub_main_task``).
+Ask whether a button is held right now with ``hub.buttons.left()`` and
+friends, or have a function run every time a button is pressed with
+:func:`on`.
+
+Holding the center button for 2 seconds stops the running program;
+holding it for 5 seconds turns the hub off.
 """
 
 from typing import Callable, Literal, Optional, overload
@@ -12,23 +14,23 @@ _ButtonName = Literal["center", "up", "down", "left", "right"]
 _ButtonCb = Callable[[], None]
 
 def center() -> bool:
-    """True while the power/center button is held.
+    """``True`` while the center (power) button is held down.
 
-    A short press reads as pressed; a >=2 s hold triggers a
-    hardware power-off in the C loop.
+    Holding it for 2 seconds stops your program, and holding it for
+    5 seconds turns the hub off.
     """
     ...
 def up() -> bool:
-    """True while the UP button is held."""
+    """``True`` while the up button is held down."""
     ...
 def down() -> bool:
-    """True while the DOWN button is held."""
+    """``True`` while the down button is held down."""
     ...
 def left() -> bool:
-    """True while the LEFT button is held."""
+    """``True`` while the left button is held down."""
     ...
 def right() -> bool:
-    """True while the RIGHT button is held."""
+    """``True`` while the right button is held down."""
     ...
 
 @overload
@@ -36,18 +38,23 @@ def on(name: _ButtonName) -> Callable[[_ButtonCb], _ButtonCb]: ...
 @overload
 def on(name: _ButtonName, cb: Optional[_ButtonCb]) -> Optional[_ButtonCb]: ...
 def on(name, cb=None):
-    """Register a callback for a button rising edge.
+    """Run a function every time a button is pressed.
 
-    Usable as a decorator::
+    ``name`` is ``"center"``, ``"up"``, ``"down"``, ``"left"`` or
+    ``"right"``. The function runs once per press, in the background,
+    while the rest of your program keeps going.
+
+    Put it above a function::
 
         @hub.buttons.on("left")
         def left_pressed():
-            ...
+            print("left!")
 
-    Passing ``None`` as the second arg unregisters the callback.
+    or pass the function directly: ``hub.buttons.on("left", left_pressed)``.
+    Passing ``None`` instead of a function removes it again.
     """
     ...
 
 def off(name: _ButtonName) -> None:
-    """Unregister the callback for ``name``."""
+    """Stop running a function when button ``name`` is pressed."""
     ...

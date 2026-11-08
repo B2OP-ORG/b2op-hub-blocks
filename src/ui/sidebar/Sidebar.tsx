@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { Cpu, FolderKanban, Files, HardDrive } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef } from "react";
+import { BookOpen, Cpu, FolderKanban, Files, HardDrive, Lightbulb } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { SidebarTabId } from "../../project/format";
 import { DEFAULT_SIDEBAR_WIDTH } from "../../project/storage";
@@ -9,17 +9,30 @@ import { ExplorerTab } from "./ExplorerTab";
 import { ProjectsTab } from "./ProjectsTab";
 import { DeviceFilesTab } from "./DeviceFilesTab";
 import { DeviceTab } from "./DeviceTab";
+import { ExamplesTab } from "./ExamplesTab";
+
+// Docs parse the bundled stubs (large), so load them on first open.
+const DocsTab = lazy(() => import("./DocsTab").then((m) => ({ default: m.DocsTab })));
 
 export const TAB_INFO: Record<SidebarTabId, { label: string; icon: React.ReactNode }> = {
   explorer: { label: "Explorer", icon: <Files size={20} /> },
   projects: { label: "Projects", icon: <FolderKanban size={20} /> },
   sdcard: { label: "SD card", icon: <HardDrive size={20} /> },
   device: { label: "Device", icon: <Cpu size={20} /> },
+  docs: { label: "Docs", icon: <BookOpen size={20} /> },
+  examples: { label: "Examples", icon: <Lightbulb size={20} /> },
 };
 
 const ACTIVITY_W = 42;
 const MIN_W = 160;
 const maxWidth = () => Math.max(MIN_W, Math.min(800, Math.round(window.innerWidth * 0.5)));
+
+function DocsSlot({ active }: { active: boolean }) {
+  const opened = useRef(false);
+  if (active) opened.current = true;
+  if (!opened.current) return null;
+  return <div style={{ display: active ? "contents" : "none" }}><Suspense fallback={null}><DocsTab /></Suspense></div>;
+}
 
 export function Sidebar() {
   const p = usePalette();
@@ -181,6 +194,9 @@ export function Sidebar() {
       <div style={{ display: current === "projects" ? "contents" : "none" }}><ProjectsTab /></div>
       <div style={{ display: current === "sdcard" ? "contents" : "none" }}><DeviceFilesTab active={current === "sdcard"} /></div>
       {current === "device" && <DeviceTab />}
+      {/* Mounted on first open, then kept so navigation survives tab switches. */}
+      <DocsSlot active={current === "docs"} />
+      <div style={{ display: current === "examples" ? "contents" : "none" }}><ExamplesTab /></div>
     </div>
   );
 

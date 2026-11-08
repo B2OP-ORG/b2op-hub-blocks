@@ -1,7 +1,7 @@
-"""Ports driven directly by local hub UART (built-in hub sockets).
+"""The physical ports on your hub (``hub.ports.A`` …).
 
-:class:`port` = :class:`lpf2.port` on local LPF2 UART transport.
-Instances live in C++, exposed via board module (e.g. ``hub.ports.A``).
+They work exactly like :class:`lpf2.port`, plus a few extras such as
+:meth:`port.forceDeviceType` for motors that don't identify themselves.
 """
 
 from lpf2 import port as _port
@@ -10,83 +10,112 @@ from lpf2.virtual import device as _virtual_device
 from typing import Optional, Sequence
 
 class port(_port):
-    """Local (on-hub) LPF2 port.
+    """A physical port on your hub, like ``hub.ports.A``.
 
-    Same public API as :class:`lpf2.port`; explicit subclass so
-    isinstance checks distinguish local from virtual / remote ports.
+    Everything from :class:`lpf2.port` works here too.
     """
     def forceDeviceType(self, type: int) -> None:
-        """Disable the port and force it to report device type ``type``
-        (see :mod:`lpf2.device_type`).
+        """Tell the port what's plugged in, for motors that can't say it themselves.
 
-        Used to drive devices that do not go through the LPF2 handshake
-        (e.g. EV3 motors via :data:`lpf2.device_type.EV3_MEDIUM_MOTOR` /
-        :data:`~lpf2.device_type.EV3_LARGE_MOTOR`). The port stops its
-        UART/analog polling, but ``setPower`` / ``startPower`` still
-        drive the PWM output pins directly.
-
-        Call :meth:`enable` to resume normal detection.
+        For example LEGO MINDSTORMS EV3 motors:
+        ``hub.ports.A.forceDeviceType(device_type.EV3_LARGE_MOTOR)``, then
+        drive them with :meth:`startPower`. Call :meth:`enable` to go back to
+        detecting devices automatically.
         """
         ...
     def writeData(self, mode: int, buf: bytes) -> int:
-        """Send raw payload to device on given mode. Returns error code (0 = ok)."""
+        """Advanced: send raw bytes to the device for ``mode``. Returns 0 if it worked."""
         ...
     def startPower(self, pw: int) -> None:
-        """Set motor power. ``pw`` in [-100..100]: negative = CCW, positive = CW."""
+        """Run a motor at a power from -100 to 100.
+
+        Positive turns one way, negative the other, ``0`` stops. Works
+        with every motor, even simple ones without a rotation sensor.
+        """
         ...
     def setAccTime(self, time: int, profile: int) -> None:
-        """Set acceleration time (ms) and profile for the motor."""
+        """How long (milliseconds) the motor takes to speed up, stored in slot ``profile`` (0..15).
+
+        Use it with the ``useProfile`` option of the speed functions.
+        """
         ...
     def setDecTime(self, time: int, profile: int) -> None:
-        """Set deceleration time (ms) and profile for the motor."""
+        """How long (milliseconds) the motor takes to slow down, stored in slot ``profile`` (0..15)."""
         ...
     def startSpeed(self, speed: int = 100, maxPower: int = 100, useProfile: int = 0) -> None:
-        """Run motor at ``speed`` (-100..100). ``maxPower`` caps commanded
-        power (0..100). ``useProfile`` selects acc/dec profiles (low nibble
-        = acc, next nibble = dec)."""
+        """Run the motor at a steady ``speed`` from -100 to 100 until told otherwise.
+
+        Unlike :meth:`startPower` the motor works harder uphill to keep
+        its speed (needs a motor with a rotation sensor). ``maxPower``
+        (0..100) limits how hard it may push. ``useProfile`` picks the
+        speed-up/slow-down times set with :meth:`setAccTime` /
+        :meth:`setDecTime` (``0x21`` = speed up with slot 1, slow down
+        with slot 2).
+        """
         ...
     def startSpeedForTime(self, time: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Run motor at ``speed`` for ``time`` ms then apply ``endState``
-        (BrakingStyle: 0 = float, 126 = hold, 127 = brake)."""
+        """Run the motor at ``speed`` for ``time`` milliseconds, then stop.
+
+        ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def startSpeedForDegrees(self, degrees: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move motor by ``degrees`` (positive; direction from ``speed`` sign)
-        then apply ``endState``."""
+        """Turn the motor by ``degrees`` (360 = one full turn), then stop.
+
+        Give a positive number of degrees; make ``speed`` negative to turn
+        the other way. ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def gotoAbsPosition(self, absPos: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move motor to absolute encoder position ``absPos`` at ``speed``
-        (0..100) then apply ``endState``."""
+        """Turn the motor to position ``absPos`` degrees, then stop.
+
+        Position 0 is where it was at start-up or where you last called
+        :meth:`presetEncoder`. ``speed`` is 0..100. ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def presetEncoder(self, pos: int) -> None:
-        """Reset motor encoder to ``pos``. Also stops the motor."""
+        """Stop the motor and say "this position is now ``pos`` degrees" (usually 0)."""
         ...
     def setRgbColorIdx(self, idx: int) -> None:
-        """Set RGB LED by :mod:`lpf2.color` index (uses mode 0)."""
+        """Set a light to one of the colors in :mod:`lpf2.color`, e.g. ``color.RED``."""
         ...
     def setRgbColor(self, r: int, g: int, b: int) -> None:
-        """Set RGB LED by explicit RGB (0..255, uses mode 1)."""
+        """Set a light to any color by mixing red, green and blue, each 0..255."""
         ...
     def setMode(self, mode: int, delta: float = 1.0) -> int:
-        """Select active input mode. ``delta`` = minimum raw-unit change
-        that triggers value-change callback (0 = every update). Returns 0
-        on success."""
+        """Advanced: choose which kind of value the device should report (its "mode").
+
+        ``delta`` is how much the value must change before an update is
+        sent (0 = always). Returns 0 if it worked. The device classes in
+        :mod:`lpf2.devices` pick modes for you.
+        """
         ...
     def setModeCombo(self, idx: int, deltas: Sequence[float] = ()) -> int:
-        """Activate one of the device's mode combinations. ``deltas`` = per-mode
-        thresholds in bitmask order; empty = default of 1. Returns 0 on success."""
+        """Advanced: have the device report several modes at once.
+
+        ``idx`` picks one of the device's built-in combinations;
+        ``deltas`` gives the minimum change for each mode in it. Returns
+        0 if it worked.
+        """
         ...
     def isDeviceConnected(self) -> bool:
-        """True if a device has been detected on this port."""
+        """``True`` if something is plugged into this port."""
         ...
     def getValue(self, mode: int, dataSet: int) -> float:
-        """Parsed value of dataset ``dataSet`` of ``mode``. Format
-        (int8/16/32/float) taken from mode descriptor."""
+        """Read a value from the device: value number ``dataSet`` (starting at 0) of ``mode``.
+
+        Use this for devices that have no special class in
+        :mod:`lpf2.devices`; otherwise their own functions are easier.
+        """
         ...
     def getValueStr(self, mode: int) -> str:
-        """Human-readable value of ``mode`` formatted per mode's figures/decimals."""
+        """The value(s) of ``mode`` as readable text."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type (see :mod:`lpf2.device_type`)."""
+        """A number saying what kind of device is plugged in — compare it with :mod:`lpf2.device_type`."""
         ...
     def getModeCount(self) -> int:
         """Total number of modes exposed by the device."""
@@ -110,89 +139,62 @@ class port(_port):
         """Bitmask of modes that accept values."""
         ...
     def getCapabilities(self) -> int:
-        """Capability bitmask (bit 0x04 = combinable if device has combos)."""
+        """Capability bitmask (bit 0x04 = combinable, if the device has combos)."""
         ...
     def getInfoStr(self) -> str:
-        """Diagnostic dump of port state (device type, modes, versions)."""
+        """Everything the port knows about its device, as text. Handy to ``print`` while exploring."""
         ...
     def speedToRaw(self, speed: int) -> int:
-        """Convert signed -100..100 speed to LPF2 raw byte (0..255)."""
+        """Advanced: convert a -100..100 speed to the byte (0..255) the device uses."""
         ...
     def rawToSpeed(self, raw: int) -> int:
-        """Convert LPF2 raw byte to signed -100..100 speed."""
+        """Advanced: convert a device byte (0..255) back to a -100..100 speed."""
         ...
 
 
 class emulated_port:
-    """LPF2 slave port: emulates a device on a physical hub UART socket.
+    """Advanced: turn one of your hub's ports around, so it acts like a device.
 
-    Takes ownership of a hardware :class:`port` (calls ``disable`` on it)
-    and drives its UART as an LPF2 slave. The connected host sees whatever
-    :class:`~lpf2.virtual.device` is attached — typically a
-    :class:`lpf2.port_expander.virtual_port_expander_device` to expose
-    multiple sub-ports.
-
-    The firmware update loop pumps the emulated port automatically; no
-    explicit ``update()`` call is required in normal user code.
+    Connect that port with a cable to another LEGO hub, and the other hub
+    sees whatever pretend device you attach (see :class:`lpf2.virtual.device`).
+    For example, your hub can pretend to be a port expander.
     """
 
     def __init__(self, port: port) -> None:
-        """Bind to ``port``.
+        """Use ``port`` (e.g. ``hub.ports.F``) as a device port.
 
-        ``port`` must be a hardware :class:`port` (e.g. ``hub.ports.F``).
-        Its UART scanning is disabled immediately; call ``port.enable()``
-        to restore normal operation after the emulated port is deleted.
+        The port stops detecting devices; call ``port.enable()`` later to
+        use it normally again.
         """
         ...
 
     def init(self) -> None:
-        """Initialise the UART and begin the host-detection handshake.
-
-        Call once after :meth:`attachDevice`. The port holds TX low
-        (break condition) at **115200 baud** and waits indefinitely for
-        the host to send ``CMD_SPEED``, then enumerates the attached device.
-        In slow-enumeration mode (see :meth:`setSlowEnumeration`) the port
-        uses 2400 baud and skips the wait.
-        """
+        """Start waiting for the other hub to connect. Call once, after :meth:`attachDevice`."""
         ...
 
     def update(self) -> None:
-        """Pump the protocol state machine manually.
-
-        Not needed when the emulated port is registered with the firmware
-        update loop (the default). Call only if you need fine-grained
-        control over update timing.
-        """
+        """Advanced: process news right now. Not needed — this already happens in the background."""
         ...
 
     def isHostConnected(self) -> bool:
-        """True once the host has completed the info handshake and is
-        sending data-phase messages."""
+        """``True`` once the other hub has recognised the device and is talking to it."""
         ...
 
     def setSlowEnumeration(self, slow: bool) -> None:
-        """Select slow (EV3 / 2400 baud) or fast (LPF2 / 115200 baud) enumeration.
+        """Pass ``True`` when connecting to a LEGO MINDSTORMS EV3 instead of a Powered Up hub.
 
-        Must be called before :meth:`init`.  Default is ``False`` (115200,
-        waits indefinitely for ``CMD_SPEED``).  Pass ``True`` to skip the
-        LPF2 handshake and go directly to 2400 baud EV3 mode.
+        Call it before :meth:`init`.
         """
         ...
 
     def isSlowEnumeration(self) -> bool:
-        """True if slow-enumeration (2400 baud / EV3) mode is active."""
+        """``True`` if set up for an EV3 (see :meth:`setSlowEnumeration`)."""
         ...
 
     def attachDevice(self, device: _virtual_device) -> None:
-        """Attach ``device`` as the emulated device on this port.
-
-        Accepts :class:`lpf2.virtual.device` or
-        :class:`lpf2.port_expander.virtual_port_expander_device`.
-        The device is removed from the firmware's auto-update registry
-        while attached; :meth:`update` drives it instead.
-        """
+        """Choose the pretend device the other hub will see — a :class:`lpf2.virtual.device` or a port expander."""
         ...
 
     def detachDevice(self) -> None:
-        """Detach the current device and return it to the auto-update registry."""
+        """Remove the pretend device again."""
         ...

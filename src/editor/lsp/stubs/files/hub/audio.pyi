@@ -1,61 +1,68 @@
-"""PCM/WAV audio player and synthesiser via on-board I2S audio amplifier.
+"""Make sounds: beeps, notes, tunes, music files and sound files.
 
-Only present on boards where ``hub.board.HAS_AUDIO == 1``.
-Paths must be absolute (e.g. ``/sd/sound.wav``).
+Only available on hubs with a speaker (``hub.board.HAS_AUDIO == 1``).
+Only one sound plays at a time — starting a new one stops the old one.
+
+Most functions wait until the sound is finished. Add ``block=False`` to
+start the sound and carry on with your program straight away.
+
+File paths must be complete, for example ``"/sd/sound.wav"``.
 """
 
 from typing import Literal
 
 def play(path: str, *, rate: int = 44100, bits: int = 16,
          channels: int = 1, block: bool = True) -> None:
-    """Stream a PCM or WAV file to the I2S audio amplifier.
+    """Play a sound file (``.wav`` or raw ``.pcm``).
 
-    WAV files are auto-detected: ``rate``, ``bits``, and ``channels`` are
-    read from the file header and the keyword arguments are ignored.
-    For raw PCM files the keyword arguments set the format
-    (``rate`` in Hz, ``bits`` = 8/16/24/32, ``channels`` = 1 or 2).
-    If ``block=False`` returns immediately.
+    For ``.wav`` files everything is read from the file, so just give the
+    path. Raw ``.pcm`` files have no header, so tell it the format:
+    ``rate`` (samples per second), ``bits`` (8, 16, 24 or 32) and
+    ``channels`` (1 = mono, 2 = stereo).
+    With ``block=False`` your program continues while the sound plays.
     """
     ...
 
 def stop() -> None:
-    """Abort playback. Blocks until the player task has exited."""
+    """Stop whatever sound is playing."""
     ...
 
 def is_finished() -> bool:
-    """Return ``True`` when no playback is in progress."""
+    """``True`` when no sound is playing."""
     ...
 
 def beep(freq: float, duration_ms: int, *, block: bool = True) -> None:
-    """Synthesise a single tone at ``freq`` Hz for ``duration_ms`` milliseconds.
+    """Play a beep at ``freq`` hertz for ``duration_ms`` milliseconds.
 
-    Uses the current wave type (see :meth:`set_wave_type`).
-    If ``block=False`` returns immediately while playback continues in the background.
+    Higher numbers sound higher: 440 is the note A, 880 is one octave
+    above. The sound uses the current wave type (see :func:`set_wave_type`).
+    With ``block=False`` your program continues while it beeps.
     """
     ...
 
 def note(note: "str | int", length: float, *, block: bool = True) -> None:
-    """Synthesise one note using the current BPM and wave type.
+    """Play one musical note.
 
-    ``note``: name string (e.g. ``"C4"``, ``"D#3"``, ``"Bb5"``, ``"REST"``)
-    or an integer MIDI note number.
-    ``length``: duration in beats (1.0 = one beat at current BPM).
+    ``note`` is a note name such as ``"C4"``, ``"D#3"`` (sharp) or
+    ``"Bb5"`` (flat), ``"REST"`` for silence, or a MIDI note number
+    (60 = middle C). ``length`` is in beats: 1 is one beat, 0.5 is half
+    a beat. The speed comes from :func:`set_note_speed`.
     """
     ...
 
 def set_note_speed(bpm: float) -> None:
-    """Set the tempo used by :meth:`note` and :meth:`play_melody_from_list`. Default 120 BPM."""
+    """Set the tempo in beats per minute for :func:`note` and :func:`play_melody_from_list`. Starts at 120."""
     ...
 
 def set_wave_type(wave: "Literal['sine', 'square', 'sawtooth']") -> None:
-    """Set the waveform for all synthesis methods. ``"sine"`` (default), ``"square"``, ``"sawtooth"``."""
+    """Choose how sounds are shaped: ``"sine"`` (smooth, the default), ``"square"`` (buzzy, retro) or ``"sawtooth"`` (bright, sharp)."""
     ...
 
 def play_melody(name: str, *, block: bool = True) -> None:
-    """Play a built-in melody by name.
+    """Play a built-in tune.
 
-    Available: ``"startup"``, ``"shutdown"``, ``"success"``, ``"error"``,
-    ``"dadadum"``, ``"mario"``, ``"nokia"``.
+    Choose from ``"startup"``, ``"shutdown"``, ``"success"``, ``"error"``,
+    ``"dadadum"``, ``"mario"`` and ``"nokia"``.
     """
     ...
 
@@ -64,16 +71,16 @@ def play_melody_from_list(
     *,
     block: bool = True,
 ) -> None:
-    """Play a user-defined sequence of ``(note, length)`` tuples.
+    """Play your own tune: a list of ``(note, length)`` pairs.
 
-    ``note`` is a note name string or MIDI int; ``length`` is beats at current BPM.
+    Each note works like in :func:`note`, for example
+    ``[("C4", 1), ("E4", 1), ("G4", 2)]``.
     """
     ...
 
 def play_midi(path: str, *, block: bool = True) -> None:
-    """Play a Standard MIDI File (SMF format 0 or 1) from the filesystem.
+    """Play a MIDI music file, for example ``"/sd/song.mid"``.
 
-    Up to 8 simultaneous voices. Uses the current wave type.
-    ``path`` must be absolute (e.g. ``"/sd/song.mid"``).
+    Up to 8 notes can sound at the same time. Uses the current wave type.
     """
     ...

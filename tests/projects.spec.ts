@@ -69,7 +69,7 @@ describe("settings merge", () => {
     expect(s.darkMode).toBe(DEFAULT_EDITOR_SETTINGS.darkMode);
     expect(s.monaco.fontSize).toBe(20);
     expect(s.monaco.tabSize).toBe(DEFAULT_MONACO_SETTINGS.tabSize);
-    expect(s.sidebar.tabOrder).toEqual(["explorer", "projects", "sdcard", "device"]);
+    expect(s.sidebar.tabOrder).toEqual(["explorer", "projects", "sdcard", "device", "docs", "examples"]);
   });
 });
 

@@ -7,8 +7,8 @@ export const PROJECT_VERSION = "2.0.0";
 
 // ── Editor settings (global, persisted in localStorage) ──────────────────────
 
-export type SidebarTabId = "explorer" | "projects" | "sdcard" | "device";
-export const SIDEBAR_TAB_IDS: SidebarTabId[] = ["explorer", "projects", "sdcard", "device"];
+export type SidebarTabId = "explorer" | "projects" | "sdcard" | "device" | "docs" | "examples";
+export const SIDEBAR_TAB_IDS: SidebarTabId[] = ["explorer", "projects", "sdcard", "device", "docs", "examples"];
 
 export interface SidebarSettings {
   side: "left" | "right";

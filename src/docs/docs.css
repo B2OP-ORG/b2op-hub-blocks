@@ -1,0 +1,80 @@
+.doc-page {
+  color: var(--doc-text);
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 16px 28px 48px;
+  max-width: 860px;
+  overflow-wrap: anywhere;
+}
+.doc-page.doc-compact {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px 32px;
+}
+.doc-page h1 { font-size: 1.6em; margin: 0.2em 0 0.3em; }
+.doc-page h2 { font-size: 1.3em; margin: 1.6em 0 0.5em; padding-bottom: 0.2em; border-bottom: 1px solid var(--doc-border); }
+.doc-page h3 { font-size: 1.1em; margin: 1.4em 0 0.4em; }
+.doc-page h4, .doc-page h5 { font-size: 1em; margin: 1.2em 0 0.3em; }
+.doc-compact h1 { font-size: 1.35em; }
+.doc-compact h2 { font-size: 1.15em; }
+.doc-page p, .doc-page ul, .doc-page ol { margin: 0.5em 0; }
+.doc-page ul, .doc-page ol { padding-left: 1.4em; }
+.doc-page a { color: var(--doc-accent); text-decoration: none; }
+.doc-page a:hover { text-decoration: underline; }
+.doc-page code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--doc-card-bg);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+.doc-page pre code { background: none; padding: 0; font-size: 12.5px; }
+.doc-code { position: relative; margin: 0.6em 0; }
+.doc-code pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--doc-border);
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--doc-code-bg) !important;
+  white-space: pre;
+}
+.doc-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--doc-border);
+  background: var(--doc-card-bg);
+  color: var(--doc-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.doc-code:hover .doc-copy, .doc-copy:focus { opacity: 1; }
+.doc-page blockquote {
+  margin: 0.8em 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--doc-accent);
+  background: var(--doc-card-bg);
+  border-radius: 0 6px 6px 0;
+}
+.doc-page blockquote p { margin: 0.2em 0; }
+.doc-page table { border-collapse: collapse; margin: 0.6em 0; display: block; overflow-x: auto; }
+.doc-page th, .doc-page td { border: 1px solid var(--doc-border); padding: 3px 8px; text-align: left; vertical-align: top; }
+.doc-page th { background: var(--doc-card-bg); }
+.doc-meta { color: var(--doc-dim); font-size: 0.9em; }
+.doc-card {
+  border: 1px solid var(--doc-border);
+  border-radius: 8px;
+  padding: 2px 14px 10px;
+  margin: 1em 0;
+  background: color-mix(in srgb, var(--doc-card-bg) 50%, transparent);
+}
+.doc-card h4 { margin-top: 0.8em; }
+.doc-page img { max-width: 100%; }
+.doc-page hr { border: none; border-top: 1px solid var(--doc-border); margin: 1.5em 0; }
+/* Narrow sidebar: wrap long signatures (example code keeps its indentation and scrolls). */
+.doc-compact .doc-card .doc-code pre { white-space: pre-wrap; overflow-wrap: anywhere; }

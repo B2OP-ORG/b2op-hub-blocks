@@ -1,9 +1,9 @@
-"""In-firmware emulated LPF2 ports and devices.
+"""Advanced: pretend devices that you program yourself in Python.
 
-Pair a :class:`port` with a :class:`device` (typically a subclass) to
-present a fake device to the rest of the stack — used by
-:class:`lpf2.hub_emulation` to expose Python-implemented devices to
-LEGO apps, and by the port expander to synthesise sub-ports.
+Make a :class:`device` (usually your own class based on it), put it in a
+:class:`port`, and it behaves like a real LEGO device. Combine it with
+:class:`lpf2.hub_emulation` so a LEGO app can "see" your custom
+gadget, or put it behind a port expander.
 """
 
 from __future__ import annotations
@@ -12,83 +12,68 @@ from lpf2 import port as _port
 from lpf2 import device_descriptor
 
 class port(_port):
-    """LPF2 port whose transport is a Python-side :class:`device`.
+    """A pretend port that holds a pretend :class:`device`.
 
-    ``attachDevice`` binds a :class:`device` instance; from then on
-    calls to the port's motor/sensor methods are forwarded to the
-    device's overrides.
+    It works like any other :class:`lpf2.port`; commands sent to it go to
+    your device's functions.
     """
 
     def attachDevice(self, device: device) -> None:
-        """Bind ``device`` to this port. Replaces any previously attached device."""
+        """Put ``device`` into this port (replacing any device already there)."""
         ...
     def detachDevice(self) -> None:
-        """Detach the current device. The port then reports disconnected."""
+        """Take the device out; the port is then empty."""
         ...
 
 class device:
-    """Emulated LPF2 device backed by a :class:`~lpf2.device_descriptor`.
+    """A pretend device whose behaviour you write in Python.
 
-    Subclass to implement custom behaviour: override
-    :meth:`startPower`, :meth:`setMode`, :meth:`writeData` etc.
-    The default overrides on this class call the C++ default logging
-    implementation, so it is safe to call ``super().startPower(pw)``
-    from a subclass — recursion into Python is prevented on the C++
-    side.
-
-    Registers itself with the firmware's update registry at
-    construction, so any C++ ``update()`` behaviour runs each tick
-    automatically. Python code does not need to poll the device.
+    Make your own class based on it and write functions like
+    :meth:`startPower` to decide what happens when someone drives your
+    "motor". By default every command is just printed to the log, and
+    calling ``super().startPower(pw)`` from your version does the same.
+    Describe its modes with a :class:`lpf2.device_descriptor`.
     """
 
     def setModeData(self, mode: int, buf: bytes) -> None:
-        """Store ``buf`` as the latest raw payload for ``mode`` and fire
-        the value-change callback."""
+        """Publish a new value (as raw bytes) for ``mode`` — like a sensor reporting a reading."""
         ...
     def setWriteDataCallback(self, cb: object) -> None:
-        """Install a callback ``cb(mode, data, userData)`` that intercepts
-        writes made via :meth:`writeData` before the default logging
-        implementation runs."""
+        """Run ``cb(mode, data, userData)`` whenever raw data is sent to the device."""
         ...
     def startPower(self, pw: int) -> None:
-        """Motor power (-100..100). Default: log the call."""
+        """Called when someone sets the motor power (-100..100). Default: print it to the log."""
         ...
     def setAccTime(self, time: int, profile: int) -> None:
-        """Set acceleration time/profile. Default: log the call."""
+        """Called when someone sets the speed-up time. Default: print it to the log."""
         ...
     def setDecTime(self, time: int, profile: int) -> None:
-        """Set deceleration time/profile. Default: log the call."""
+        """Called when someone sets the slow-down time. Default: print it to the log."""
         ...
     def startSpeed(self, speed: int = 100, maxPower: int = 100, useProfile: int = 0) -> None:
-        """Run at ``speed`` for as long as commanded. Default: log the call."""
+        """Called when someone asks for a steady speed. Default: print it to the log."""
         ...
     def startSpeedForTime(self, time: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Run at ``speed`` for ``time`` ms. Default: log the call."""
+        """Called when someone asks to run for a time. Default: print it to the log."""
         ...
     def startSpeedForDegrees(self, degrees: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Rotate by ``degrees``. Default: log the call."""
+        """Called when someone asks to turn by some degrees. Default: print it to the log."""
         ...
     def gotoAbsPosition(self, absPos: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move to absolute encoder position. Default: log the call."""
+        """Called when someone asks to go to a position. Default: print it to the log."""
         ...
     def presetEncoder(self, pos: int) -> None:
-        """Reset the encoder to ``pos``. Default: log the call."""
+        """Called when someone resets the position. Default: print it to the log."""
         ...
     def writeData(self, mode: int, buf: bytes) -> int:
-        """Handle a raw write on ``mode``. Default: dispatch to the
-        write callback installed via :meth:`setWriteDataCallback`, else
-        log the payload. Return 0 on success."""
+        """Called when raw data is sent to ``mode``. Default: run the :meth:`setWriteDataCallback` function, or print it. Return 0 if OK."""
         ...
     def setMode(self, mode: int, delta: float = 1.0) -> int:
-        """Select the active input mode. Default: log the call. Returns 0."""
+        """Called when someone picks a mode. Default: print it to the log. Returns 0."""
         ...
     def setModeCombo(self, idx: int, deltas: Sequence[float] = ()) -> int:
-        """Select a mode combination. Default: log the call. Returns 0."""
+        """Called when someone picks a mode combination. Default: print it to the log. Returns 0."""
         ...
     def __init__(self, descriptor: device_descriptor) -> None:
-        """Build a device from a :class:`lpf2.device_descriptor`.
-
-        The descriptor defines the modes, versions and I/O masks the
-        emulated device advertises.
-        """
+        """Create a pretend device described by ``descriptor`` (its modes and versions)."""
         ...

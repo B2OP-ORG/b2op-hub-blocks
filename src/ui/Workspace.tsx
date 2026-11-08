@@ -9,6 +9,7 @@ import { newFileFlow } from "./actions";
 // Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
 const BlocklyView = lazy(() => import("./BlocklyView").then((m) => ({ default: m.BlocklyView })));
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
+const ExtraTabView = lazy(() => import("./ExtraTabView").then((m) => ({ default: m.ExtraTabView })));
 
 function NoFileOpen() {
   const p = usePalette();
@@ -35,6 +36,7 @@ export function Workspace() {
   const activeFileId = useApp((s) => s.activeFileId);
   const activeFile = useApp((s) => s.mfp.files.find((f) => f.id === s.activeFileId));
   const editorSettings = useApp((s) => s.editorSettings);
+  const extraTab = useApp((s) => (s.activeExtraTab ? s.extraTabs.find((t) => t.id === s.activeExtraTab) : undefined));
   const [pySize, setPySize] = useState(0);
   const [conSize, setConSize] = useState(0);
 
@@ -70,7 +72,9 @@ export function Workspace() {
 
   let editor: React.ReactNode;
   let columns = "1fr";
-  if (!activeFile) {
+  if (extraTab) {
+    editor = <Suspense fallback={null}><ExtraTabView tab={extraTab} /></Suspense>;
+  } else if (!activeFile) {
     editor = <NoFileOpen />;
   } else if (project.type === "blocks") {
     columns = `1fr ${pySize + DRAWER_HANDLE}px`;
@@ -97,7 +101,7 @@ export function Workspace() {
     );
   }
 
-  const isBlocks = !!activeFile && project.type === "blocks";
+  const isBlocks = !extraTab && !!activeFile && project.type === "blocks";
 
   return (
     <div

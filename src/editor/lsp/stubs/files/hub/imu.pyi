@@ -1,83 +1,87 @@
-"""On-board IMU (BNO085 or LSM6DSL, depending on board).
+"""Motion sensor: which way the hub is tilted and turned.
 
-Attitude fields are in degrees, wrapped to [-180, 180]. On BNO085
-boards the fusion is 9-DoF (accel + gyro + mag) done on-chip via the
-SH-2 Rotation Vector report — yaw has an absolute reference. On
-LSM6DSL boards fusion is a complementary filter on pitch/roll and
-gyro-integrated yaw (drifts; no magnetometer).
+``pitch``, ``roll`` and ``yaw`` are angles in degrees, from -180 to 180:
+
+* **pitch** — nose up / nose down,
+* **roll** — tilting left / right,
+* **yaw** — turning around, like a compass.
+
+Wait until :data:`calibrated` is ``True`` before trusting the values.
+On some hubs yaw slowly drifts over time; call :func:`reset` to set it
+back to 0.
 """
 
 class _vec3:
-    """3-component float vector used for IMU acceleration / gyro samples."""
+    """Three numbers ``x``, ``y`` and ``z`` — one for each direction."""
     x: float
-    """X component."""
+    """Left/right part."""
     y: float
-    """Y component."""
+    """Forward/backward part."""
     z: float
-    """Z component."""
+    """Up/down part."""
     def __init__(self, x: float, y: float, z: float) -> None: ...
     def length(self) -> float:
-        """Euclidean length: ``sqrt(x*x + y*y + z*z)``."""
+        """How big the vector is overall, ignoring direction."""
         ...
     def distance_to(self, other: "_vec3") -> float:
-        """Euclidean distance between this vector and ``other``."""
+        """How far this vector is from ``other``."""
         ...
 
 
 pitch: float
-"""Fused pitch, degrees."""
+"""Nose up (+) or down (-), in degrees."""
 yaw: float
-"""Fused yaw, degrees."""
+"""Which way the hub is facing, in degrees. Use :func:`reset` to set the current direction as 0."""
 roll: float
-"""Fused roll, degrees."""
+"""Tilt to the side, in degrees."""
 
 pitch_accel: float
-"""Raw accel-derived pitch. Noisy but no drift. Degrees."""
+"""Advanced: pitch measured only from gravity. Jumpy, but never drifts. Degrees."""
 roll_accel: float
-"""Raw accel-derived roll. Noisy but no drift. Degrees."""
+"""Advanced: roll measured only from gravity. Jumpy, but never drifts. Degrees."""
 
 pitch_gyro: float
-"""Pure gyro-integrated pitch. Drifts. Degrees."""
+"""Advanced: pitch measured only from rotation. Smooth, but drifts over time. Degrees."""
 yaw_gyro: float
-"""Pure gyro-integrated yaw. Drifts. Degrees."""
+"""Advanced: yaw measured only from rotation. Smooth, but drifts over time. Degrees."""
 roll_gyro: float
-"""Pure gyro-integrated roll. Drifts. Degrees."""
+"""Advanced: roll measured only from rotation. Smooth, but drifts over time. Degrees."""
 
 acceleration: _vec3
-"""Latest acceleration sample in mG, hub frame."""
+"""How hard the hub is being pushed (including gravity), in milli-g.
+
+Lying still and flat, ``z`` is about 1000 (that's gravity).
+"""
 gyro_rate: _vec3
-"""Latest gyro-rate sample in dps, hub frame. Calibrated bias subtracted."""
+"""How fast the hub is spinning around each direction, in degrees per second."""
 
 calibrated: bool
-"""LSM6DSL: post-reset gyro-bias averaging finished (~2 s after
-boot/reset). While False, gyro readings and yaw are held at 0.
-BNO085: rotation-vector status byte >= 2 (medium/high accuracy)."""
+"""``True`` once the sensor is ready and its readings can be trusted.
+
+Right after start-up (or after :func:`reset`) keep the hub still for
+about 2 seconds until this turns ``True``.
+"""
 
 def reset() -> None:
-    """Zero yaw.
+    """Set the current direction as yaw = 0.
 
-    LSM6DSL: restarts gyro-bias calibration — hub must be held
-    stationary for ~2 s afterwards.
-    BNO085: captures the current fused yaw as the new zero (Tare);
-    no wait required.
+    On some hubs this also re-calibrates the sensor — keep the hub still
+    for about 2 seconds afterwards.
     """
     ...
 
 def start_calibration() -> bool:
-    """Enable all backend-supported calibrators.
+    """Start calibrating the sensor more precisely.
 
-    BNO085 already runs continuous cal by default; this makes it
-    explicit. Perform figure-8 motion (mag) and place the hub in
-    several flat orientations for a few seconds each (accel/gyro).
-    Returns True on success.
+    Move the hub in a figure-8, then put it down flat on each side for a
+    few seconds. Returns ``True`` if calibration started.
     """
     ...
 
 def save_calibration() -> bool:
-    """Persist current calibration to the sensor's non-volatile storage.
+    """Remember the current calibration, so it survives a restart.
 
-    BNO085: saves the Dynamic Calibration Data (DCD) into on-chip
-    flash. LSM6DSL: no-op (gyro bias is recomputed every boot).
-    Call once ``calibrated`` reads True. Returns True on success.
+    Call it once :data:`calibrated` is ``True``. Not every hub can store a
+    calibration; on those this does nothing. Returns ``True`` on success.
     """
     ...

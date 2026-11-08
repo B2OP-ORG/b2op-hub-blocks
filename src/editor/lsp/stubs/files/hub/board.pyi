@@ -1,14 +1,17 @@
-"""1:1 mirror of the board's ``Board.h`` via ``BOARD_INT_EXPORTS`` /
-``BOARD_STR_EXPORTS``. All integer constants are encoded as logical
-pins (``MAKE_PIN``) or logical buses (``MAKE_BUS``); use
-``hub.board.*`` values with ``hub.i2c`` directly.
-Attributes set to ``0`` / ``PIN_NONE`` on this board are still
-present but meaningless.
+"""Advanced: technical details about the hub's circuit board.
+
+Most programs never need this. It tells you which parts this hub has
+(for example ``HAS_AUDIO`` is ``1`` when there is a speaker) and which
+pins and buses they use. Pin and bus numbers can be passed straight to
+``machine.Pin`` and ``hub.i2c``. A value of ``-1`` means "not on this
+board".
 """
 
 # Identity
 BOARD_NAME: str
+"""Name of this hub model."""
 BOARD_VERSION: str
+"""Hardware version of this hub."""
 
 # I2C buses
 HAS_I2C0: int
@@ -79,10 +82,12 @@ BUTTON_RIGHT_PIN: int
 
 # LCD
 HAS_LCD: int
+"""``1`` if this hub has a screen."""
 LCD_DC_PIN: int
 
 # Audio amplifier
 HAS_AUDIO: int
+"""``1`` if this hub has a speaker (needed for ``hub.audio``)."""
 AUDIO_BUS: int
 LCD_TE_PIN: int
 LCD_RST_PIN: int
@@ -139,6 +144,7 @@ PORT_D_PWM2_PIN: int
 
 # SD card
 HAS_SD_CARD: int
+"""``1`` if this hub has an SD card slot."""
 SD_MODE: int
 SD_SLOT: int
 SD_WIDTH: int

@@ -1,27 +1,28 @@
-"""Physical hub ports, exposed as :class:`lpf2.local.port` objects.
+"""The hub's ports — the sockets where you plug in LEGO motors and sensors.
 
-``A``..``D`` are the external LPF2 sockets; ``LED``, ``accelerometer``
-and ``gyro`` wrap the built-in devices behind LPF2-style ports.
+Use ``hub.ports.A`` to ``hub.ports.F``. Each one is a
+:class:`lpf2.local.port`, so you can ask it what's plugged in, drive a
+motor or read a sensor.
 """
 
 from lpf2 import port as _port
 from lpf2.local import port as _local_port
 
 A: _local_port
-"""External port A."""
+"""Port A."""
 B: _local_port
-"""External port B."""
+"""Port B."""
 C: _local_port
-"""External port C."""
+"""Port C."""
 D: _local_port
-"""External port D."""
+"""Port D."""
 E: _local_port
-"""External port E."""
+"""Port E."""
 F: _local_port
-"""External port F."""
+"""Port F."""
 LED: _port
-"""Virtual port wrapping the built-in hub RGB LED."""
+"""Advanced: the built-in light, as if it were plugged into a port. Usually use ``hub.led`` instead."""
 accelerometer: _port
-"""Virtual port wrapping the on-board accelerometer."""
+"""Advanced: the built-in accelerometer, as if it were plugged into a port. Usually use ``hub.accelerometer`` instead."""
 gyro: _port
-"""Virtual port wrapping the on-board gyroscope."""
+"""Advanced: the built-in gyroscope, as if it were plugged into a port. Usually use ``hub.gyro`` instead."""

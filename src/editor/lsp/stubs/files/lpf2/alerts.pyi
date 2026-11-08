@@ -1,4 +1,4 @@
-"""Hub alert types (see LWP 3.5.4)."""
+"""Warnings a hub can show in a LEGO app, for :meth:`lpf2.hub_emulation.setAlert`."""
 
 LOW_BATTERY: int = 0x01
 """Battery voltage below the configured minimum."""

@@ -23,6 +23,7 @@
     "esp-web-tools": "^10.4.0",
     "fflate": "^0.8.2",
     "lucide-react": "^1.66.0",
+    "marked": "^18.1.3",
     "monaco-editor": "^0.55.1",
     "monaco-languageclient": "^10.7.0",
     "pyright": "^1.1.411",

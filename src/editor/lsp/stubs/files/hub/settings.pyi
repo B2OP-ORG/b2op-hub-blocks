@@ -1,18 +1,17 @@
-"""Persistent hub settings stored in ``/settings.json``.
+"""Hub settings that are remembered after a restart.
 
-All fields are read-writable; call ``save()`` to persist changes.
-Settings are loaded at startup by ``hub_app_run()``.
+Change a value, then call :func:`save` to keep it.
 """
 
 allow_full_fs: bool
-"""If ``True`` the file browser root is ``/``; otherwise ``/sd``."""
+"""Show the hub's whole file system in the Run program menu, not just the SD card."""
 usb_msc: bool
-"""If ``True`` USB Mass Storage Class is started on boot."""
+"""Show the SD card as a USB drive on your computer when the hub starts."""
 ble_adv: bool
-"""If ``True`` BLE advertising starts on boot (default ``True``)."""
+"""Make the hub visible over Bluetooth when it starts (on by default)."""
 show_batt_pct: bool
-"""If ``True`` the menu header shows battery percentage."""
+"""Show the battery percentage at the top of the hub's screen."""
 
 def save() -> None:
-    """Write current settings to ``/settings.json``."""
+    """Save the current settings so they are used after a restart."""
     ...

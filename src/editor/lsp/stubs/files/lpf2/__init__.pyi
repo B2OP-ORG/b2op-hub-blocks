@@ -1,9 +1,11 @@
-"""LEGO Powered-Up LPF2 protocol bindings.
+"""Talk to LEGO Powered Up motors, sensors, lights and hubs.
 
-Provides the core LPF2 primitives: ports (local, remote and virtual),
-typed device wrappers, hub descriptors and a hub-emulation server.
-Submodules expose the LPF2 enumerations (:mod:`~lpf2.color`,
-:mod:`~lpf2.device_type`, :mod:`~lpf2.port_num` ...).
+The ports on your hub (``hub.ports.A`` …) are :class:`port` objects:
+use them to see what's plugged in and to drive motors. ``lpf2`` also
+lets you connect to other LEGO hubs over Bluetooth (:class:`hub`) or
+make your hub pretend to be a LEGO hub (:class:`hub_emulation`).
+Useful lists of numbers live in sub-modules like :mod:`~lpf2.color`
+and :mod:`~lpf2.device_type`.
 """
 
 from __future__ import annotations
@@ -23,11 +25,12 @@ from lpf2 import port_expander as port_expander
 from typing import Callable
 
 class battery:
-    """Battery voltage tracking + optional ADC divider reader.
+    """Advanced: battery level calculation for custom battery setups.
 
-    All methods are static. Defaults: max 9000 mV, min 6000 mV, current
-    voltage equal to max. Percent = linear interpolation between min
-    and max with a cutoff at min.
+    For the hub's own battery use ``hub.battery`` instead. Here you can
+    set what voltage counts as full (default 9000 mV) and empty (default
+    6000 mV); the percentage is worked out between those two.
+    Use it as ``lpf2.battery.getPercent()`` — no need to create one.
     """
 
     @staticmethod
@@ -60,14 +63,14 @@ class battery:
         ...
     @staticmethod
     def getPercent() -> int:
-        """Compute percentage from current voltage using the mapping
-        installed via :meth:`setPercentFunc` (default: linear)."""
+        """How full the battery is, 0..100 %, based on the current voltage."""
         ...
     @staticmethod
     def setPercentFunc(fn: Optional[Callable[[int, int, int], int]]) -> None:
-        """Install a custom voltage->percent mapping ``fn(mV, vmin, vmax)``.
+        """Use your own function to turn a voltage into a percentage.
 
-        Pass ``None`` to restore the default linear mapping.
+        ``fn(mV, vmin, vmax)`` must return 0..100. Pass ``None`` to go back
+        to the default (a straight line between empty and full).
         """
         ...
     @staticmethod
@@ -79,25 +82,23 @@ class battery:
         vref_mv: int = 3300,
         samples: int = 8,
     ) -> bool:
-        """Configure the ESP-IDF ADC + calibration for a resistive divider.
+        """Advanced: measure a battery through a voltage divider on an analog pin.
 
-        ``adc_channel``/``adc_unit`` are ESP-IDF ``adc_channel_t`` /
-        ``adc_unit_t`` values. ``r_top_ohms``/``r_bottom_ohms`` describe
-        the divider (battery -> tap -> GND). Returns True on success.
+        ``adc_channel`` / ``adc_unit`` pick the ESP32 analog input;
+        ``r_top_ohms`` / ``r_bottom_ohms`` are the two resistors (battery
+        → middle → ground). Returns ``True`` if it worked.
         """
         ...
     @staticmethod
     def readBatteryVoltage() -> int:
-        """Read the divider, average ``samples`` shots, store via
-        :meth:`setCurrentVoltage`. Returns the reading in mV, or 0 if
-        the ADC is not configured."""
+        """Measure the battery now (see :meth:`setupAdcDivider`) and return millivolts, or 0 if not set up."""
         ...
 
 class _motor_settings:
-    """Motor tuning parameters (PID gains, deadbands, kinetic limits).
+    """Advanced: tuning values that control how smoothly a motor reaches its speed or position.
 
-    One instance per motor type; consumed by the encoder-motor
-    controller. Fields mirror the C++ ``Lpf2::MotorSettings`` layout.
+    Changing a field takes effect immediately. Only touch these if a
+    motor overshoots, wobbles or stalls.
     """
     id: int
     """Motor type identifier."""
@@ -131,7 +132,7 @@ class _motor_settings:
     """Minimum power (%) held while the motor is moving."""
 
 class motor_setting:
-    """Preset :class:`_motor_settings` instances for known LPF2 motors."""
+    """Advanced: the tuning values used for each kind of LEGO motor."""
     medium_linear: _motor_settings
     """Medium linear motor."""
     technic_large_linear: _motor_settings
@@ -148,11 +149,10 @@ class motor_setting:
     """Technic Large Angular motor (grey Control+ variant)."""
 
 class mode:
-    """Description of one LPF2 device mode (parsed from Port Mode Info).
+    """Advanced: describes one "mode" of a device — one kind of value it can report or accept.
 
-    Combines the mode's name, value range (raw/PCT/SI), I/O mapping
-    flags, dataset layout and the latest raw payload received on the
-    mode.
+    For example a color sensor has a mode for color, one for reflected
+    light, and so on. Holds the mode's name and value ranges.
     """
     name: str
     """Mode name (from the device)."""
@@ -188,7 +188,7 @@ class mode:
     """Latest raw payload for this mode."""
 
 class version:
-    """LEGO Wireless Protocol version tuple: Build/Major/Minor/Bugfix."""
+    """A version number made of Major.Minor.Bugfix.Build."""
     Build: int
     """Build number."""
     Major: int
@@ -199,46 +199,40 @@ class version:
     """Bugfix version."""
 
 class port:
-    """Base LPF2 port.
+    """A port where a LEGO motor, sensor or light can be plugged in.
 
-    Base class for :class:`lpf2.local.port`, :class:`lpf2.virtual.port`
-    and remote ports. Wraps the C++ ``Lpf2::Port``. Every port
-    registers itself with the firmware's update registry at
-    construction, so :meth:`update` is polled automatically each
-    tick — callers just read state via :meth:`isDeviceConnected` /
-    :meth:`device` / :meth:`getValue`.
+    ``hub.ports.A`` and friends are ports. Ask :meth:`isDeviceConnected`
+    whether something is plugged in, get it with :meth:`device`, or
+    drive a motor directly with :meth:`startPower`, :meth:`startSpeed`
+    and friends. The hub keeps every port up to date in the background,
+    so you just read the values.
+
+    Speeds and powers go from -100 to 100: the sign picks the direction.
     """
 
     def init(self) -> None:
-        """Optional one-shot setup hook. Default: no-op."""
+        """Advanced: one-time setup hook. Does nothing by default."""
         ...
     def update(self) -> None:
-        """Poll the port: run one tick of the underlying transport, then
-        resolve the attached device via the device factory.
+        """Advanced: check the port for news right now.
 
-        The C firmware calls this every tick for every port, so user
-        code does not need to call it. Calling it manually just runs
-        an extra poll early. No-op while the port is disabled (see
-        :meth:`disable`)."""
+        You don't need this — the hub already does it for every port
+        many times per second.
+        """
         ...
     def disable(self, disable: bool = True) -> None:
-        """Enable/disable port polling.
+        """Switch the port off (or back on with ``disable(False)``).
 
-        When disabled, :meth:`update` returns immediately without polling
-        the transport or forwarding to the attached device. Use to pause
-        a port temporarily (e.g. while another task drives the same
-        hardware) without tearing down the device wrapper. Call
-        ``disable(False)`` to resume.
-
-        Subclasses may release/reacquire transport resources on the
-        transition via the C++ ``_onDisable`` hook (e.g. deinit UART).
+        While switched off the hub stops talking to the device and frees
+        the port's pins, so you can use them for something else — for
+        example an LED strip (see the NeoPixel example).
         """
         ...
     def enable(self) -> None:
-        """Re-enable a previously disabled port. Equivalent to ``disable(False)``."""
+        """Switch a port back on after :meth:`disable`."""
         ...
     def isDisabled(self) -> bool:
-        """True if the port is currently disabled."""
+        """``True`` while the port is switched off with :meth:`disable`."""
         ...
     def device(self) -> Union[
         devices.basic_motor,
@@ -251,76 +245,107 @@ class port:
         devices.gyroscope,
         None,
     ]:
-        """Return the typed device wrapper for whatever is currently
-        attached, or ``None`` if nothing is connected."""
+        """The motor, sensor or light plugged into this port, or ``None`` if nothing is plugged in.
+
+        What you get depends on the device — for example an
+        :class:`~lpf2.devices.encoder_motor` or a
+        :class:`~lpf2.devices.color_sensor` — each with its own handy
+        functions.
+        """
         ...
     def writeData(self, mode: int, buf: bytes) -> int:
-        """Send a raw payload to the device on the given mode. Returns
-        an error code (0 = ok)."""
+        """Advanced: send raw bytes to the device for ``mode``. Returns 0 if it worked."""
         ...
     def startPower(self, pw: int) -> None:
-        """Set motor power. ``pw`` in [-100..100]: negative = CCW, positive = CW."""
+        """Run a motor at a power from -100 to 100.
+
+        Positive turns one way, negative the other, ``0`` stops. Works
+        with every motor, even simple ones without a rotation sensor.
+        """
         ...
     def setAccTime(self, time: int, profile: int) -> None:
-        """Set acceleration time (ms) and profile for the motor."""
+        """How long (milliseconds) the motor takes to speed up, stored in slot ``profile`` (0..15).
+
+        Use it with the ``useProfile`` option of the speed functions.
+        """
         ...
     def setDecTime(self, time: int, profile: int) -> None:
-        """Set deceleration time (ms) and profile for the motor."""
+        """How long (milliseconds) the motor takes to slow down, stored in slot ``profile`` (0..15)."""
         ...
     def startSpeed(self, speed: int = 100, maxPower: int = 100, useProfile: int = 0) -> None:
-        """Run the motor at ``speed`` (-100..100). ``maxPower`` caps
-        commanded power (0..100). ``useProfile`` selects the acc/dec
-        profiles (low nibble = acc, next nibble = dec)."""
+        """Run the motor at a steady ``speed`` from -100 to 100 until told otherwise.
+
+        Unlike :meth:`startPower` the motor works harder uphill to keep
+        its speed (needs a motor with a rotation sensor). ``maxPower``
+        (0..100) limits how hard it may push. ``useProfile`` picks the
+        speed-up/slow-down times set with :meth:`setAccTime` /
+        :meth:`setDecTime` (``0x21`` = speed up with slot 1, slow down
+        with slot 2).
+        """
         ...
     def startSpeedForTime(self, time: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Run the motor at ``speed`` for ``time`` ms then apply
-        ``endState`` (see :mod:`lpf2.button_state` / BrakingStyle)."""
+        """Run the motor at ``speed`` for ``time`` milliseconds, then stop.
+
+        ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def startSpeedForDegrees(self, degrees: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move the motor by ``degrees`` (positive; use ``speed`` sign
-        for direction) then apply ``endState``."""
+        """Turn the motor by ``degrees`` (360 = one full turn), then stop.
+
+        Give a positive number of degrees; make ``speed`` negative to turn
+        the other way. ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def gotoAbsPosition(self, absPos: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move the motor to absolute encoder position ``absPos`` at
-        ``speed`` (0..100) then apply ``endState``."""
+        """Turn the motor to position ``absPos`` degrees, then stop.
+
+        Position 0 is where it was at start-up or where you last called
+        :meth:`presetEncoder`. ``speed`` is 0..100. ``endState`` says what the motor does afterwards: ``0`` = let it
+        spin freely (coast), ``127`` = brake, ``126`` = hold its position.
+        """
         ...
     def presetEncoder(self, pos: int) -> None:
-        """Reset the motor encoder to ``pos``. Also stops the motor."""
+        """Stop the motor and say "this position is now ``pos`` degrees" (usually 0)."""
         ...
     def setRgbColorIdx(self, idx: int) -> None:
-        """Set an RGB LED by :mod:`lpf2.color` index (uses mode 0)."""
+        """Set a light to one of the colors in :mod:`lpf2.color`, e.g. ``color.RED``."""
         ...
     def setRgbColor(self, r: int, g: int, b: int) -> None:
-        """Set an RGB LED by explicit RGB (0..255, uses mode 1)."""
+        """Set a light to any color by mixing red, green and blue, each 0..255."""
         ...
     def setMode(self, mode: int, delta: float = 1.0) -> int:
-        """Select the device's active input mode.
+        """Advanced: choose which kind of value the device should report (its "mode").
 
-        ``delta`` is the minimum change (in raw units) that triggers a
-        value-change callback. 0 = every update. Returns 0 on success.
+        ``delta`` is how much the value must change before an update is
+        sent (0 = always). Returns 0 if it worked. The device classes in
+        :mod:`lpf2.devices` pick modes for you.
         """
         ...
     def setModeCombo(self, idx: int, deltas: Sequence[float] = ()) -> int:
-        """Activate one of the device's mode combinations.
+        """Advanced: have the device report several modes at once.
 
-        ``deltas`` are per-mode change thresholds in the order defined
-        by the combo bitmask; empty = default of 1. Returns 0 on
-        success.
+        ``idx`` picks one of the device's built-in combinations;
+        ``deltas`` gives the minimum change for each mode in it. Returns
+        0 if it worked.
         """
         ...
     def isDeviceConnected(self) -> bool:
-        """True if a device has been detected on this port."""
+        """``True`` if something is plugged into this port."""
         ...
     def getValue(self, mode: int, dataSet: int) -> float:
-        """Parsed value of dataset ``dataSet`` of ``mode``. Format
-        (int8/16/32/float) is taken from the mode descriptor."""
+        """Read a value from the device: value number ``dataSet`` (starting at 0) of ``mode``.
+
+        Use this for devices that have no special class in
+        :mod:`lpf2.devices`; otherwise their own functions are easier.
+        """
         ...
     def getValueStr(self, mode: int) -> str:
-        """Human-readable value of ``mode`` formatted per the mode's
-        figures/decimals."""
+        """The value(s) of ``mode`` as readable text."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type (see :mod:`lpf2.device_type`)."""
+        """A number saying what kind of device is plugged in — compare it with :mod:`lpf2.device_type`."""
         ...
     def getModeCount(self) -> int:
         """Total number of modes exposed by the device."""
@@ -347,19 +372,19 @@ class port:
         """Capability bitmask (bit 0x04 = combinable, if the device has combos)."""
         ...
     def getInfoStr(self) -> str:
-        """Diagnostic dump of port state (device type, modes, versions)."""
+        """Everything the port knows about its device, as text. Handy to ``print`` while exploring."""
         ...
     def speedToRaw(self, speed: int) -> int:
-        """Convert a signed -100..100 speed to the LPF2 raw byte (0..255)."""
+        """Advanced: convert a -100..100 speed to the byte (0..255) the device uses."""
         ...
     def rawToSpeed(self, raw: int) -> int:
-        """Convert an LPF2 raw byte to a signed -100..100 speed."""
+        """Advanced: convert a device byte (0..255) back to a -100..100 speed."""
         ...
 
 class device_descriptor:
-    """Static descriptor for a device (modes + firmware/hardware versions).
+    """Advanced: describes a pretend device — its modes and version numbers.
 
-    Used to build virtual devices without a live LPF2 handshake.
+    Used together with :class:`lpf2.virtual.device`.
     """
     modes: list[mode]
     """List of mode descriptors, indexed by mode number."""
@@ -369,134 +394,129 @@ class device_descriptor:
     """Hardware version reported by the device."""
 
 class hub:
-    """BLE client for a remote LEGO PoweredUp / Control+ hub.
+    """Connect to another LEGO hub (Powered Up, Control+, BOOST…) over Bluetooth.
 
-    Manages the NimBLE scan/connect state, mirrors the remote hub's
-    ports as :class:`port` objects, and exposes hub properties.
-    Registers itself with the firmware's update registry at
-    construction, so :meth:`update` runs each tick automatically —
-    scripts just wait on :meth:`isConnected` / :meth:`infoReady`.
+    Call :meth:`init` to start searching, wait until :meth:`isConnected`
+    and :meth:`infoReady` are ``True``, then use :meth:`getPort` to
+    control its motors and sensors — just like your own ports.
     """
 
     def __init__(self) -> None: ...
     def init(self, addr_or_scan: Union[str, int, None] = None, scan_duration: int = 10) -> None:
-        """Prepare BLE stack and set connect target.
+        """Start searching for a LEGO hub to connect to.
 
-        ``addr_or_scan`` may be:
-        - a MAC-address string to target a specific hub,
-        - an int scan duration (seconds), or
-        - ``None`` to use ``scan_duration``.
+        ``addr_or_scan`` can be a hub's Bluetooth address (text like
+        ``"aa:bb:cc:dd:ee:ff"``) to connect to that exact hub, a number of
+        seconds to search for, or left out to search for ``scan_duration``
+        seconds.
         """
         ...
     def update(self) -> None:
-        """Pump BLE state (scan/connect/message handling).
-
-        Auto-called each tick from the firmware update registry, so
-        user code does not need to call it. Calling it manually just
-        runs an extra pump early."""
+        """Advanced: process Bluetooth news right now. Not needed — the hub does this in the background."""
         ...
     def connectHub(self) -> bool:
-        """Attempt to connect to the discovered hub. Returns True on success."""
+        """Try to connect to the hub that was found. Returns ``True`` if it worked."""
         ...
     def isConnected(self) -> bool:
-        """True while the BLE link is up."""
+        """``True`` while connected to the other hub."""
         ...
     def isConnecting(self) -> bool:
-        """True while a connection attempt is in progress."""
+        """``True`` while trying to connect."""
         ...
     def isScanning(self) -> bool:
-        """True while BLE is actively scanning."""
+        """``True`` while searching for hubs."""
         ...
     def shutDownHub(self) -> None:
-        """Send the LWP hub-shutdown action to the remote hub."""
+        """Turn the other hub off."""
         ...
     def infoReady(self) -> bool:
-        """True once all initial info requests (hub props, port modes) have
-        been answered or timed out."""
+        """``True`` once the other hub has told us all about itself and its ports. Wait for this before using :meth:`getPort`."""
         ...
     def getName(self) -> str:
-        """Advertised name of the connected hub."""
+        """The other hub's name."""
         ...
     def setName(self, name: str) -> None:
-        """Change the hub's advertising name (persisted on the hub)."""
+        """Rename the other hub. It remembers the new name."""
         ...
     def getBatteryType(self) -> int:
-        """Battery type reported by the hub (see :mod:`lpf2.battery_type`)."""
+        """What kind of batteries the other hub uses (see :mod:`lpf2.battery_type`)."""
         ...
     def getHubType(self) -> int:
-        """Hub type reported over BLE (see :mod:`lpf2.hub_type`)."""
+        """What kind of hub it is (see :mod:`lpf2.hub_type`)."""
         ...
     def getHubAddress(self) -> str:
-        """BLE MAC address of the hub."""
+        """The other hub's Bluetooth address."""
         ...
     def getAllInfoStr(self) -> str:
-        """Formatted dump of hub properties + port descriptions."""
+        """Everything known about the other hub and its ports, as text."""
         ...
     def getHubPropStr(self, prop_id: int) -> str:
-        """String rendering of one hub property (see :mod:`lpf2.hub_property`)."""
+        """One fact about the other hub as text, e.g. its firmware version (see :mod:`lpf2.hub_property`)."""
         ...
     def getPort(self, port_num: int) -> Optional[port]:
-        """Return the remote :class:`port` at ``port_num`` (see
-        :mod:`lpf2.port_num`), or ``None`` if not attached."""
+        """One of the other hub's ports, or ``None`` if it doesn't exist.
+
+        Port numbers depend on the hub type — see :mod:`lpf2.port_num`, e.g.
+        ``lpf2.port_num.poweredup.A``. The port works like ``hub.ports.A``.
+        """
         ...
     def setPortMode(self, port_num: int, mode: int, delta: int, notify: bool = True) -> int:
-        """Configure input-format on one remote port. Returns 0 on success."""
+        """Advanced: choose which value a port on the other hub reports. Returns 0 if it worked."""
         ...
     def setPortModeCombo(self, port_num: int, combo_idx: int, nibble_pairs: Sequence[int], deltas_per_mode: Sequence[int]) -> int:
-        """Configure a combined-mode input-format on one remote port.
+        """Advanced: have a port on the other hub report several values at once.
 
-        ``nibble_pairs`` is a list of bytes with mode/dataset nibbles
-        (high = mode, low = dataset); ``deltas_per_mode`` lists the
-        thresholds in the same order.
+        Each byte in ``nibble_pairs`` is ``mode * 16 + value number``;
+        ``deltas_per_mode`` lists the minimum change for each, in the same order.
         """
         ...
 
 class hub_emulation:
-    """BLE server that impersonates a LEGO hub so LEGO apps can connect.
+    """Make your hub pretend to be a LEGO hub, so LEGO apps can connect to it.
 
-    Advertises the LWP service, handles hub-property/port-info requests
-    and forwards port I/O to attached :class:`port` objects. Configure
-    it first (name, versions, battery), attach ports, then :meth:`start`.
+    Set it up first (name, battery…), choose which ports the app may use
+    with :meth:`attachPort`, then call :meth:`start`.
     """
 
     def start(self) -> None:
-        """Begin BLE advertising and start the message-handling task."""
+        """Become visible over Bluetooth so apps can connect."""
         ...
     def stop(self) -> None:
-        """Stop advertising / disconnect / delete the message task."""
+        """Stop pretending: disconnect and become invisible."""
         ...
     def setUseBuiltInDevices(self, use: bool) -> None:
-        """If True, initialise the default built-in devices on start.
-        Must be called before :meth:`start`."""
+        """Also show the hub's built-in light and motion sensor to the app (``True``) or only your attached ports (``False``).
+
+        Call this before :meth:`start`.
+        """
         ...
     def setBatteryLevel(self, level: int) -> None:
-        """Reported battery percentage (0..100)."""
+        """The battery level (0..100 %) shown to the app."""
         ...
     def setBatteryType(self, type: int) -> None:
-        """Reported battery type (see :mod:`lpf2.battery_type`)."""
+        """The battery type shown to the app (see :mod:`lpf2.battery_type`)."""
         ...
     def setName(self, name: str) -> None:
-        """Advertised hub name."""
+        """The hub name shown in the app."""
         ...
     def setFirmwareVersion(self, v: version) -> None:
-        """Firmware version reported to the app."""
+        """The firmware version shown to the app."""
         ...
     def setHardwareVersion(self, v: version) -> None:
-        """Hardware version reported to the app."""
+        """The hardware version shown to the app."""
         ...
     def setButtonState(self, state: int) -> None:
-        """Push a button-state update (see :mod:`lpf2.button_state`)."""
+        """Tell the app the hub's button was pressed or released (see :mod:`lpf2.button_state`)."""
         ...
     def setAlert(self, alert: int, on: bool) -> None:
-        """Assert or clear a hub alert (see :mod:`lpf2.alerts`)."""
+        """Turn a warning such as "low battery" on or off in the app (see :mod:`lpf2.alerts`)."""
         ...
     def getName(self) -> str:
-        """Current advertised hub name."""
+        """The hub name shown in the app."""
         ...
     def attachPort(self, port_num: int, p: port) -> None:
-        """Attach a port object to a port number on the emulated hub.
+        """Let the app use port ``p`` as port number ``port_num`` (0 = A, 1 = B, …).
 
-        The port's lifetime must exceed the ``hub_emulation`` instance;
-        this class does not take ownership.
+        Keep ``p`` in a variable for as long as the emulation runs.
         """
         ...

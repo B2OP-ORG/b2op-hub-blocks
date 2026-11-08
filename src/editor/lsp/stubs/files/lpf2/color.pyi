@@ -1,7 +1,8 @@
-"""LEGO Powered-Up colour indices (LWP ``ColorIDX``).
+"""Named colors for lights and color sensors.
 
-Used by :meth:`lpf2.port.setRgbColorIdx`, :class:`lpf2.devices.hub_led`
-and the colour-sensor family.
+Use them like ``hub.led.setColorIdx(color.RED)`` after
+``from lpf2 import color``, or compare what a color sensor sees:
+``if sensor.getColorIdx() == color.BLUE: ...``
 """
 
 BLACK: int = 0
@@ -27,6 +28,6 @@ RED: int = 9
 WHITE: int = 10
 """White."""
 NUM_COLORS: int = 11
-"""Number of concrete colour entries (BLACK..WHITE)."""
+"""How many colors there are (BLACK to WHITE)."""
 NONE: int = 255
 """Sentinel: no colour / unknown."""

@@ -24,6 +24,7 @@ Reference: https://github.com/DFRobot/DFRobot_GR10_30
 
 import hub
 import struct
+import time
 
 DEV_ADDRESS = 0x73
 
@@ -110,7 +111,7 @@ class GR10_30:
         except OSError:
             return False
         self.reset()
-        hub.sleep_ms(500)
+        time.sleep_ms(500)
         return True
 
     def pid(self):
@@ -126,12 +127,12 @@ class GR10_30:
         hover disables the other gestures when set. See datasheet.
         """
         self._write_u16(REG_INTERRUPT_MODE, mask & GESTURE_ALL)
-        hub.sleep_ms(100)
+        time.sleep_ms(100)
 
     def reset(self):
         """Restore defaults."""
         self._write_u16(REG_RESET, 0x5500)
-        hub.sleep_ms(100)
+        time.sleep_ms(100)
 
     def data_ready(self):
         """True if a gesture has been captured and is waiting in the state reg."""
@@ -149,26 +150,26 @@ class GR10_30:
     def set_udlr_window(self, ud, lr):
         """Detection window size (1..30 each)."""
         self._write_u16(REG_LRUP_WIN, ((lr & 0x1F) << 8) | (ud & 0x1F))
-        hub.sleep_ms(100)
+        time.sleep_ms(100)
 
-    def set_left_range(self, r):        self._write_u16(REG_L_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_right_range(self, r):       self._write_u16(REG_R_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_up_range(self, r):          self._write_u16(REG_U_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_down_range(self, r):        self._write_u16(REG_D_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_forward_range(self, r):     self._write_u16(REG_FORWARD_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_backward_range(self, r):    self._write_u16(REG_BACKWARD_RANGE, r & 0x1F); hub.sleep_ms(100)
-    def set_wave_count(self, n):        self._write_u16(REG_WAVE_COUNT, n & 0x0F); hub.sleep_ms(100)
+    def set_left_range(self, r):        self._write_u16(REG_L_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_right_range(self, r):       self._write_u16(REG_R_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_up_range(self, r):          self._write_u16(REG_U_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_down_range(self, r):        self._write_u16(REG_D_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_forward_range(self, r):     self._write_u16(REG_FORWARD_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_backward_range(self, r):    self._write_u16(REG_BACKWARD_RANGE, r & 0x1F); time.sleep_ms(100)
+    def set_wave_count(self, n):        self._write_u16(REG_WAVE_COUNT, n & 0x0F); time.sleep_ms(100)
 
     def set_hover_window(self, ud, lr):
         self._write_u16(REG_HOVR_WIN, ((lr & 0x1F) << 8) | (ud & 0x1F))
-        hub.sleep_ms(100)
+        time.sleep_ms(100)
 
     def set_hover_timer(self, ticks_10ms):
         """How long hand must hover to fire HOVER. Max 200 (=2 s)."""
         self._write_u16(REG_HOVR_TIMER, ticks_10ms & 0x3FF)
-        hub.sleep_ms(100)
+        time.sleep_ms(100)
 
-    def set_cw_angle(self, count):      self._write_u16(REG_CWS_ANGLE, count & 0x1F); hub.sleep_ms(100)
-    def set_ccw_angle(self, count):     self._write_u16(REG_CCW_ANGLE, count & 0x1F); hub.sleep_ms(100)
-    def set_cw_angle_count(self, c):    self._write_u16(REG_CWS_ANGLE_COUNT, c & 0x1F); hub.sleep_ms(100)
-    def set_ccw_angle_count(self, c):   self._write_u16(REG_CCW_ANGLE_COUNT, c & 0x1F); hub.sleep_ms(100)
+    def set_cw_angle(self, count):      self._write_u16(REG_CWS_ANGLE, count & 0x1F); time.sleep_ms(100)
+    def set_ccw_angle(self, count):     self._write_u16(REG_CCW_ANGLE, count & 0x1F); time.sleep_ms(100)
+    def set_cw_angle_count(self, c):    self._write_u16(REG_CWS_ANGLE_COUNT, c & 0x1F); time.sleep_ms(100)
+    def set_ccw_angle_count(self, c):   self._write_u16(REG_CCW_ANGLE_COUNT, c & 0x1F); time.sleep_ms(100)

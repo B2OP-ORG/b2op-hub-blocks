@@ -1,6 +1,6 @@
 # Remote Pyright LSP server
 
-Optional backend for the b2op-hub-blocks Python editor. Provides real Pyright type-checking + IntelliSense over WebSocket. Ships as a tiny bridge that spawns `pyright-langserver --stdio` per client.
+Optional backend for the b2op-hub-blocks Python editor. Provides real basedpyright type-checking + IntelliSense over WebSocket. Ships as a tiny bridge that spawns `basedpyright-langserver --stdio` per client.
 
 ## When to use
 
@@ -33,4 +33,4 @@ Stubs are shared with the worker — refresh both at once with `npm run sync-stu
 
 ## Updating Pyright
 
-Bump the `pyright` version in `docs/lsp-server/package.json`, then `npm install` in this directory. The in-browser worker does not use Pyright itself (it uses the stub parser), so only the remote server is affected by this change.
+Bump the `basedpyright` version in `docs/lsp-server/package.json`, then `npm install` in this directory. The in-browser worker does not use Pyright itself (it uses the stub parser), so only the remote server is affected by this change.

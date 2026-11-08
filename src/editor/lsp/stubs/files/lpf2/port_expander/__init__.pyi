@@ -1,4 +1,9 @@
-"""LPF2 Port Expander support (extension device with 4 sub-ports)."""
+"""Port expanders: one port in, four ports out.
+
+To use a real expander, plug it in and call ``hub.ports.A.device().getPort(0)``
+(see :class:`lpf2.devices.port_expander`). This module lets you build a
+pretend one.
+"""
 
 from __future__ import annotations
 from lpf2 import port as _port
@@ -6,17 +11,15 @@ from lpf2.port_expander import port_num as port_num
 from lpf2.virtual import device as _virtual_device
 
 class virtual_port_expander_device(_virtual_device):
-    """Emulated port-expander device (server side).
+    """Advanced: a pretend port expander that combines up to four ports into one.
 
-    Aggregates up to four attached :class:`lpf2.port` objects and
-    forwards LPF2 traffic between them and the upstream port. Attach
-    ports via :meth:`attachPort` before adding the virtual device to a
-    :class:`lpf2.virtual.port`.
+    Add ports with :meth:`attachPort`, then put it into a
+    :class:`lpf2.virtual.port` or :class:`lpf2.local.emulated_port`.
     """
 
     def __init__(self) -> None:
-        """Construct an empty port-expander device (no ports attached)."""
+        """Create an empty pretend expander."""
         ...
     def attachPort(self, port_num: int, port: _port) -> None:
-        """Bind ``port`` as sub-port ``port_num`` (0..3, see :mod:`~.port_num`)."""
+        """Use ``port`` as expander port ``port_num`` (0..3, see :mod:`lpf2.port_expander.port_num`)."""
         ...

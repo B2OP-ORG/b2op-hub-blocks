@@ -12,7 +12,7 @@ interface Props {
 
 export function FirmwareUpdatePrompt({ boardName, boardVersion, currentFw, latestFw, onUpdate, onDismiss }: Props) {
   const [suppress, setSuppress] = useState(false);
-  const dark = useApp((s) => s.project.type === "python");
+  const dark = useApp((s) => s.editorSettings.darkMode);
 
   const overlay: React.CSSProperties = {
     position: "fixed",

@@ -1,9 +1,9 @@
 // Transport = bidirectional JSON message pipe. Concrete implementations:
-//  - worker: Web Worker running the in-browser stub LSP (pyright.worker.ts).
-//  - ws:     WebSocket to a remote Pyright server (docs/lsp-server/).
-//
-// Kept intentionally raw (no Content-Length framing) — both endpoints agree
-// on "one JSON object per message". Simpler than pulling in vscode-jsonrpc.
+//  - worker: browser-basedpyright running as a Web Worker.
+//  - ws:     WebSocket to a remote basedpyright server (docs/lsp-server/).
+
+import pyrightWorkerUrl from "browser-basedpyright/dist/pyright.worker.js?url";
+import { STUBS } from "./stubs";
 
 export interface RpcMessage {
   jsonrpc: "2.0";
@@ -21,17 +21,87 @@ export interface Transport {
   dispose(): void;
 }
 
+// Build the VFS stubs map once at module load — same content for every transport instance.
+//
+// Routing:
+//   typings/stdlib/** → /workspace/typings/stdlib/**  (typeshedPath: proper typeshed treatment,
+//   typings/stubs/**  → /workspace/typings/stubs/**    @overload-only stubs work without impl)
+//   typings/**        → /workspace/stubs/**            (root-level MicroPython pkg stubs: time, etc.)
+//   **               → /workspace/stubs/**             (custom firmware stubs: hub, machine, etc.)
+//
+// Custom firmware stubs are processed second so they overwrite any typings backup copies.
+const _stubFiles: Record<string, string> = {};
+for (const [k, v] of Object.entries(STUBS)) {
+  if (k.startsWith("typings/stdlib/") || k.startsWith("typings/stubs/")) {
+    _stubFiles[`/workspace/typings/${k.slice("typings/".length)}`] = v;
+  } else if (k.startsWith("typings/")) {
+    _stubFiles[`/workspace/stubs/${k.slice("typings/".length)}`] = v;
+  }
+}
+for (const [k, v] of Object.entries(STUBS)) {
+  if (!k.startsWith("typings/")) {
+    _stubFiles[`/workspace/stubs/${k}`] = v;
+  }
+}
+_stubFiles["/workspace/pyrightconfig.json"] = JSON.stringify({
+  typeCheckingMode: "basic",
+  typeshedPath: "/workspace/typings",
+  stubPath: "stubs",
+  pythonVersion: "3",
+  reportMissingModuleSource: "none",
+});
+
+function spawnPyrightWorker(name: string): Worker {
+  return new Worker(pyrightWorkerUrl, { name });
+}
+
 export function createWorkerTransport(): Transport {
-  const worker = new Worker(new URL("./pyright.worker.ts", import.meta.url), {
-    type: "module",
-    name: "b2op-hub-lsp",
-  });
+  const worker = spawnPyrightWorker("b2op-hub-lsp");
+  worker.postMessage({ type: "browser/boot", mode: "foreground" });
+
   let msgHandler: ((m: RpcMessage) => void) | null = null;
   let closeHandler: (() => void) | null = null;
-  worker.onmessage = (ev) => msgHandler?.(ev.data);
+  let initInjected = false;
+
+  worker.onmessage = (ev) => {
+    const msg = ev.data as { type?: string; initialData?: unknown; port?: MessagePort } & RpcMessage;
+
+    // Pyright browser asks the main thread to spawn background workers because
+    // nested workers are blocked in Safari and unreliable elsewhere.
+    if (msg?.type === "browser/newWorker") {
+      const bg = spawnPyrightWorker("b2op-hub-lsp-bg");
+      bg.postMessage(
+        { type: "browser/boot", mode: "background", initialData: msg.initialData, port: msg.port },
+        [msg.port as MessagePort],
+      );
+      return;
+    }
+
+    msgHandler?.(msg);
+  };
   worker.onerror = () => closeHandler?.();
+
   return {
-    send: (msg) => worker.postMessage(msg),
+    send(msg) {
+      // Inject stubs into the first initialize request via the VFS files map.
+      if (!initInjected && msg.method === "initialize") {
+        initInjected = true;
+        const p = (msg.params ?? {}) as Record<string, unknown>;
+        const enriched: RpcMessage = {
+          ...msg,
+          params: {
+            ...p,
+            initializationOptions: {
+              ...((p.initializationOptions as object) ?? {}),
+              files: _stubFiles,
+            },
+          },
+        };
+        worker.postMessage(enriched);
+        return;
+      }
+      worker.postMessage(msg);
+    },
     onMessage: (h) => (msgHandler = h),
     onClose: (h) => (closeHandler = h),
     dispose: () => worker.terminate(),
@@ -49,10 +119,6 @@ export function createWsTransport(url: string): Promise<Transport> {
     let closeHandler: (() => void) | null = null;
     socket.onopen = () => {
       clearTimeout(timer);
-      // Remote server uses vscode-ws-jsonrpc → LSP with Content-Length framing.
-      // We speak raw JSON. Backend adapts by using raw JSON mode as well
-      // (see docs/lsp-server/index.js). If a stricter server is used later,
-      // swap this transport for one that emits headers.
       resolve({
         send: (msg) => socket.send(JSON.stringify(msg)),
         onMessage: (h) => (msgHandler = h),

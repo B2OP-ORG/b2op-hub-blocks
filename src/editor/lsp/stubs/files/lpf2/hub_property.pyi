@@ -1,8 +1,4 @@
-"""Hub-property identifiers (LWP 3.5.2).
-
-Passed to :meth:`lpf2.hub.getHubPropStr` and used by
-:class:`lpf2.hub_emulation` to publish hub metadata.
-"""
+"""Facts you can ask a connected LEGO hub about, with :meth:`lpf2.hub.getHubPropStr`."""
 
 from __future__ import annotations
 

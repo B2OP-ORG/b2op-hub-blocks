@@ -25,11 +25,11 @@ console.log(`[b2op-hub-lsp] stubs: ${STUBS_DIR}`);
 
 wss.on("connection", (socket) => {
   console.log("[b2op-hub-lsp] client connected");
-  const proc = spawn("npx", ["pyright-langserver", "--stdio"], {
+  const proc = spawn("npx", ["basedpyright-langserver", "--stdio"], {
     cwd: STUBS_DIR,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  proc.stderr.on("data", (b) => process.stderr.write(`[pyright] ${b}`));
+  proc.stderr.on("data", (b) => process.stderr.write(`[basedpyright] ${b}`));
 
   // ── Pyright stdout (framed LSP) → ws (raw JSON) ─────────────────────────
   let buf = Buffer.alloc(0);

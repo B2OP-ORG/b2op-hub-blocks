@@ -1,15 +1,20 @@
 """Port monitor — shows connected device type and readings for each port."""
 import lvgl as lv
 import hub
-from listview import (
-    SCREEN_W, SCREEN_H, HEADER_H,
-    COLOR_BG, COLOR_TEXT, COLOR_MUTED, COLOR_ACCENT,
-    apply_screen_bg, new_header,
-)
 from icons import (
     icon_motor, icon_encoder_motor, icon_color_sensor,
     icon_distance_sensor, icon_force_sensor, icon_light, icon_unknown,
 )
+import time
+
+# ── Layout constants ──────────────────────────────────────────────────────────
+SCREEN_W = 160
+SCREEN_H = 128
+HEADER_H = 20
+COLOR_BG     = 0x0F172A
+COLOR_TEXT   = 0xE2E8F0
+COLOR_MUTED  = 0x94A3B8
+COLOR_ACCENT = 0x22D3EE
 
 # ── Device-group classification ───────────────────────────────────────────────
 _MOTOR_TYPES    = frozenset({1, 2, 38, 39, 41})
@@ -86,22 +91,18 @@ class PortCell:
         self._root.set_style_radius(4, 0)
         self._root.set_style_pad_all(0, 0)
 
-        # Port letter
         name_lbl = lv.label(self._root)
         name_lbl.set_text(port_name)
         name_lbl.set_style_text_color(lv.color_hex(COLOR_ACCENT), 0)
         name_lbl.align(lv.ALIGN.TOP_LEFT, 3, 2)
 
-        # Device icon (swapped on group change)
         self._icon = _make_icon(self._root, "?")
 
-        # Group label (muted, above reading)
         self._group_lbl = lv.label(self._root)
         self._group_lbl.set_text("---")
         self._group_lbl.set_style_text_color(lv.color_hex(COLOR_MUTED), 0)
         self._group_lbl.align(lv.ALIGN.BOTTOM_LEFT, 3, -14)
 
-        # Color dot (circle, hidden by default)
         self._dot = lv.obj(self._root)
         self._dot.set_size(8, 8)
         self._dot.set_style_radius(4, 0)
@@ -113,7 +114,6 @@ class PortCell:
         self._dot.align(lv.ALIGN.BOTTOM_LEFT, 3, -3)
         self._dot.set_style_opa(lv.OPA.TRANSP, 0)
 
-        # Reading label (inset to leave room for dot when visible)
         self._reading_lbl = lv.label(self._root)
         self._reading_lbl.set_text("")
         self._reading_lbl.set_style_text_color(lv.color_hex(COLOR_TEXT), 0)
@@ -172,14 +172,30 @@ class PortCell:
             self._dot.set_style_opa(lv.OPA.TRANSP, 0)
 
 
-import time
-
-# ── Init ──────────────────────────────────────────────────────────────────────
+# ── Screen setup ──────────────────────────────────────────────────────────────
 scr = lv.screen_active()
 scr.clean()
-apply_screen_bg(scr)
+scr.set_style_bg_color(lv.color_hex(COLOR_BG), 0)
+scr.set_style_bg_opa(lv.OPA.COVER, 0)
 
-new_header(scr, "Ports")
+hdr = lv.obj(scr)
+hdr.set_pos(0, 0)
+hdr.set_size(SCREEN_W, HEADER_H)
+hdr.set_style_bg_color(lv.color_hex(0x1E293B), 0)
+hdr.set_style_bg_opa(lv.OPA.COVER, 0)
+hdr.set_style_border_width(0, 0)
+hdr.set_style_radius(0, 0)
+hdr.set_style_pad_all(0, 0)
+
+title = lv.label(hdr)
+title.set_text("Ports")
+title.set_style_text_color(lv.color_hex(COLOR_ACCENT), 0)
+title.align(lv.ALIGN.LEFT_MID, 4, 0)
+
+hint = lv.label(hdr)
+hint.set_text("[*] back")
+hint.set_style_text_color(lv.color_hex(COLOR_MUTED), 0)
+hint.align(lv.ALIGN.RIGHT_MID, -4, 0)
 
 n      = len(_PORT_NAMES)
 rows   = (n + 1) // 2

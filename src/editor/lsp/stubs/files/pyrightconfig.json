@@ -1,9 +1,0 @@
-{
-  "extraPaths": ["."],
-  "stubPath": ".",
-  "pythonVersion": "3.11",
-  "reportMissingModuleSource": "none",
-  "reportMissingImports": "warning",
-  "useLibraryCodeForTypes": true,
-  "typeCheckingMode": "basic"
-}

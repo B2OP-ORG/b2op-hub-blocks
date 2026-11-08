@@ -1,4 +1,4 @@
-"""Sub-port numbers exposed by a port expander."""
+"""Port numbers on a port expander, for :meth:`lpf2.devices.port_expander.getPort`."""
 
 A: int = 0
 """Sub-port A."""

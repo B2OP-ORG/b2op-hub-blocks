@@ -1,253 +1,261 @@
-"""Typed wrappers for LPF2 devices attached to a :class:`lpf2.port`.
+"""The motors, sensors and lights you can plug into a port.
 
-Each class corresponds to a C++ ``Lpf2::Devices::*Control`` interface
-and is returned by :meth:`lpf2.port.device` once the port's factory has
-identified the attached device.
+You don't create these yourself: ask the port with
+``hub.ports.A.device()`` and you get the right one for whatever is
+plugged in, with functions that fit that device.
 """
 
 from __future__ import annotations
 from lpf2 import port as _port
 
 def registerDefault() -> None:
-    """Register the built-in device factories with the global registry.
+    """Advanced: teach the hub about the standard LEGO devices again.
 
-    Called automatically at module import; expose so custom builds can
-    re-register after a soft reset.
+    This already happens automatically; you never need to call it.
     """
     ...
 
 class basic_motor:
-    """Simple DC motor with no encoder (train motor, PF-M motor)."""
+    """A simple motor without a rotation sensor, like a train motor. You can set its power, but not its exact speed or position."""
 
     def startPower(self, pw: int) -> None:
-        """Set motor power (-100..100). Negative = CCW, positive = CW.
-
-        Special values: ``LPF2_POWER_FLOAT`` = float, ``LPF2_POWER_BRAKE`` = brake.
-        """
+        """Run the motor at a power from -100 to 100. The sign sets the direction; ``0`` stops."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type (see :mod:`lpf2.device_type`)."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"DC Motor (dumb)"``)."""
+        """The device's name as text, e.g. ``"DC Motor (dumb)"``."""
         ...
 
 class encoder_motor:
-    """Motor with rotary encoder + position/speed control loops."""
+    """A motor with a rotation sensor (most Technic and BOOST motors).
+
+    It can hold a steady speed, turn an exact number of degrees, or go to
+    a position.
+    """
 
     def startPower(self, pw: int) -> None:
-        """Set motor power (-100..100). Same semantics as :meth:`basic_motor.startPower`."""
+        """Run the motor at a power from -100 to 100. The sign sets the direction; ``0`` stops."""
         ...
     def setAccTime(self, time: int, profile: int) -> None:
-        """Set acceleration ramp time (ms) and profile index."""
+        """How long (ms) the motor takes to speed up, stored in slot ``profile`` (0..15)."""
         ...
     def setDecTime(self, time: int, profile: int) -> None:
-        """Set deceleration ramp time (ms) and profile index."""
+        """How long (ms) the motor takes to slow down, stored in slot ``profile`` (0..15)."""
         ...
     def startSpeed(self, speed: int = 100, maxPower: int = 100, useProfile: int = 0) -> None:
-        """Run continuously at ``speed`` (-100..100), power capped at ``maxPower``."""
+        """Keep turning at ``speed`` (-100..100) until told otherwise. ``maxPower`` (0..100) limits how hard it pushes."""
         ...
     def startSpeedForTime(self, time: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Run at ``speed`` for ``time`` ms then apply ``endState`` (BrakingStyle)."""
+        """Turn at ``speed`` for ``time`` milliseconds, then stop.
+
+        ``endState``: ``0`` = coast, ``127`` = brake, ``126`` = hold position.
+        """
         ...
     def startSpeedForDegrees(self, degrees: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Rotate by ``degrees`` (positive; direction from ``speed`` sign) then apply ``endState``."""
+        """Turn by ``degrees`` (360 = one full turn), then stop.
+
+        Make ``speed`` negative to turn the other way. ``endState``: ``0`` = coast, ``127`` = brake, ``126`` = hold position.
+        """
         ...
     def gotoAbsPosition(self, absPos: int, speed: int = 100, maxPower: int = 100, endState: int = 0, useProfile: int = 0) -> None:
-        """Move to absolute encoder position ``absPos`` at ``speed`` then apply ``endState``."""
+        """Turn to position ``absPos`` degrees, then stop.
+
+        Position 0 is set with :meth:`presetEncoder`. ``endState``: ``0`` = coast, ``127`` = brake, ``126`` = hold position.
+        """
         ...
     def presetEncoder(self, pos: int) -> None:
-        """Reset the encoder counter to ``pos`` (also stops the motor)."""
+        """Stop the motor and call its current position ``pos`` degrees (usually 0)."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Motor with Encoder"``)."""
+        """The device's name as text, e.g. ``"Motor with Encoder"``."""
         ...
 
 class color_sensor:
-    """Technic Color Sensor.
+    """The Technic Color Sensor: sees colors and how much light bounces back.
 
-    Modes 0/1/5/6 are polled through an internal combo so multiple
-    values (colour, reflectivity, RGB, HSV) can be read without
-    repeated mode switches.
+    All its readings are kept up to date at the same time, so you can
+    call any of the ``get…`` functions whenever you like.
     """
     MODE_COLOR: int = 0
-    """Detected colour index (:mod:`lpf2.color`)."""
+    """Mode number: detected color."""
     MODE_REFLT: int = 1
-    """Reflected-light intensity (0..100 PCT)."""
+    """Mode number: reflected light (0..100 %)."""
     MODE_AMBI: int = 2
-    """Ambient-light intensity (0..100 PCT)."""
+    """Mode number: surrounding light (0..100 %)."""
     MODE_LIGHT: int = 3
-    """On-board LED output control (write-only)."""
+    """Mode number: the sensor's own lights."""
     MODE_RGB: int = 5
-    """Raw RGB channels + intensity."""
+    """Mode number: red, green, blue and brightness."""
     MODE_HSV: int = 6
-    """HSV reading (H 0..360, S 0..100, V 0..360)."""
+    """Mode number: hue, saturation and value."""
 
     def getColorIdx(self) -> int:
-        """Detected colour as :mod:`lpf2.color` index."""
+        """The color it sees, as a number from :mod:`lpf2.color` (e.g. compare with ``color.RED``)."""
         ...
     def getReflectivity(self) -> float:
-        """Reflected-light percentage (0..100)."""
+        """How much light bounces back from the surface, 0..100 %. White paper is high, black is low."""
         ...
     def getRGB(self) -> tuple[int, int, int, int]:
-        """``(r, g, b, intensity)`` raw channels."""
+        """How much red, green and blue it sees, plus overall brightness: ``r, g, b, i = sensor.getRGB()``."""
         ...
     def getHSV(self) -> tuple[int, int, int]:
-        """``(h, s, v)`` — H 0..360, S 0..100, V 0..360."""
+        """The color as hue (0..360, the color wheel angle), saturation (0..100) and value/brightness: ``h, s, v = sensor.getHSV()``."""
         ...
     def setLight(self, l1: int, l2: int, l3: int) -> None:
-        """Drive the on-board light channels (each 0..100 PCT)."""
+        """Set the brightness of the sensor's three lights, each 0..100 %."""
         ...
     def setMode(self, modeNum: int, delta: float = 1.0) -> None:
-        """Switch active mode. ``delta`` = change threshold for callbacks
-        (0 = every update)."""
+        """Advanced: choose which value the sensor reports (one of the ``MODE_…`` numbers)."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Technic Color Sensor"``)."""
+        """The device's name as text, e.g. ``"Technic Color Sensor"``."""
         ...
 
 class distance_sensor:
-    """Technic Distance Sensor (time-of-flight)."""
+    """The Technic Distance Sensor (the one with two "eyes"): measures how far away things are."""
 
     MODE_LIGHT: int = 5
-    """On-board light output control (write-only)."""
+    """Mode number: the lights around the eyes."""
 
     def setLight(self, l1: int, l2: int, l3: int, l4: int) -> None:
-        """Drive the four on-board light segments (each 0..100 PCT)."""
+        """Set the brightness of the four lights around the eyes, each 0..100 %."""
         ...
     def getDistance(self) -> float:
-        """Distance in centimetres."""
+        """How far away the nearest object is, in centimeters."""
         ...
     def setMode(self, modeNum: int, delta: float = 1.0) -> None:
-        """Switch active mode; ``delta`` = change threshold for callbacks."""
+        """Advanced: choose which value the sensor reports (one of the ``MODE_…`` numbers)."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Technic Distance Sensor"``)."""
+        """The device's name as text, e.g. ``"Technic Distance Sensor"``."""
         ...
 
 class color_distance_sensor:
-    """Boost Color & Distance Sensor (legacy, WeDo/Boost)."""
+    """The BOOST Color & Distance Sensor: sees colors and roughly how far away things are."""
 
     MODE_COLOR: int = 0
-    """Detected colour index."""
+    """Mode number: detected color."""
     MODE_DIST: int = 1
-    """Measured distance (cm)."""
+    """Mode number: distance."""
     MODE_REFLT: int = 3
-    """Reflected-light percentage."""
+    """Mode number: reflected light."""
     MODE_AMBI: int = 4
-    """Ambient-light percentage."""
+    """Mode number: surrounding light."""
     MODE_LED: int = 5
-    """On-board LED colour control (write-only)."""
+    """Mode number: the sensor's light color."""
     MODE_RGB: int = 6
-    """Raw RGB channels."""
+    """Red, green and blue amounts: ``r, g, b = sensor.getRgb()``."""
     MODE_IR: int = 7
-    """LEGO PF IR transmitter (write-only)."""
+    """Mode number: infrared remote-control signals."""
 
     def getColorIdx(self) -> int:
-        """Detected colour as :mod:`lpf2.color` index."""
+        """The color it sees, as a number from :mod:`lpf2.color` (e.g. compare with ``color.RED``)."""
         ...
     def getDistance(self) -> float:
-        """Distance in centimetres."""
+        """How far away the nearest object is, in centimeters."""
         ...
     def getReflectedLight(self) -> int:
-        """Reflected-light percentage (0..100)."""
+        """How much light bounces back from the surface, 0..100 %. White paper is high, black is low."""
         ...
     def getAmbientLight(self) -> int:
-        """Ambient-light percentage (0..100)."""
+        """How bright the surroundings are, 0..100 %."""
         ...
     def getRgb(self) -> tuple[int, int, int]:
-        """Raw RGB channels."""
+        """Red, green and blue amounts: ``r, g, b = sensor.getRgb()``."""
         ...
     def setIrTx(self, value: int) -> None:
-        """Emit a value on the LEGO Power Functions RC IR channel."""
+        """Advanced: send an infrared code, like an old LEGO Power Functions remote."""
         ...
     def setLedColor(self, color: int) -> None:
-        """Set the on-board LED colour (:mod:`lpf2.color` index)."""
+        """Set the sensor's light to a color from :mod:`lpf2.color`."""
         ...
     def setMode(self, modeNum: int, delta: float = 1.0) -> None:
-        """Switch active mode; ``delta`` = change threshold for callbacks."""
+        """Advanced: choose which value the sensor reports (one of the ``MODE_…`` numbers)."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Color Distance Sensor"``)."""
+        """The device's name as text, e.g. ``"Color Distance Sensor"``."""
         ...
 
 class hub_led:
-    """RGB LED attached to a hub's built-in LED port."""
+    """A hub's built-in colored light (``hub.led``)."""
 
     def setColorIdx(self, color: int) -> None:
-        """Set colour by :mod:`lpf2.color` index."""
+        """Set the light to a named color from :mod:`lpf2.color`, e.g. ``hub.led.setColorIdx(color.GREEN)``."""
         ...
     def setColor(self, r: int, g: int, b: int) -> None:
-        """Set colour by explicit RGB (each 0..255)."""
+        """Set the light to any color by mixing red, green and blue, each 0..255. ``setColor(0, 0, 0)`` is off."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Hub LED"``)."""
+        """The device's name as text, e.g. ``"Hub LED"``."""
         ...
 
 class accelerometer:
-    """Built-in hub accelerometer (mode 0 = GRV, unit: mG)."""
+    """The hub's built-in accelerometer (``hub.accelerometer``): measures pushes and gravity in milli-g (1000 = gravity)."""
 
     def getX(self) -> float:
-        """X-axis acceleration in mG."""
+        """Push along the x direction, in milli-g."""
         ...
     def getY(self) -> float:
-        """Y-axis acceleration in mG."""
+        """Push along the y direction, in milli-g."""
         ...
     def getZ(self) -> float:
-        """Z-axis acceleration in mG."""
+        """Push along the z direction (up/down), in milli-g."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Hub Accelerometer"``)."""
+        """The device's name as text, e.g. ``"Hub Accelerometer"``."""
         ...
 
 class gyroscope:
-    """Built-in hub gyroscope (mode 0 = ROT, unit: dps)."""
+    """The hub's built-in gyroscope (``hub.gyro``): measures how fast the hub spins, in degrees per second."""
 
     def getX(self) -> float:
-        """X-axis angular velocity in dps."""
+        """Spin speed around the x direction, degrees per second."""
         ...
     def getY(self) -> float:
-        """Y-axis angular velocity in dps."""
+        """Spin speed around the y direction, degrees per second."""
         ...
     def getZ(self) -> float:
-        """Z-axis angular velocity in dps."""
+        """Spin speed around the z direction, degrees per second."""
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Hub Gyroscope"``)."""
+        """The device's name as text, e.g. ``"Hub Gyroscope"``."""
         ...
 
 class port_expander:
-    """LPF2 Port Expander (extension module giving four sub-ports on one port)."""
+    """A Port Expander: plugs into one port and gives you four more."""
 
     def getPort(self, port_num: int) -> _port:
-        """Get the sub-port ``port_num`` (0..3, see
-        :mod:`lpf2.port_expander.port_num`). Returns the sub-port as a
-        :class:`lpf2.port`."""
+        """One of the expander's four ports, numbered 0..3 (see :mod:`lpf2.port_expander.port_num`).
+
+        It works just like ``hub.ports.A``.
+        """
         ...
     def getDeviceType(self) -> int:
-        """Reported LPF2 device type."""
+        """A number saying what kind of device this is (see :mod:`lpf2.device_type`)."""
         ...
     def name(self) -> str:
-        """Human-readable device name (``"Port Expander"``)."""
+        """The device's name as text, e.g. ``"Port Expander"``."""
         ...

@@ -117,7 +117,7 @@ async function main() {
     { from: path.join(SRC, "stubs"),                   to: DEST,                        kind: "dir"       },
     { from: path.join(SRC, "modules/Lpf2/stubs/lpf2"), to: path.join(DEST, "lpf2"),     kind: "dir"       },
     { from: path.join(SRC, "ports/b2op/fs"),           to: DEST,                        kind: "dir-merge" },
-    { from: path.join(SRC, "typings"),                 to: DEST,                        kind: "dir-merge" },
+    { from: path.join(SRC, "typings"),                 to: path.join(DEST, "typings"),  kind: "dir"       },
   ];
 
   await clearDest();

@@ -8,6 +8,8 @@ interface DrawerProps {
   minOpenSize?: number;
   dark?: boolean;
   onSizeChange?: (openSize: number) => void;
+  /** Extra controls rendered at the end of the handle (bottom drawers only). */
+  headerActions?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -18,7 +20,7 @@ const HANDLE = 22;
  * user drags it out to reveal the content. Size persists to localStorage.
  * `onSizeChange` fires with the currently open size (0 when closed).
  */
-export function Drawer({ side, label, storageKey, defaultSize = 0, minOpenSize = 40, dark = false, onSizeChange, children }: DrawerProps) {
+export function Drawer({ side, label, storageKey, defaultSize = 0, minOpenSize = 40, dark = false, onSizeChange, headerActions, children }: DrawerProps) {
   const [size, setSize] = useState<number>(() => {
     const raw = localStorage.getItem(storageKey);
     if (raw == null) return defaultSize;
@@ -55,7 +57,7 @@ export function Drawer({ side, label, storageKey, defaultSize = 0, minOpenSize =
 
   const wrapBg = dark ? "#0b1216" : "#e0eff4";
   const wrapBorder = dark ? "#164e63" : "#b6dbe4";
-  const handleBg = dark ? "#0e7490" : "#0e7490";
+  const handleBg = dark ? "#0c3a4a" : "#0e7490";
   const contentBg = dark ? "#0b1216" : "#ffffff";
 
   const wrapperStyle: React.CSSProperties = isVertical
@@ -67,7 +69,10 @@ export function Drawer({ side, label, storageKey, defaultSize = 0, minOpenSize =
     color: "#ffffff",
     display: "flex",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: isVertical || !headerActions ? "center" : "flex-start",
+    padding: isVertical || !headerActions ? 0 : "0 4px 0 10px",
+    boxSizing: "border-box",
+    gap: 6,
     fontWeight: 700,
     fontSize: 11,
     letterSpacing: 0.5,
@@ -94,6 +99,15 @@ export function Drawer({ side, label, storageKey, defaultSize = 0, minOpenSize =
         title="Drag to resize · double-click to toggle"
       >
         <span style={labelStyle}>{size > 0 ? label : `▸ ${label}`}</span>
+        {!isVertical && headerActions && (
+          <div
+            style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, cursor: "default" }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {headerActions}
+          </div>
+        )}
       </div>
       {size > 0 && (
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", background: contentBg }}>

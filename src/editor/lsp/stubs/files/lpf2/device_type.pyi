@@ -1,7 +1,7 @@
-"""LPF2 device-type identifiers (LWP ``IOTypeID``).
+"""Numbers for each kind of LEGO device.
 
-Values returned by :meth:`lpf2.port.getDeviceType` and matched against
-by the device factories.
+Compare with :meth:`lpf2.port.getDeviceType` to find out what's plugged
+in, e.g. ``if hub.ports.A.getDeviceType() == device_type.TECHNIC_LARGE_MOTOR:``.
 """
 
 UNKNOWNDEVICE: int = 0

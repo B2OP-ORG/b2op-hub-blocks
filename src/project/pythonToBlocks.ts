@@ -1,3 +1,4 @@
+import { stripBlocksHeader } from "./format";
 /**
  * Best-effort Python → Blockly translator used when switching a Python project
  * back to Blocks mode. Handles:
@@ -370,6 +371,7 @@ function matchStatement(line: string): BlockSpec | null {
   if (line === "hub.imu.reset()") return { type: "hub_imu_reset" };
   if (line === "hub.powerOff()") return { type: "hub_poweroff" };
   if (line === "hub.exit()") return { type: "hub_quit" };
+  if (line === "hub.stop_callbacks()") return { type: "hub_stop_callbacks" };
   if ((m = /^hub\.log\.setLevel\((\d)\)$/.exec(line))) {
     if (LOG_LEVELS.has(m[1])) return { type: "hub_log_level", fields: { LEVEL: m[1] } };
   }
@@ -1014,6 +1016,8 @@ function chain(specs: BlockSpec[]): BlockSpec | undefined {
 const VERSION_RE = /^#\s*b2op-hub-blocks\s+v2\.\d+\.\d+\s*$/;
 
 export function pythonToBlocks(source: string): Translation {
+  // The blocks header line is storage metadata, not program code.
+  source = stripBlocksHeader(source);
   const lines = parseLines(source);
 
   // Reject Python not tagged as b2op-hub-blocks v2.x — return as opaque raw block.

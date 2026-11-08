@@ -17,7 +17,7 @@ interface Props {
 }
 
 export function FirmwareUpdatePage({ onBack }: Props) {
-  const dark = useApp((s) => s.project.type === "python");
+  const dark = useApp((s) => s.editorSettings.darkMode);
   const boardName = useApp((s) => s.boardName);
   const boardVersion = useApp((s) => s.boardVersion);
 
@@ -86,7 +86,7 @@ export function FirmwareUpdatePage({ onBack }: Props) {
               <li style={stepStyle}>Turn off the hub.</li>
               <li style={stepStyle}>Connect it to your computer via USB.</li>
               <li style={stepStyle}>
-                Click <strong>Install</strong> and select the serial port in the browser dialog.
+                Click <strong>Connect</strong> and select the serial port in the browser dialog.
                 <br />
                 <span style={{ fontSize: 13, opacity: 0.75 }}>
                   <strong>Linux:</strong> <code>ttyACM0</code> (or <code>ttyACM1</code>…) &nbsp;·&nbsp;

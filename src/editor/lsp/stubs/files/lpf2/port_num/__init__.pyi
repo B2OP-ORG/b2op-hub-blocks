@@ -1,8 +1,7 @@
-"""Per-hub-model port-number tables.
+"""Port numbers for other LEGO hubs, used with :meth:`lpf2.hub.getPort`.
 
-Each submodule maps a hub model's external ports (A/B/C/D/...) and
-internal virtual ports (LED, ACCELEROMETER, VOLTAGE, ...) to the raw
-LPF2 port numbers they advertise.
+Each kind of hub has its own list, e.g. ``lpf2.port_num.poweredup.A``
+or ``lpf2.port_num.controlplus.D``.
 """
 
 from lpf2.port_num import controlplus as controlplus

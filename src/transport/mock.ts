@@ -1,12 +1,13 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "./types";
 import { KIND, FLAGS_NO_ACK, makeFrame } from "../device/protocol";
 
-const PROTO_VER = 2;
+const PROTO_VER = 3;
 const BOARD_NAME = "MockHub";
 const BOARD_VERSION = "1.0.0";
 const FW_VERSION = "v1.1.0";
 const MOCK_MTU = 185;
-const PROGRESS_EVERY = 2048;
+const PROGRESS_EVERY = 4096;
+const READ_CHUNK = 512;
 
 export interface MockOptions {
   stdout?: string;
@@ -103,7 +104,16 @@ export class MockTransport implements Transport {
   private discCbs = new Set<() => void>();
   private ps: ParseState = freshState();
   public files: Record<string, Uint8Array>;
+  /** Explicitly created (possibly empty) directories, without trailing slash. */
+  public dirs = new Set<string>();
   private _nextStdout: string;
+  /** Active UPLOAD: DATA chunks [offset][bytes] fill `buf`; `done` = contiguous bytes written. */
+  private pendingUpload: { seq: number; path: string; buf: Uint8Array; done: number; lastReport: number } | null = null;
+  /** Active READ streams by SEQ (ABORT stops them). */
+  private activeReads = new Set<number>();
+  /** Test hook: when true, READ chunks are only sent when `pumpRead()` is called. */
+  public manualRead = false;
+  private readQueue: (() => void)[] = [];
 
   constructor(opts: MockOptions = {}) {
     this.files = { ...(opts.files ?? {}) };
@@ -142,6 +152,58 @@ export class MockTransport implements Transport {
     for (let i = 0; i < chunk.length; ) {
       i = this.feedByte(chunk[i], i, chunk);
     }
+  }
+
+  /** Send queued READ chunks (only used with `manualRead`). Returns how many were sent. */
+  pumpRead(n = Infinity): number {
+    let sent = 0;
+    while (sent < n && this.readQueue.length) { this.readQueue.shift()!(); sent++; }
+    return sent;
+  }
+
+  private uploadChunk(seq: number, payload: Uint8Array): void {
+    const up = this.pendingUpload;
+    if (!up || up.seq !== seq) { this.reply(frameErr(seq, "DATA: no active upload")); return; }
+    if (payload.length < 4) { this.pendingUpload = null; this.reply(frameErr(seq, "UPLOAD: bad chunk")); return; }
+    const off = new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false);
+    const data = payload.subarray(4);
+    if (off !== up.done) return; // mock: in-order only; duplicates ignored
+    up.buf.set(data.subarray(0, up.buf.length - off), off);
+    up.done = Math.min(up.buf.length, off + data.length);
+    const total = up.buf.length;
+    if (up.done === total) {
+      this.pendingUpload = null;
+      this.files[up.path] = up.buf;
+      this.reply(frameProgress(seq, total, total));
+      this.reply(frameOk(seq));
+    } else if (up.done - up.lastReport >= PROGRESS_EVERY) {
+      up.lastReport = up.done;
+      this.reply(frameProgress(seq, up.done, total));
+    }
+  }
+
+  private startRead(seq: number, bytes: Uint8Array): void {
+    this.activeReads.add(seq);
+    const size = new Uint8Array(4);
+    new DataView(size.buffer).setUint32(0, bytes.length, false);
+    this.reply(makeFrame(KIND.ACK, seq, 0, size));
+    const steps: (() => void)[] = [];
+    for (let off = 0; off < bytes.length; off += READ_CHUNK) {
+      steps.push(() => {
+        if (!this.activeReads.has(seq)) return;
+        const data = bytes.subarray(off, off + READ_CHUNK);
+        const p = new Uint8Array(4 + data.length);
+        new DataView(p.buffer).setUint32(0, off, false);
+        p.set(data, 4);
+        this.emit(frameData(seq, p));
+      });
+    }
+    steps.push(() => {
+      if (!this.activeReads.delete(seq)) return;
+      this.emit(frameOk(seq));
+    });
+    if (this.manualRead) this.readQueue.push(...steps);
+    else for (const st of steps) queueMicrotask(st);
   }
 
   // Returns the new index after consuming bytes.
@@ -246,34 +308,50 @@ export class MockTransport implements Transport {
         break;
       }
       case KIND.UPLOAD: {
+        // [path_len:u8][path][file_size:u32 BE] → ACK, then DATA [offset][bytes] chunks → PROGRESS* → OK
         if (payload.length < 1) { this.reply(frameErr(seq, "UPLOAD: empty payload")); break; }
         const pathLen = payload[0];
-        if (1 + pathLen > payload.length) { this.reply(frameErr(seq, "UPLOAD: path_len overflow")); break; }
+        if (1 + pathLen + 4 > payload.length) { this.reply(frameErr(seq, "UPLOAD: bad header")); break; }
         const path = dec.decode(payload.subarray(1, 1 + pathLen));
-        const data = payload.subarray(1 + pathLen);
+        const size = new DataView(payload.buffer, payload.byteOffset + 1 + pathLen, 4).getUint32(0, false);
+        if (this.pendingUpload) { this.reply(frameErr(seq, "UPLOAD busy")); break; }
         this.reply(frameAck(seq));
-        const total = data.length;
-        let offset = 0;
-        const CHUNK = PROGRESS_EVERY;
-        const emitProgress = () => {
-          while (offset < total) {
-            const next = Math.min(offset + CHUNK, total);
-            offset = next;
-            if (offset < total) {
-              this.emit(frameProgress(seq, offset, total));
-            }
-          }
-          this.files[path] = data;
-          this.emit(frameOk(seq));
-        };
-        queueMicrotask(emitProgress);
+        if (size === 0) {
+          this.files[path] = new Uint8Array(0);
+          this.reply(frameOk(seq));
+        } else {
+          this.pendingUpload = { seq, path, buf: new Uint8Array(size), done: 0, lastReport: 0 };
+        }
+        break;
+      }
+      case KIND.DATA: {
+        this.uploadChunk(seq, payload);
         break;
       }
       case KIND.READ: {
         const path = dec.decode(payload);
         const bytes = this.files[path];
-        if (!bytes) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
-        if (!noAck) this.reply(frameData(seq, bytes));
+        if (!bytes) { this.reply(frameErr(seq, `read: no such file: ${path}`)); break; }
+        if (this.activeReads.size) { this.reply(frameErr(seq, "READ busy")); break; }
+        this.startRead(seq, bytes);
+        break;
+      }
+      case KIND.ABORT: {
+        const target = payload.length ? payload[0] : null;
+        let hit = false;
+        if (this.pendingUpload && (target === null || this.pendingUpload.seq === target)) {
+          this.reply(frameErr(this.pendingUpload.seq, "aborted"));
+          this.pendingUpload = null;
+          hit = true;
+        }
+        for (const r of [...this.activeReads]) {
+          if (target !== null && r !== target) continue;
+          this.activeReads.delete(r);
+          this.reply(frameErr(r, "aborted"));
+          hit = true;
+        }
+        if (target !== null && !hit) this.reply(frameErr(seq, "ABORT: no such stream"));
+        else this.reply(frameOk(seq));
         break;
       }
       case KIND.LS: {
@@ -292,6 +370,11 @@ export class MockTransport implements Transport {
             const dir = rel.slice(0, sep);
             if (!seen.has(dir)) { seen.add(dir); entries.push({ name: dir, isDir: true }); }
           }
+        }
+        for (const d of this.dirs) {
+          if (!d.startsWith(prefix)) continue;
+          const name = d.slice(prefix.length).split("/")[0];
+          if (name && !seen.has(name)) { seen.add(name); entries.push({ name, isDir: true }); }
         }
         // Pack [is_dir:u8][name\0]...
         const parts: Uint8Array[] = entries.map(e => {
@@ -323,14 +406,27 @@ export class MockTransport implements Transport {
         if (!result) { if (!noAck) this.reply(frameErr(seq, "CP: bad payload")); break; }
         const [src, dst] = result;
         if (!this.files[src]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${src}`)); break; }
+        this.reply(frameAck(seq));
         this.files[dst] = this.files[src].slice();
-        if (!noAck) this.reply(frameOk(seq));
+        this.reply(frameOk(seq));
         break;
       }
       case KIND.RM: {
         const path = dec.decode(payload);
         if (!this.files[path]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
         delete this.files[path];
+        if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.MKDIR: {
+        const path = dec.decode(payload).replace(/\/+$/, "");
+        if (!path.startsWith("/")) { if (!noAck) this.reply(frameErr(seq, "MKDIR: relative path")); break; }
+        if (this.files[path]) { if (!noAck) this.reply(frameErr(seq, `not a directory: ${path}`)); break; }
+        let cur = "";
+        for (const seg of path.split("/").filter(Boolean)) {
+          cur += "/" + seg;
+          this.dirs.add(cur);
+        }
         if (!noAck) this.reply(frameOk(seq));
         break;
       }

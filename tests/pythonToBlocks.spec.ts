@@ -81,8 +81,8 @@ describe("pythonToBlocks", () => {
   });
 
   it("recognizes bare hub statement blocks", () => {
-    const src = `${VH}\nhub.imu.reset()\nhub.powerOff()\n`;
-    expect(chainTypes(translate(src))).toEqual(["hub_imu_reset", "hub_poweroff"]);
+    const src = `${VH}\nhub.imu.reset()\nhub.stop_callbacks()\nhub.powerOff()\n`;
+    expect(chainTypes(translate(src))).toEqual(["hub_imu_reset", "hub_stop_callbacks", "hub_poweroff"]);
   });
 
   it("wraps unknown code in a raw_python block", () => {

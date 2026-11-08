@@ -1,7 +1,7 @@
-"""Hub / remote button-state codes (LWP ``ButtonState``).
+"""Button states reported by LEGO hubs and remotes.
 
-PRESSED/RELEASED describe the hub power button; UP/DOWN/STOP are the
-values reported by the PoweredUp Remote's +/-/red buttons.
+``PRESSED`` / ``RELEASED`` are for a hub's button; ``UP`` / ``DOWN`` /
+``STOP`` are the + / - / red buttons on a Powered Up remote.
 """
 
 PRESSED: int = 0x01

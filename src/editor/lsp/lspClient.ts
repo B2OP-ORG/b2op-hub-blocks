@@ -277,6 +277,9 @@ export function startLspService(
       });
     });
     openModels.set(uri, listener);
+    // Monaco may already have asked for semantic tokens before the document
+    // was registered (provider returned null). Ask it to re-request now.
+    semanticTokensChanged.fire();
   }
 
   function closeDocument(uri: string): void {

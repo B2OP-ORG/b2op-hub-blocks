@@ -3,10 +3,15 @@ import { createPortal } from "react-dom";
 import { useApp } from "../state/store";
 import { usePalette } from "./theme";
 
+/** Byte count as B / kB / MB (1024-based), e.g. 512 B, 12.3 kB, 1.25 MB. */
+export function fmtBytes(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(2)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} kB`;
+  return `${Math.round(n)} B`;
+}
+
 export function fmtSpeed(bps: number): string {
-  if (bps >= 1_048_576) return `${(bps / 1_048_576).toFixed(1)} MB/s`;
-  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
-  return `${Math.round(bps)} B/s`;
+  return `${fmtBytes(bps)}/s`;
 }
 
 export function fmtEta(sec: number): string {
@@ -50,7 +55,7 @@ export function TransferOverlay() {
         <div style={{ fontSize: 12, color: p.dimText, marginBottom: 16, minHeight: 16 }}>
           {t.total > 0 && (
             <>
-              {t.sent.toLocaleString()} / {t.total.toLocaleString()} B ({pct}%)
+              {fmtBytes(t.sent)} / {fmtBytes(t.total)} ({pct}%)
               {speed > 0 && <> · {fmtSpeed(speed)}</>}
               {eta > 0 && <> · {fmtEta(eta)}</>}
             </>

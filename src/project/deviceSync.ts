@@ -8,9 +8,9 @@ import { ancestorDirs } from "./paths";
 import { sanitizeFilename } from "../utils/sanitize";
 import { showAlert } from "../ui/Dialog";
 
-export class CancelledError extends Error {
-  constructor() { super("Cancelled"); }
-}
+import { CancelledError } from "../device/protocol";
+
+export { CancelledError };
 
 /** Device folder a project uploads into. */
 export function projectRoot(title: string): string {
@@ -86,14 +86,16 @@ export async function uploadWithProgress(
   label: string,
   opts: { allowRoot?: boolean; fileIndex?: number; fileCount?: number; startedAt?: number } = {},
 ): Promise<void> {
-  const { setTransfer } = useApp.getState();
+  const { setTransfer, transferSignal } = useApp.getState();
   const startedAt = opts.startedAt ?? Date.now();
   setTransfer({ label, sent: 0, total: bytes.length, startedAt, fileIndex: opts.fileIndex, fileCount: opts.fileCount });
+  // Cancel button aborts this signal: the hub gets ABORT and this rejects with
+  // CancelledError only after it confirms (overlay shows "Cancelling…" until then).
   await device.upload(path, bytes, {
     policy: { allowRoot: opts.allowRoot ?? false },
     autoRun: false,
+    signal: transferSignal(),
     onProgress: (sent, total) => {
-      if (useApp.getState().transferCancel) throw new CancelledError();
       setTransfer({ label, sent, total, startedAt, fileIndex: opts.fileIndex, fileCount: opts.fileCount });
     },
   });

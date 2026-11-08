@@ -205,15 +205,16 @@ export async function importFilesFromComputer(dir = ""): Promise<void> {
 
 /** Read a device file with progress + cancel through the transfer overlay. */
 export async function readDeviceFile(path: string): Promise<Uint8Array> {
-  const { device, setTransfer } = useApp.getState();
+  const { device, setTransfer, transferSignal } = useApp.getState();
   if (!device) throw new Error("No hub connected.");
   const label = `Reading ${devBaseName(path)}…`;
   const startedAt = Date.now();
   setTransfer({ label, sent: 0, total: 0, startedAt });
   try {
+    // Cancel → ABORT; rejects with CancelledError once the hub confirms.
     return await device.readFileRaw(path, {
+      signal: transferSignal(),
       onProgress: (sent, total) => {
-        if (useApp.getState().transferCancel) throw new CancelledError();
         setTransfer({ label, sent, total, startedAt });
       },
     });

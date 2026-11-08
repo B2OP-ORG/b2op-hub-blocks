@@ -161,6 +161,14 @@ export interface FrameReply {
 
 export interface DirEntry { name: string; isDir: boolean; }
 
+/** A transfer stopped by the caller's AbortSignal, after the device confirmed it. */
+export class CancelledError extends Error {
+  constructor() { super("Cancelled"); this.name = "CancelledError"; }
+}
+
+/** Every request times out after this long without hearing from the device. */
+export const DEFAULT_TIMEOUT_MS = 3000;
+
 /** Protocol interface — all higher-level code depends on this, not the impl. */
 export interface IHubProtocol {
   readonly protocolVersion: number;
@@ -187,11 +195,12 @@ export interface IHubProtocol {
   mtu(timeoutMs?: number): Promise<number>;
   runProgram(path: string, timeoutMs?: number): Promise<void>;
   stop(noAck?: boolean, timeoutMs?: number): Promise<void>;
-  upload(path: string, bytes: Uint8Array, idleTimeoutMs?: number, onProgress?: ProgressSink): Promise<void>;
-  readFile(path: string, timeoutMs?: number, onProgress?: ProgressSink): Promise<Uint8Array>;
+  /** `signal` aborts: sends ABORT and rejects with CancelledError once the device confirms. */
+  upload(path: string, bytes: Uint8Array, idleTimeoutMs?: number, onProgress?: ProgressSink, signal?: AbortSignal): Promise<void>;
+  readFile(path: string, timeoutMs?: number, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array>;
   ls(path: string, timeoutMs?: number): Promise<DirEntry[]>;
   mv(src: string, dst: string, timeoutMs?: number): Promise<void>;
-  cp(src: string, dst: string, timeoutMs?: number): Promise<void>;
+  cp(src: string, dst: string, timeoutMs?: number, signal?: AbortSignal): Promise<void>;
   rm(path: string, timeoutMs?: number): Promise<void>;
   mkdir(path: string, timeoutMs?: number): Promise<void>;
   /** Cancel the UPLOAD / READ / CP started with `targetSeq` (omit = all streams). */
@@ -252,6 +261,8 @@ interface Waiter {
   onAck?: (payload: Uint8Array) => void;
   /** Streamed DATA handler; when set, DATA frames don't settle the waiter. */
   onData?: (payload: Uint8Array) => void;
+  /** Caller aborted; ABORT sent, waiting for the device to end the stream. */
+  cancelling?: boolean;
 }
 
 /** Kinds whose transfer is a device-side stream that ABORT can cancel. */
@@ -264,6 +275,8 @@ interface SendOptions {
   onData?: (payload: Uint8Array) => void;
   /** Use writeValueWithoutResponse for large host→device transfers (e.g. UPLOAD). */
   fast?: boolean;
+  /** Abort a stream request (READ / CP); see cancelStream(). */
+  signal?: AbortSignal;
 }
 
 // ── HubProtocolV2_0_0 ────────────────────────────────────────────────────────
@@ -287,6 +300,9 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   private state: ParseState = freshState();
   private sending = Promise.resolve();
   private _seq = 0;
+  /** Last queued stream per kind (UPLOAD / READ / CP); see oneAtATime(). */
+  private streamTail = new Map<number, Promise<void>>();
+  private disposed = false;
 
   private _protocolVersion = 0;
   private _boardName = "";
@@ -309,6 +325,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.unsub?.();
     this.unsub = null;
     for (const w of this.waiters.values()) {
@@ -341,31 +358,31 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
 
   // ── Public commands ─────────────────────────────────────────────────────────
 
-  async requestHello(timeoutMs = 2000): Promise<void> {
+  async requestHello(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.HELLO_REQ, 0, new Uint8Array(0), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "HELLO_REQ failed");
     this.parseHelloPayload(reply.payload);
   }
 
-  async ping(timeoutMs = 3000): Promise<void> {
+  async ping(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.PING, 0, new Uint8Array(0), { timeoutMs });
     if (reply.kind !== "OK") throw new Error("PING failed");
   }
 
-  async mtu(timeoutMs = 3000): Promise<number> {
+  async mtu(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<number> {
     const reply = await this.sendRequest(KIND.MTU_REQ, 0, new Uint8Array(0), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MTU failed");
     if (reply.payload.length < 2) throw new Error("MTU: bad reply");
     return new DataView(reply.payload.buffer, reply.payload.byteOffset).getUint16(0, false);
   }
 
-  async runProgram(path: string, timeoutMs = 3000): Promise<void> {
+  async runProgram(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.RUN, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RUN failed");
     // programRunning was set to true in dispatch() when OK arrived, before this resumes
   }
 
-  async stop(noAck = false, timeoutMs = 3000): Promise<void> {
+  async stop(noAck = false, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     this.state = freshState();
     if (noAck) {
       this.sendNoAck(KIND.STOP, new Uint8Array(0));
@@ -379,11 +396,22 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     }
   }
 
-  async upload(
+  upload(
     path: string,
     bytes: Uint8Array,
-    idleTimeoutMs = 15000,
+    idleTimeoutMs = DEFAULT_TIMEOUT_MS,
     onProgress?: ProgressSink,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.oneAtATime(KIND.UPLOAD, signal, () => this.doUpload(path, bytes, idleTimeoutMs, onProgress, signal));
+  }
+
+  private async doUpload(
+    path: string,
+    bytes: Uint8Array,
+    idleTimeoutMs: number,
+    onProgress?: ProgressSink,
+    signal?: AbortSignal,
   ): Promise<void> {
     const pathBytes = enc.encode(path);
     if (pathBytes.length > 255) throw new Error(`path too long: ${path}`);
@@ -402,7 +430,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     const wakeUp = () => { const f = wake; wake = null; f?.(); };
 
     const pump = async (w: Waiter) => {
-      const alive = () => !settled && this.waiters.get(seq) === w;
+      const alive = () => !settled && !w.cancelling && this.waiters.get(seq) === w;
       for (let off = 0; off < bytes.length; off += UPLOAD_CHUNK) {
         while (off - confirmed >= UPLOAD_WINDOW) {
           if (!alive()) return;
@@ -425,10 +453,11 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
       }
     };
 
+    let unwatch = () => {};
     const p = new Promise<FrameReply>((resolve, reject) => {
       const w: Waiter = {
-        resolve,
-        reject,
+        resolve: (r) => (w.cancelling ? reject(new CancelledError()) : resolve(r)),
+        reject: (e) => reject(w.cancelling ? new CancelledError() : e),
         idleTimeoutMs,
         requestKind: KIND.UPLOAD,
         onProgress: (sent, total) => {
@@ -442,11 +471,12 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
         this.waiters.delete(seq);
         console.warn(`[proto] TIMEOUT UPLOAD seq=${seq}`);
         this.sendAbort(seq);
-        reject(new Error("protocol timeout"));
+        w.reject(new Error("protocol timeout"));
       }, idleTimeoutMs);
       this.waiters.set(seq, w);
+      unwatch = this.watchCancel(seq, signal, wakeUp);
     });
-    void p.finally(() => { settled = true; wakeUp(); }).catch(() => {});
+    void p.finally(() => { settled = true; unwatch(); wakeUp(); }).catch(() => {});
 
     this.sending = this.sending
       .then(() => {
@@ -459,13 +489,18 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
   }
 
-  async readFile(path: string, timeoutMs = 3000, onProgress?: ProgressSink): Promise<Uint8Array> {
+  readFile(path: string, timeoutMs = DEFAULT_TIMEOUT_MS, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array> {
+    return this.oneAtATime(KIND.READ, signal, () => this.doReadFile(path, timeoutMs, onProgress, signal));
+  }
+
+  private async doReadFile(path: string, timeoutMs: number, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array> {
     let buf: Uint8Array | null = null;
     let received = 0;
     // Chunks may repeat; count each offset once so `received` reflects unique bytes.
     const seen = new Set<number>();
     const reply = await this.sendRequest(KIND.READ, 0, enc.encode(path), {
       timeoutMs,
+      signal,
       onAck: (payload) => {
         if (payload.length < 4) throw new Error("READ: bad ACK");
         const size = new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false);
@@ -493,48 +528,72 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     return out;
   }
 
-  async ls(path: string, timeoutMs = 3000): Promise<DirEntry[]> {
+  async ls(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<DirEntry[]> {
     const reply = await this.sendRequest(KIND.LS, 0, enc.encode(path), { timeoutMs });
     if (reply.kind === "ERR") throw new Error(dec.decode(reply.payload));
     if (reply.kind !== "DATA") throw new Error("LS: expected DATA reply");
     return parseLsPayload(reply.payload);
   }
 
-  async mv(src: string, dst: string, timeoutMs = 3000): Promise<void> {
+  async mv(src: string, dst: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.MV, 0, encodeTwoPaths(src, dst), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MV failed");
   }
 
-  async cp(src: string, dst: string, timeoutMs = 15000): Promise<void> {
-    const reply = await this.sendRequest(KIND.CP, 0, encodeTwoPaths(src, dst), { timeoutMs });
+  cp(src: string, dst: string, timeoutMs = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<void> {
+    return this.oneAtATime(KIND.CP, signal, () => this.doCp(src, dst, timeoutMs, signal));
+  }
+
+  private async doCp(src: string, dst: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    const reply = await this.sendRequest(KIND.CP, 0, encodeTwoPaths(src, dst), { timeoutMs, signal });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "CP failed");
   }
 
-  async rm(path: string, timeoutMs = 3000): Promise<void> {
+  async rm(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.RM, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "RM failed");
   }
 
-  async mkdir(path: string, timeoutMs = 3000): Promise<void> {
+  async mkdir(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const reply = await this.sendRequest(KIND.MKDIR, 0, enc.encode(path), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "MKDIR failed");
   }
 
-  async abort(targetSeq?: number, timeoutMs = 3000): Promise<void> {
+  async abort(targetSeq?: number, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     const payload = targetSeq === undefined ? new Uint8Array(0) : Uint8Array.of(targetSeq & 0xFF);
     const reply = await this.sendRequest(KIND.ABORT, 0, payload, { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "ABORT failed");
   }
 
-  async exec(code: string, timeoutMs = 10000): Promise<FrameReply> {
+  async exec(code: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<FrameReply> {
     return this.sendRequest(KIND.EXEC, 0, enc.encode(code), { timeoutMs });
   }
 
-  async cmd(payload: Uint8Array, timeoutMs = 5000): Promise<FrameReply> {
+  async cmd(payload: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<FrameReply> {
     return this.sendRequest(KIND.CMD, 0, payload, { timeoutMs });
   }
 
   // ── Private send helpers ────────────────────────────────────────────────────
+
+  /**
+   * The device runs at most one UPLOAD, one READ and one CP at a time and
+   * answers a second one with ERR "<KIND> busy". Queue same-kind streams so
+   * overlapping callers wait their turn instead of failing. A cancelled /
+   * timed-out stream has already queued its ABORT on the send chain, so the
+   * next request reaches the device after it.
+   */
+  private oneAtATime<T>(kind: number, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+    const prev = this.streamTail.get(kind) ?? Promise.resolve();
+    const run = prev.then(() => {
+      if (this.disposed) throw new Error("Disposed");
+      if (signal?.aborted) throw new CancelledError(); // never started: nothing to abort
+      return fn();
+    });
+    const tail = run.then(() => {}, () => {});
+    this.streamTail.set(kind, tail);
+    void tail.then(() => { if (this.streamTail.get(kind) === tail) this.streamTail.delete(kind); });
+    return run;
+  }
 
   private nextSeq(): number {
     const s = this._seq;
@@ -550,10 +609,11 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   ): Promise<FrameReply> {
     const seq = this.nextSeq();
     const frame = makeFrame(kind, seq, flags, payload);
+    let unwatch = () => {};
     const p = new Promise<FrameReply>((resolve, reject) => {
       const w: Waiter = {
-        resolve,
-        reject,
+        resolve: (r) => { unwatch(); if (w.cancelling) reject(new CancelledError()); else resolve(r); },
+        reject: (e) => { unwatch(); reject(w.cancelling ? new CancelledError() : e); },
         idleTimeoutMs: opts.timeoutMs,
         onProgress: opts.onProgress,
         onAck: opts.onAck,
@@ -564,9 +624,10 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
         this.waiters.delete(seq);
         if (STREAM_KINDS.has(kind)) this.sendAbort(seq);
         console.warn(`[proto] TIMEOUT kind=0x${kind.toString(16).padStart(2,'0')} seq=${seq} after ${opts.timeoutMs}ms`);
-        reject(new Error("protocol timeout"));
+        w.reject(new Error("protocol timeout"));
       }, opts.timeoutMs);
       this.waiters.set(seq, w);
+      if (opts.signal) unwatch = this.watchCancel(seq, opts.signal);
     });
     this.sending = this.sending
       .then(() => {
@@ -586,6 +647,33 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     const write = (this.transport.writeFast?.bind(this.transport)
       ?? this.transport.write.bind(this.transport));
     this.sending = this.sending.then(() => write(frame)).catch(() => {});
+  }
+
+  /** Hook a caller's AbortSignal to cancelStream(); returns the unsubscribe. */
+  private watchCancel(seq: number, signal: AbortSignal | undefined, onCancel?: () => void): () => void {
+    if (!signal) return () => {};
+    const onAbort = () => { this.cancelStream(seq); onCancel?.(); };
+    if (signal.aborted) {
+      queueMicrotask(onAbort);
+      return () => {};
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    return () => signal.removeEventListener("abort", onAbort);
+  }
+
+  /**
+   * User cancel: send ABORT for the stream and keep its waiter until the device
+   * ends it — ERR "aborted" on the stream's SEQ, or its own OK / ERR if it
+   * finished first (then ABORT gets "no such stream"). The waiter then rejects
+   * with CancelledError. Progress / DATA are ignored meanwhile; the normal idle
+   * timeout still applies if the device never answers.
+   */
+  private cancelStream(seq: number): void {
+    const w = this.waiters.get(seq);
+    if (!w || w.cancelling) return;
+    w.cancelling = true;
+    console.log(`[proto] cancel seq=${seq} → ABORT`);
+    this.abort(seq).catch(() => { /* "no such stream": its own reply settles the waiter */ });
   }
 
   /** Fire-and-forget ABORT for a stream we gave up on (its ERR "aborted" is dropped). */
@@ -664,14 +752,14 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
         console.log(`[proto] ← ACK seq=${seq}`);
         this.resetWaiterTimer(seq);
         const w = this.waiters.get(seq);
-        if (w?.onAck) this.guard(seq, w, () => w.onAck!(payload));
+        if (w?.onAck && !w.cancelling) this.guard(seq, w, () => w.onAck!(payload));
         break;
       }
 
       case KIND.PROGRESS: {
         this.resetWaiterTimer(seq);
         const w = this.waiters.get(seq);
-        if (w?.onProgress && payload.length >= 8) {
+        if (w?.onProgress && !w.cancelling && payload.length >= 8) {
           const dv = new DataView(payload.buffer, payload.byteOffset);
           this.guard(seq, w, () => w.onProgress!(dv.getUint32(0, false), dv.getUint32(4, false)));
         }
@@ -682,7 +770,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
         const w = this.waiters.get(seq);
         if (w?.onData) {
           this.resetWaiterTimer(seq);
-          this.guard(seq, w, () => w.onData!(payload));
+          if (!w.cancelling) this.guard(seq, w, () => w.onData!(payload));
         } else {
           // No waiter: late chunk of an aborted / finished stream — dropped.
           this.resolveWaiter(seq, { kind: "DATA", payload });

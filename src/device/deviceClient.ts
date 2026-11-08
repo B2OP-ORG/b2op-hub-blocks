@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV2_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
+import { HubProtocolV2_0_0, PROTOCOL_REGISTRY, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -23,6 +23,8 @@ export interface UploadRunOptions {
   policy: UploadPolicy;
   autoRun?: boolean;
   onProgress?: (sent: number, total: number) => void;
+  /** Abort → ABORT frame; rejects with CancelledError once the hub confirms. */
+  signal?: AbortSignal;
   onStdout?: ConsoleSink;
   onStderr?: ConsoleSink;
 }
@@ -62,7 +64,7 @@ export class DeviceClient {
     let pinged = false;
     for (let i = 0; i < 2; i++) {
       try {
-        await this.proto.ping(3000);
+        await this.proto.ping(DEFAULT_TIMEOUT_MS);
         pinged = true;
         break;
       } catch {
@@ -73,7 +75,7 @@ export class DeviceClient {
       // Fetch board identity (HELLO may have arrived proactively; requestHello
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
       try {
-        await this.proto.requestHello(3000);
+        await this.proto.requestHello(DEFAULT_TIMEOUT_MS);
         const protoVer = this.proto.protocolVersion;
         if (!PROTOCOL_REGISTRY.has(protoVer)) {
           const newest = Math.max(...PROTOCOL_REGISTRY.keys());
@@ -94,7 +96,7 @@ export class DeviceClient {
         // still see the default 23. Retry once after a short delay if so.
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            const mtu = await this.proto.mtu(1500);
+            const mtu = await this.proto.mtu(DEFAULT_TIMEOUT_MS);
             if (mtu > 23 || attempt === 1) {
               // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
               this.transport.setChunkSize(mtu - 3);
@@ -112,7 +114,7 @@ export class DeviceClient {
     this.pingInterval = setInterval(async () => {
       if (!this.transport.connected || this.pinging) return;
       this.pinging = true;
-      try { await this.proto.ping(2000); } catch { /* ignore; disconnect handler fires on dead link */ }
+      try { await this.proto.ping(DEFAULT_TIMEOUT_MS); } catch { /* ignore; disconnect handler fires on dead link */ }
       finally { this.pinging = false; }
     }, 10_000);
   }
@@ -127,9 +129,9 @@ export class DeviceClient {
     if (this.transport.connected) {
       // The device can't tell we gave up on a transfer — cancel any active stream.
       if (this.proto.hasActiveStreams()) {
-        try { await this.proto.abort(undefined, 1000); } catch { /* noop */ }
+        try { await this.proto.abort(undefined, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
       }
-      try { await this.proto.stop(false, 3000); } catch { /* noop */ }
+      try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
     }
     this.proto.dispose();
     await this.transport.disconnect();
@@ -154,7 +156,7 @@ export class DeviceClient {
     this.proto.setStderrSink(errSink);
     const bytes = new TextEncoder().encode(code);
     await this.proto.upload(path, bytes);
-    await this.proto.runProgram(path, opts.timeoutMs ?? 3000);
+    await this.proto.runProgram(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     return { stdout, stderr };
   }
 
@@ -176,22 +178,22 @@ export class DeviceClient {
 
   async readFile(
     path: string,
-    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void; signal?: AbortSignal } = {},
   ): Promise<string> {
-    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
+    const bytes = await this.proto.readFile(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.onProgress, opts.signal);
     return new TextDecoder().decode(bytes);
   }
 
   async readFileRaw(
     path: string,
-    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void } = {},
+    opts: { timeoutMs?: number; onProgress?: (sent: number, total: number) => void; signal?: AbortSignal } = {},
   ): Promise<Uint8Array> {
-    return this.proto.readFile(path, opts.timeoutMs ?? 3000, opts.onProgress);
+    return this.proto.readFile(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.onProgress, opts.signal);
   }
 
   async upload(path: string, bytes: Uint8Array, opts: UploadRunOptions): Promise<UploadResult> {
     validatePath(path, opts.policy);
-    await this.proto.upload(path, bytes, 15000, opts.onProgress);
+    await this.proto.upload(path, bytes, DEFAULT_TIMEOUT_MS, opts.onProgress, opts.signal);
     opts.onProgress?.(bytes.length, bytes.length);
     if (opts.autoRun) {
       await this.proto.runProgram(path);
@@ -200,23 +202,23 @@ export class DeviceClient {
   }
 
   async ls(path: string, opts: { timeoutMs?: number } = {}): Promise<DirEntry[]> {
-    return this.proto.ls(path, opts.timeoutMs ?? 3000);
+    return this.proto.ls(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   }
 
   async mv(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.mv(src, dst, opts.timeoutMs ?? 3000);
+    return this.proto.mv(src, dst, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   }
 
-  async cp(src: string, dst: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.cp(src, dst, opts.timeoutMs ?? 3000);
+  async cp(src: string, dst: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<void> {
+    return this.proto.cp(src, dst, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
   }
 
   async rm(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.rm(path, opts.timeoutMs ?? 3000);
+    return this.proto.rm(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   }
 
   async mkdir(path: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    return this.proto.mkdir(path, opts.timeoutMs ?? 3000);
+    return this.proto.mkdir(path, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   }
 
   /** Start an already-uploaded program on the device. */

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   validatePath, UploadError, HubProtocolV2_0_0, HubProtocol, PROTOCOL_REGISTRY,
-  KIND, makeFrame, decodeVarint, UPLOAD_CHUNK,
+  KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, CancelledError, DEFAULT_TIMEOUT_MS,
   type ProgramEndInfo,
 } from "../src/device/protocol";
 import { MockTransport } from "../src/transport/mock";
@@ -627,6 +627,50 @@ describe("v2.0.0 streaming transfers", () => {
     await transport.disconnect();
   });
 
+  it("overlapping READs are queued instead of hitting 'READ busy'", async () => {
+    const a = new Uint8Array(2000).fill(1);
+    const b = new Uint8Array(1500).fill(2);
+    const transport = new MockTransport({ files: { "/sd/a": a, "/sd/b": b } });
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const [ra, rb] = await Promise.all([proto.readFile("/sd/a"), proto.readFile("/sd/b")]);
+    expect(ra).toEqual(a);
+    expect(rb).toEqual(b);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("overlapping UPLOADs are queued; a failed one doesn't block the next", async () => {
+    const transport = new MockTransport();
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const x = new Uint8Array(5000).fill(3);
+    const y = new Uint8Array(300).fill(4);
+    const cancelled = proto.upload("/sd/c", new Uint8Array(9000), 2000, () => { throw new Error("Cancelled"); });
+    const p1 = proto.upload("/sd/x", x);
+    const p2 = proto.upload("/sd/y", y);
+    await expect(cancelled).rejects.toThrow("Cancelled");
+    await Promise.all([p1, p2]);
+    expect(transport.files["/sd/x"]).toEqual(x);
+    expect(transport.files["/sd/y"]).toEqual(y);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("queued stream rejects after dispose without sending", async () => {
+    const transport = new MockTransport({ files: { "/sd/a": new Uint8Array(3000) } });
+    transport.manualRead = true;
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const first = proto.readFile("/sd/a", 1000).catch((e: Error) => e);
+    const second = proto.readFile("/sd/a", 1000).catch((e: Error) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    proto.dispose();
+    expect(((await first) as Error).message).toBe("Disposed");
+    expect(((await second) as Error).message).toBe("Disposed");
+    await transport.disconnect();
+  });
+
   it("CP resolves after ACK + OK", async () => {
     const transport = new MockTransport({ files: { "/sd/a": enc.encode("x") } });
     await transport.connect();
@@ -648,5 +692,109 @@ describe("v2.0.0 streaming transfers", () => {
     expect(end).not.toHaveBeenCalled();
     expect(proto.isProgramRunning()).toBe(true);
     proto.dispose();
+  });
+});
+
+// ── Cancel via AbortSignal: ABORT, then wait for the device ──────────────────
+
+describe("AbortSignal cancel", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  /** Hold ABORT frames until release(); everything else goes to the mock. */
+  function holdAborts(transport: MockTransport) {
+    const orig = transport.write.bind(transport);
+    const held: Uint8Array[] = [];
+    const frames: { seq: number; kind: number; payload: Uint8Array }[] = [];
+    transport.write = async (c: Uint8Array) => {
+      const fs = parseFrames(c);
+      frames.push(...fs);
+      if (fs.some((f) => f.kind === KIND.ABORT)) { held.push(c); return; }
+      return orig(c);
+    };
+    return { frames, release: async () => { for (const c of held.splice(0)) await orig(c); } };
+  }
+
+  it("all default timeouts are 3 s", () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(3000);
+  });
+
+  it("READ cancel sends ABORT and only rejects after the device's ERR 'aborted'", async () => {
+    const transport = new MockTransport({ files: { "/sd/f.bin": new Uint8Array(3000) } });
+    transport.manualRead = true;
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const h = holdAborts(transport);
+    const ctl = new AbortController();
+    let settled = false;
+    const progress = vi.fn();
+    const p = proto.readFile("/sd/f.bin", 1000, progress, ctl.signal).finally(() => { settled = true; });
+    await tick();
+    transport.pumpRead(1);
+    const before = progress.mock.calls.length;
+    ctl.abort();
+    await tick();
+    const read = h.frames.find((f) => f.kind === KIND.READ)!;
+    expect(h.frames.find((f) => f.kind === KIND.ABORT)?.payload).toEqual(Uint8Array.of(read.seq));
+    transport.pumpRead(1); // chunk still in flight: ignored, no progress
+    await tick();
+    expect(progress.mock.calls.length).toBe(before);
+    expect(settled).toBe(false); // device hasn't confirmed yet
+    await h.release();
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("UPLOAD cancel stops chunks, waits for confirmation, leaves no file", async () => {
+    const transport = new MockTransport();
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const h = holdAborts(transport);
+    const ctl = new AbortController();
+    let settled = false;
+    const p = proto.upload("/sd/big.bin", new Uint8Array(64 * 1024), 1000, () => ctl.abort(), ctl.signal)
+      .finally(() => { settled = true; });
+    await tick(); await tick();
+    expect(h.frames.some((f) => f.kind === KIND.ABORT)).toBe(true);
+    const sentChunks = h.frames.filter((f) => f.kind === KIND.DATA).length;
+    await tick();
+    expect(settled).toBe(false);
+    expect(h.frames.filter((f) => f.kind === KIND.DATA).length).toBe(sentChunks);
+    await h.release();
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    expect(transport.files["/sd/big.bin"]).toBeUndefined();
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("cancel that loses the race to OK still rejects as cancelled", async () => {
+    const transport = new MockTransport({ files: { "/sd/a": enc.encode("hi") } });
+    transport.manualRead = true;
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const h = holdAborts(transport);
+    const ctl = new AbortController();
+    const p = proto.readFile("/sd/a", 1000, undefined, ctl.signal);
+    await tick();
+    ctl.abort();
+    await tick();
+    transport.pumpRead(); // device finishes before seeing ABORT
+    await h.release();    // → ERR "ABORT: no such stream"
+    await expect(p).rejects.toBeInstanceOf(CancelledError);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("already-aborted signal never sends the request", async () => {
+    const transport = new MockTransport({ files: { "/sd/a": enc.encode("hi") } });
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const h = holdAborts(transport);
+    const ctl = new AbortController();
+    ctl.abort();
+    await expect(proto.readFile("/sd/a", 1000, undefined, ctl.signal)).rejects.toBeInstanceOf(CancelledError);
+    expect(h.frames.length).toBe(0);
+    proto.dispose();
+    await transport.disconnect();
   });
 });

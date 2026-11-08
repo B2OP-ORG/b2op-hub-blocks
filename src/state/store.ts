@@ -77,8 +77,13 @@ interface AppState {
 
   // ── Transfers ───────────────────────────────────────────────────────────
   transfer: TransferState | null;
+  /** Cancel clicked; stays true ("Cancelling…") until the transfer ends. */
   transferCancel: boolean;
+  /** Aborted by cancelTransfer(); pass `transferSignal()` to device transfers. */
+  transferController: AbortController | null;
   setTransfer: (t: TransferState | null) => void;
+  /** Signal for the current transfer (created on first use, cleared with setTransfer(null)). */
+  transferSignal: () => AbortSignal;
   cancelTransfer: () => void;
 
   // ── Sidebar UI state ────────────────────────────────────────────────────
@@ -287,8 +292,17 @@ export const useApp = create<AppState>((set, get) => {
 
     transfer: null,
     transferCancel: false,
-    setTransfer: (transfer) => set(transfer ? { transfer } : { transfer: null, transferCancel: false }),
-    cancelTransfer: () => set({ transferCancel: true }),
+    transferController: null,
+    setTransfer: (transfer) => set(transfer ? { transfer } : { transfer: null, transferCancel: false, transferController: null }),
+    transferSignal: () => {
+      let c = get().transferController;
+      if (!c) { c = new AbortController(); set({ transferController: c }); }
+      return c.signal;
+    },
+    cancelTransfer: () => {
+      set({ transferCancel: true });
+      get().transferController?.abort();
+    },
 
     sidebarTab: SIDEBAR_TAB_IDS.includes(sidebarLayout.activeTab as SidebarTabId)
       ? (sidebarLayout.activeTab as SidebarTabId) : "explorer",

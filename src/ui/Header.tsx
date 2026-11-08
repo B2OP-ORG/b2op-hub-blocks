@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUpCircle, Bluetooth, Circle, Code2, Layers,
@@ -17,9 +17,13 @@ import { switchActiveFileMode } from "./modeSwitch";
 interface Props {
   onOpenSettings: () => void;
   onOpenFwUpdate?: () => void;
+  /** Opens the firmware updater page directly (always available). */
+  onOpenFwUpdater?: () => void;
+  /** Latest firmware version for the connected board, when newer than the installed one. */
+  latestFw?: string;
 }
 
-export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
+export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latestFw }: Props) {
   const project = useApp((s) => s.project);
   const device = useApp((s) => s.device);
   const connection = useApp((s) => s.connection);
@@ -33,6 +37,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
   const boardName = useApp((s) => s.boardName);
   const boardVersion = useApp((s) => s.boardVersion);
   const fwVersion = useApp((s) => s.fwVersion);
+  const deviceName = useApp((s) => s.deviceName);
   const transferring = useApp((s) => s.transfer !== null);
   const projectId = useApp((s) => s.mfp.id);
   const activeFile = useApp((s) => s.mfp.files.find((f) => f.id === s.activeFileId));
@@ -397,69 +402,87 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
           </button>
         )}
 
-        {/* Status badge — text pill at levels 0-2, colored icon at level 3 */}
-        {compactLevel < 3 ? (
-          <span style={{
+        {/* Status badge — text pill at levels 0-2, colored icon at level 3; click opens details popup */}
+        <button
+          ref={badgeBtnRef}
+          type="button"
+          title={compactLevel < 3 ? "Device details" : statusText}
+          onClick={(e) => { e.stopPropagation(); setShowStatusPopover(v => !v); }}
+          style={{
             fontWeight: 600,
             fontSize: 12,
-            padding: "3px 9px",
+            padding: compactLevel < 3 ? "3px 9px" : "4px 6px",
             borderRadius: 999,
             background: badgeBg(statusKind),
             color: badgeFg(statusKind),
             border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
-          }}>
-            {statusText}
-          </span>
-        ) : (
-          <>
-            <button
-              ref={badgeBtnRef}
-              type="button"
-              title={statusText}
-              onClick={(e) => { e.stopPropagation(); setShowStatusPopover(v => !v); }}
-              style={{
-                background: badgeBg(statusKind),
-                border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.2)",
-                borderRadius: 999,
-                padding: "4px 6px",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-              }}
-            >
-              <Circle
-                size={12}
-                style={{ fill: badgeFg(statusKind), color: badgeFg(statusKind) }}
-              />
-            </button>
-            {showStatusPopover && createPortal(
-              <div
-                onClick={(e) => e.stopPropagation()}
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            maxWidth: 260,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {compactLevel < 3
+            ? statusText
+            : <Circle size={12} style={{ fill: badgeFg(statusKind), color: badgeFg(statusKind) }} />}
+        </button>
+        {showStatusPopover && createPortal(
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              top: (badgeBtnRef.current?.getBoundingClientRect().bottom ?? 0) + 6,
+              right: window.innerWidth - (badgeBtnRef.current?.getBoundingClientRect().right ?? 0),
+              background: dark ? "#0d1c24" : "#065a72",
+              border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.25)",
+              borderRadius: 8,
+              padding: "10px 12px",
+              fontSize: 12,
+              color: dark ? "#dff5fb" : "#ffffff",
+              zIndex: 9999,
+              minWidth: 220,
+              maxWidth: 360,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, marginBottom: 8 }}>
+              <Circle size={10} style={{ fill: badgeFg(statusKind), color: badgeFg(statusKind), flexShrink: 0 }} />
+              <span style={{ wordBreak: "break-word" }}>{statusText}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 12, rowGap: 3 }}>
+              {([
+                ["Device", connection === "connected" ? deviceName : ""],
+                ["Board", connection === "connected" ? boardName : ""],
+                ["Hardware", connection === "connected" ? boardVersion : ""],
+                ["Firmware", connection === "connected" ? fwVersion : ""],
+                ...(latestFw ? [["Latest firmware", latestFw] as [string, string]] : []),
+              ] as [string, string][]).map(([k, v]) => (
+                <Fragment key={k}>
+                  <span style={{ opacity: 0.7 }}>{k}</span>
+                  <span style={{ fontWeight: 600, textAlign: "right" }}>{v || "—"}</span>
+                </Fragment>
+              ))}
+            </div>
+            {onOpenFwUpdater && (
+              <button
+                type="button"
+                onClick={() => { setShowStatusPopover(false); onOpenFwUpdater(); }}
                 style={{
-                  position: "fixed",
-                  top: (badgeBtnRef.current?.getBoundingClientRect().bottom ?? 0) + 6,
-                  right: window.innerWidth - (badgeBtnRef.current?.getBoundingClientRect().right ?? 0),
-                  background: dark ? "#0d1c24" : "#065a72",
-                  border: dark ? "1px solid #164e63" : "1px solid rgba(255,255,255,0.25)",
-                  borderRadius: 8,
-                  padding: "8px 12px",
+                  ...(latestFw ? warnBtn : btn),
+                  marginTop: 10,
+                  width: "100%",
+                  justifyContent: "center",
                   fontSize: 12,
-                  color: dark ? "#dff5fb" : "#ffffff",
-                  zIndex: 9999,
-                  whiteSpace: "nowrap",
-                  boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
                 }}
               >
-                <div style={{ fontWeight: 700, color: badgeFg(statusKind) }}>{statusText}</div>
-                {connection === "connected" && boardName && (
-                  <div style={{ opacity: 0.75, marginTop: 3 }}>
-                    {boardName}{boardVersion ? ` ${boardVersion}` : ""}{fwVersion ? ` (${fwVersion})` : ""}
-                  </div>
-                )}
-              </div>
-            , document.body)}
-          </>
-        )}
+                <ArrowUpCircle size={13} />{latestFw ? ` Update firmware to ${latestFw}` : " Open firmware updater"}
+              </button>
+            )}
+          </div>
+        , document.body)}
       </span>
 
       {/* Settings */}

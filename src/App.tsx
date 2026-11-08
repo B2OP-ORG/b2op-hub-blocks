@@ -75,6 +75,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setUpdateInfo(null);
     if (connection !== "connected" || !boardName || !boardVersion || !fwVersion) return;
     if (isDevBuild(fwVersion)) return;
     const entry = (boardVersions as Record<string, Record<string, { latestFwVersion: string }>>)[boardName]?.[boardVersion];
@@ -93,6 +94,8 @@ export default function App() {
         <Header
           onOpenSettings={() => setShowSettings(true)}
           onOpenFwUpdate={updateInfo ? () => setShowUpdatePrompt(true) : undefined}
+          onOpenFwUpdater={() => setShowUpdatePage(true)}
+          latestFw={updateInfo?.latestFw}
         />
         <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
           <SidebarSlot />

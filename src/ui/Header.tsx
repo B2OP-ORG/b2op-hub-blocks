@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import * as Blockly from "blockly/core";
 import {
   ArrowUpCircle, Bluetooth, Circle, Code2, Cpu, FolderOpen, Layers,
   Play, Power, Settings, Square, Upload, Zap,
@@ -13,7 +12,6 @@ import { useApp } from "../state/store";
 import type { BlocksProject } from "../project/format";
 import { newBlocksProject, newPythonProject } from "../project/format";
 import { hasRawBlock, normalizePython, pythonToBlocks } from "../project/pythonToBlocks";
-import { workspaceToPython } from "../codegen/pythonGen";
 import { sanitizeFilename } from "../utils/sanitize";
 import { saveLastDeviceName } from "../project/storage";
 import { FileBrowserModal } from "./FileBrowserModal";
@@ -65,7 +63,12 @@ interface TranslationCheck {
   project: BlocksProject;
 }
 
-function checkTranslation(source: string, title: string, settings: BlocksProject["settings"]): TranslationCheck {
+// Blockly is loaded lazily so it stays out of the main bundle.
+async function checkTranslation(source: string, title: string, settings: BlocksProject["settings"]): Promise<TranslationCheck> {
+  const [Blockly, { workspaceToPython }] = await Promise.all([
+    import("blockly/core"),
+    import("../codegen/pythonGen"),
+  ]);
   const project = blocksProjectFromPython(source, title, settings);
   const { main } = pythonToBlocks(source);
   const hasRaw = hasRawBlock(main);
@@ -154,10 +157,10 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
 
   // ── Mode toggle ──────────────────────────────────────────────────────────────
 
-  const toggleType = () => {
+  const toggleType = async () => {
     if (project.type === "blocks") {
       const source = useApp.getState().pythonPreview || "";
-      const check = checkTranslation(source, project.title, project.settings);
+      const check = await checkTranslation(source, project.title, project.settings);
       if (check.hasRaw || !check.roundTripOk) {
         setToPythonPrompt({ hasRaw: check.hasRaw, roundTripOk: check.roundTripOk, source });
         return;
@@ -165,7 +168,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate }: Props) {
       setProject({ ...newPythonProject(project.title), settings: project.settings, source });
       return;
     }
-    const check = checkTranslation(project.source, project.title, project.settings);
+    const check = await checkTranslation(project.source, project.title, project.settings);
     if (!check.hasRaw && check.roundTripOk) {
       setProject(check.project);
       return;

@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useApp } from "../state/store";
-import { BlocklyView } from "./BlocklyView";
-import { MonacoView } from "../editor/MonacoView";
 import { ReplPanel } from "./ReplPanel";
 import { DevicePanel } from "./DevicePanel";
 import { Drawer, DRAWER_HANDLE } from "./Drawer";
+
+// Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
+const BlocklyView = lazy(() => import("./BlocklyView").then((m) => ({ default: m.BlocklyView })));
+const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
 
 export function Workspace() {
   const { project, pythonPreview } = useApp();
@@ -55,16 +57,20 @@ export function Workspace() {
             }}
           >
             <div style={{ background: "#ffffff", overflow: "hidden", minWidth: 0, minHeight: 0 }}>
-              <BlocklyView
-                initialState={project.workspace}
-                showAdvanced={editorSettings.showAdvanced}
-                toolboxBlockScale={editorSettings.toolboxBlockScale}
-                onChange={onBlockChange}
-              />
+              <Suspense fallback={null}>
+                <BlocklyView
+                  initialState={project.workspace}
+                  showAdvanced={editorSettings.showAdvanced}
+                  toolboxBlockScale={editorSettings.toolboxBlockScale}
+                  onChange={onBlockChange}
+                />
+              </Suspense>
             </div>
             <div style={{ gridRow: "1 / span 2", gridColumn: 2, minWidth: 0, minHeight: 0 }}>
               <Drawer side="right" label="Python" storageKey="drawer.python" defaultSize={360} onSizeChange={setPySize}>
-                <MonacoView value={pythonPreview} readOnly />
+                <Suspense fallback={null}>
+                  <MonacoView value={pythonPreview} readOnly />
+                </Suspense>
               </Drawer>
             </div>
             <div style={{ gridRow: 2, gridColumn: 1, minWidth: 0, minHeight: 0 }}>
@@ -94,11 +100,13 @@ export function Workspace() {
           }}
         >
           <div style={{ background: "#0b1216", minWidth: 0, minHeight: 0 }}>
-            <MonacoView
-              value={project.source}
-              onChange={onPythonChange}
-              lspUri={lspUri}
-            />
+            <Suspense fallback={null}>
+              <MonacoView
+                value={project.source}
+                onChange={onPythonChange}
+                lspUri={lspUri}
+              />
+            </Suspense>
           </div>
           <div style={{ minWidth: 0, minHeight: 0 }}>
             <Drawer side="bottom" label="Console" storageKey="drawer.console" defaultSize={220} dark onSizeChange={setConSize}>

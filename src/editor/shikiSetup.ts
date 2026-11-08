@@ -84,7 +84,9 @@ export function ensureShiki(m: typeof monaco): Promise<void> {
       langs: [import("@shikijs/langs/python")],
       engine: createJavaScriptRegexEngine(),
     });
-    m.languages.register({ id: "python" });
+    if (!m.languages.getLanguages().some((l) => l.id === "python")) {
+      m.languages.register({ id: "python" });
+    }
     shikiToMonaco(highlighter, m as unknown as Parameters<typeof shikiToMonaco>[1]);
 
     // Re-define the theme with semantic-token rules appended. Shiki's own

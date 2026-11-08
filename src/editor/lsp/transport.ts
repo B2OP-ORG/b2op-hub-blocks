@@ -47,7 +47,7 @@ _stubFiles["/workspace/pyrightconfig.json"] = JSON.stringify({
   typeCheckingMode: "basic",
   typeshedPath: "/workspace/typings",
   stubPath: "stubs",
-  pythonVersion: "3.5",
+  pythonVersion: "3",
   reportMissingModuleSource: "none",
 });
 

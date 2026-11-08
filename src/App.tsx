@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Header } from "./ui/Header";
 import { TabBar } from "./ui/TabBar";
 import { FileBrowser } from "./ui/FileBrowser";
@@ -6,12 +6,13 @@ import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { Workspace } from "./ui/Workspace";
 import { SettingsModal } from "./ui/SettingsModal";
 import { FirmwareUpdatePrompt } from "./ui/FirmwareUpdatePrompt";
-import { FirmwareUpdatePage } from "./ui/FirmwareUpdatePage";
 import { useApp } from "./state/store";
 import { loadMultiFileProject, saveMultiFileProject } from "./project/storage";
 import { fileToProject } from "./project/format";
 import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
+
+const FirmwareUpdatePage = lazy(() => import("./ui/FirmwareUpdatePage").then((m) => ({ default: m.FirmwareUpdatePage })));
 
 const SUPPRESS_KEY = "b2op.suppressFwUpdates";
 
@@ -108,7 +109,7 @@ export default function App() {
             }}
           />
         )}
-        {showUpdatePage && <FirmwareUpdatePage onBack={() => setShowUpdatePage(false)} />}
+        {showUpdatePage && <Suspense fallback={null}><FirmwareUpdatePage onBack={() => setShowUpdatePage(false)} /></Suspense>}
       </div>
     </ErrorBoundary>
   );

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import Editor, { loader, type Monaco } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
+// Core editor + standard contributions only. The full "monaco-editor" entry
+// also pulls in TS/CSS/HTML/JSON language services and ~80 basic languages,
+// none of which we use (Python comes from Shiki + pyright LSP).
+import "monaco-editor/esm/vs/editor/edcore.main.js";
+import * as monacoApi from "monaco-editor/esm/vs/editor/editor.api.js";
+import type * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { useLspService } from "./lsp/useLspClient";
 import { EDITOR_THEME, ensureShiki } from "./shikiSetup";
@@ -10,10 +15,14 @@ import { registerPythonLanguageConfig } from "./pythonLanguage";
   getWorker: () => new EditorWorker(),
 };
 
-loader.config({ monaco });
-registerPythonLanguageConfig(monaco);
+// Same runtime object as the full build minus the extra language namespaces;
+// typed as the full API so it fits @monaco-editor/react and our helpers.
+const monacoInstance = monacoApi as unknown as typeof monaco;
+
+loader.config({ monaco: monacoInstance });
+registerPythonLanguageConfig(monacoInstance);
 // Resolves to the theme to use; falls back to vs-dark if Shiki fails to load.
-const themeReady: Promise<string> = ensureShiki(monaco).then(
+const themeReady: Promise<string> = ensureShiki(monacoInstance).then(
   () => EDITOR_THEME,
   (err) => {
     console.error("[editor] Shiki highlighting failed to load", err);

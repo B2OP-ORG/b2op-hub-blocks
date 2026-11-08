@@ -38,5 +38,9 @@ export const PYTHON_LANGUAGE_CONFIG: monaco.languages.LanguageConfiguration = {
 
 /** Install the Python language configuration on a Monaco namespace. Idempotent. */
 export function registerPythonLanguageConfig(m: typeof monaco): void {
+  // The slim Monaco build doesn't register any languages; do it here.
+  if (!m.languages.getLanguages().some((l) => l.id === "python")) {
+    m.languages.register({ id: "python", extensions: [".py"], aliases: ["Python", "python"] });
+  }
   m.languages.setLanguageConfiguration("python", PYTHON_LANGUAGE_CONFIG);
 }

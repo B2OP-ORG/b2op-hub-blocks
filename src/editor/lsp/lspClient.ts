@@ -3,6 +3,7 @@
 
 import type * as monaco from "monaco-editor";
 import type { RpcMessage, Transport } from "./transport";
+import { SEMANTIC_TOKEN_MODIFIERS, SEMANTIC_TOKEN_TYPES } from "../shikiSetup";
 
 const LANGUAGE_ID = "python";
 const OWNER = "b2op-hub-lsp";
@@ -25,7 +26,8 @@ export function startLspService(
   let nextId = 1;
   const pending = new Map<number, Pending>();
   const disposables: monaco.IDisposable[] = [];
-  const openModels = new Map<string, monaco.editor.ITextModel>();
+  // uri → content-change listener for each open document
+  const openModels = new Map<string, monaco.IDisposable>();
   let disposed = false;
   let ready = false;
   const queue: RpcMessage[] = [];
@@ -57,13 +59,26 @@ export function startLspService(
     }
     if (msg.method === "textDocument/publishDiagnostics") {
       applyDiagnostics(msg.params as { uri: string; diagnostics: LspDiagnostic[] });
+      return;
+    }
+    // Server → client requests must be answered or the server may stall.
+    if (msg.method && msg.id !== undefined) {
+      if (msg.method === "workspace/semanticTokens/refresh") semanticTokensChanged.fire();
+      const known = msg.method === "workspace/semanticTokens/refresh"
+        || msg.method === "window/workDoneProgress/create";
+      transport.send(known
+        ? { jsonrpc: "2.0", id: msg.id, result: null }
+        : { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `Unhandled method ${msg.method}` } });
     }
   });
 
   transport.onClose(() => { if (!disposed) dispose(); });
 
   // LSP handshake (once per service lifetime)
-  request<unknown>(
+  const semanticTokensChanged = new monacoNs.Emitter<void>();
+  disposables.push(semanticTokensChanged);
+
+  request<LspInitializeResult>(
     "initialize",
     {
       processId: null,
@@ -74,14 +89,25 @@ export function startLspService(
           hover: { contentFormat: ["markdown"] },
           signatureHelp: { signatureInformation: { parameterInformation: { labelOffsetSupport: false } } },
           publishDiagnostics: { relatedInformation: false },
+          semanticTokens: {
+            dynamicRegistration: false,
+            requests: { full: true },
+            tokenTypes: [...SEMANTIC_TOKEN_TYPES],
+            tokenModifiers: [...SEMANTIC_TOKEN_MODIFIERS],
+            formats: ["relative"],
+            overlappingTokenSupport: false,
+            multilineTokenSupport: false,
+          },
         },
-        workspace: {},
+        workspace: { semanticTokens: { refreshSupport: true } },
       },
       workspaceFolders: [{ uri: "file:///workspace", name: "workspace" }],
     },
     /* force */ true,
   )
-    .then(() => {
+    .then((result) => {
+      const legend = result?.capabilities?.semanticTokensProvider?.legend;
+      if (legend) registerSemanticTokens(legend);
       ready = true;
       notify("initialized", {}, /* force */ true);
       for (const m of queue) transport.send(m);
@@ -170,6 +196,58 @@ export function startLspService(
     }),
   );
 
+  function registerSemanticTokens(serverLegend: LspSemanticTokensLegend): void {
+    // Monaco gets a reduced legend: only the types/modifiers the theme styles.
+    // Unstyled tokens are dropped so the TextMate colour shows through
+    // (Monaco standalone would otherwise paint them the default foreground).
+    const types = serverLegend.tokenTypes.filter((t) => SEMANTIC_TOKEN_TYPES.has(t));
+    const modifiers = SEMANTIC_TOKEN_MODIFIERS.filter((m) => serverLegend.tokenModifiers.includes(m));
+    const typeMap = serverLegend.tokenTypes.map((t) => types.indexOf(t));
+    const modMap = serverLegend.tokenModifiers.map((m) => modifiers.indexOf(m));
+    const legend: monaco.languages.SemanticTokensLegend = { tokenTypes: types, tokenModifiers: modifiers };
+
+    function remap(data: number[]): Uint32Array {
+      const out: number[] = [];
+      let line = 0, char = 0; // absolute position of last decoded token
+      let outLine = 0, outChar = 0; // absolute position of last emitted token
+      for (let i = 0; i + 4 < data.length; i += 5) {
+        const [dLine, dChar, length, type, mods] = data.slice(i, i + 5);
+        line += dLine;
+        char = dLine ? dChar : char + dChar;
+        const newType = typeMap[type] ?? -1;
+        if (newType < 0) continue;
+        let newMods = 0;
+        for (let b = 0; b < modMap.length; b++) {
+          if (mods & (1 << b) && modMap[b] >= 0) newMods |= 1 << modMap[b];
+        }
+        out.push(line - outLine, line === outLine ? char - outChar : char, length, newType, newMods);
+        outLine = line;
+        outChar = char;
+      }
+      return new Uint32Array(out);
+    }
+
+    disposables.push(
+      monacoNs.languages.registerDocumentSemanticTokensProvider(LANGUAGE_ID, {
+        onDidChange: semanticTokensChanged.event,
+        getLegend: () => legend,
+        async provideDocumentSemanticTokens(mdl) {
+          const uri = mdl.uri.toString();
+          if (!openModels.has(uri)) return null;
+          const resp = await request<{ resultId?: string; data: number[] } | null>(
+            "textDocument/semanticTokens/full",
+            { textDocument: { uri } },
+          ).catch(() => null);
+          if (!resp) return null;
+          return { resultId: resp.resultId, data: remap(resp.data) };
+        },
+        releaseDocumentSemanticTokens() {},
+      }),
+    );
+    // Documents opened before the handshake finished need a first pass.
+    semanticTokensChanged.fire();
+  }
+
   function applyDiagnostics(params: { uri: string; diagnostics: LspDiagnostic[] }): void {
     const monacoUri = monacoNs.Uri.parse(params.uri);
     const model = monacoNs.editor.getModel(monacoUri);
@@ -189,21 +267,22 @@ export function startLspService(
   function openDocument(model: monaco.editor.ITextModel): void {
     const uri = model.uri.toString();
     if (openModels.has(uri)) return;
-    openModels.set(uri, model);
     notify("textDocument/didOpen", {
       textDocument: { uri, languageId: LANGUAGE_ID, version: model.getVersionId(), text: model.getValue() },
     });
-    const d = model.onDidChangeContent(() => {
+    const listener = model.onDidChangeContent(() => {
       notify("textDocument/didChange", {
         textDocument: { uri, version: model.getVersionId() },
         contentChanges: [{ text: model.getValue() }],
       });
     });
-    disposables.push(d);
+    openModels.set(uri, listener);
   }
 
   function closeDocument(uri: string): void {
-    if (!openModels.has(uri)) return;
+    const listener = openModels.get(uri);
+    if (!listener) return;
+    listener.dispose();
     openModels.delete(uri);
     notify("textDocument/didClose", { textDocument: { uri } });
     const monacoUri = monacoNs.Uri.parse(uri);
@@ -214,7 +293,8 @@ export function startLspService(
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    for (const uri of openModels.keys()) {
+    for (const [uri, listener] of openModels) {
+      listener.dispose();
       try { notify("textDocument/didClose", { textDocument: { uri } }); } catch { /* ignore */ }
     }
     openModels.clear();
@@ -227,6 +307,14 @@ export function startLspService(
 }
 
 // ── LSP wire types (subset used) ─────────────────────────────────────────────
+
+interface LspSemanticTokensLegend {
+  tokenTypes: string[];
+  tokenModifiers: string[];
+}
+interface LspInitializeResult {
+  capabilities?: { semanticTokensProvider?: { legend?: LspSemanticTokensLegend } };
+}
 
 interface LspCompletionItem {
   label: string;

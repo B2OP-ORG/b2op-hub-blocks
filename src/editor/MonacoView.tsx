@@ -3,16 +3,23 @@ import Editor, { loader, type Monaco } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { useLspService } from "./lsp/useLspClient";
-import { DARK_PLUS_NAME, registerDarkPlus } from "./darkPlusTheme";
-import { registerPythonTokens } from "./pythonTokens";
+import { EDITOR_THEME, ensureShiki } from "./shikiSetup";
+import { registerPythonLanguageConfig } from "./pythonLanguage";
 
 (self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
 };
 
 loader.config({ monaco });
-registerDarkPlus(monaco);
-registerPythonTokens(monaco);
+registerPythonLanguageConfig(monaco);
+// Resolves to the theme to use; falls back to vs-dark if Shiki fails to load.
+const themeReady: Promise<string> = ensureShiki(monaco).then(
+  () => EDITOR_THEME,
+  (err) => {
+    console.error("[editor] Shiki highlighting failed to load", err);
+    return "vs-dark";
+  },
+);
 
 function expandSuggestDetails(editor: monaco.editor.IStandaloneCodeEditor): void {
   const controller = editor.getContribution("editor.contrib.suggestController") as unknown as {
@@ -46,6 +53,7 @@ interface Props {
 export function MonacoView({ value, language = "python", readOnly = false, onChange, lspUri }: Props) {
   const [monacoNs, setMonacoNs] = useState<Monaco | null>(null);
   const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
+  const [theme, setTheme] = useState<string | null>(null);
   const lspUriRef = useRef(lspUri);
   lspUriRef.current = lspUri;
 
@@ -61,18 +69,30 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
     };
   }, [service, model, lspUri]);
 
+  useEffect(() => {
+    let cancelled = false;
+    themeReady.then((t) => { if (!cancelled) setTheme(t); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Wait for Shiki so the editor never flashes uncoloured text.
+  if (!theme) return null;
+
   return (
     <Editor
       height="100%"
       language={language}
+      // Model URI must equal the LSP URI so the server sees the file inside
+      // /workspace (where pyrightconfig.json and the stubs live).
+      path={lspUri}
       value={value}
-      theme={DARK_PLUS_NAME}
+      theme={theme}
       onChange={(v) => onChange?.(v ?? "")}
       onMount={(editor, m) => {
-        registerDarkPlus(m);
-        registerPythonTokens(m);
         setMonacoNs(m);
         setModel(editor.getModel());
+        // `path` changes (tab switch) swap the model under the same editor.
+        editor.onDidChangeModel(() => setModel(editor.getModel()));
         expandSuggestDetails(editor);
       }}
       options={{
@@ -82,6 +102,8 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
         automaticLayout: true,
         scrollBeyondLastLine: false,
         wordWrap: "on",
+        bracketPairColorization: { enabled: true },
+        "semanticHighlighting.enabled": true,
         suggest: {
           showStatusBar: true,
           preview: true,

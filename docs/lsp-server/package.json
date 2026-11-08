@@ -3,12 +3,12 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Remote Pyright bridge for the b2op-hub-blocks Python editor.",
+  "description": "Remote basedpyright bridge for the b2op-hub-blocks Python editor.",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "pyright": "^1.1.411",
+    "basedpyright": "^1.40.2",
     "ws": "^8.18.0"
   }
 }

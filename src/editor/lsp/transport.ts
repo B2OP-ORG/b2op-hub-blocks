@@ -1,8 +1,8 @@
 // Transport = bidirectional JSON message pipe. Concrete implementations:
-//  - worker: @typefox/pyright-browser running as a Web Worker.
-//  - ws:     WebSocket to a remote Pyright server (docs/lsp-server/).
+//  - worker: browser-basedpyright running as a Web Worker.
+//  - ws:     WebSocket to a remote basedpyright server (docs/lsp-server/).
 
-import pyrightWorkerUrl from "@typefox/pyright-browser/dist/pyright.worker.js?url";
+import pyrightWorkerUrl from "browser-basedpyright/dist/pyright.worker.js?url";
 import { STUBS } from "./stubs";
 
 export interface RpcMessage {

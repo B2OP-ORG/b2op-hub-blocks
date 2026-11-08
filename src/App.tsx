@@ -10,6 +10,7 @@ import { ContextMenuHost } from "./ui/ContextMenu";
 import { DialogHost } from "./ui/Dialog";
 import { TransferOverlay } from "./ui/TransferOverlay";
 import { useApp } from "./state/store";
+import { downloadProjectZip } from "./ui/actions";
 import { loadWorkspace } from "./project/storage";
 import { usePalette } from "./ui/theme";
 import boardVersions from "./device/boardVersions.json";
@@ -72,6 +73,19 @@ export default function App() {
       window.removeEventListener("beforeunload", save);
       document.removeEventListener("visibilitychange", onHide);
     };
+  }, []);
+
+  // Ctrl/Cmd+S downloads the active project as a .zip (instead of the browser's "Save page").
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      downloadProjectZip(useApp.getState().mfp.id);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   useEffect(() => {

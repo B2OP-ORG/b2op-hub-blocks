@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV1_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
+import { HubProtocolV2_0_0, PROTOCOL_REGISTRY, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -40,14 +40,14 @@ const TMP_RUN_NAME = "__web_run.py";
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
 export class DeviceClient {
-  private proto: HubProtocolV1_0_0;
+  private proto: HubProtocolV2_0_0;
   readonly transport: Transport;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private pinging = false;
 
   constructor(transport: Transport) {
     this.transport = transport;
-    this.proto = new HubProtocolV1_0_0(transport);
+    this.proto = new HubProtocolV2_0_0(transport);
   }
 
   get boardName(): string { return this.proto.boardName; }
@@ -76,7 +76,10 @@ export class DeviceClient {
         await this.proto.requestHello(3000);
         const protoVer = this.proto.protocolVersion;
         if (!PROTOCOL_REGISTRY.has(protoVer)) {
-          throw new Error(`Unsupported device protocol v${protoVer}. Please update the app.`);
+          const newest = Math.max(...PROTOCOL_REGISTRY.keys());
+          throw new Error(protoVer < newest
+            ? `Unsupported device protocol v${protoVer}. Please update the hub firmware.`
+            : `Unsupported device protocol v${protoVer}. Please update the app.`);
         }
         useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
       } catch (e) {
@@ -122,6 +125,10 @@ export class DeviceClient {
     // Skip stop if transport never connected — avoids a 3-second waiter timeout
     // when disconnect() is called from the error-cleanup path.
     if (this.transport.connected) {
+      // The device can't tell we gave up on a transfer — cancel any active stream.
+      if (this.proto.hasActiveStreams()) {
+        try { await this.proto.abort(undefined, 1000); } catch { /* noop */ }
+      }
       try { await this.proto.stop(false, 3000); } catch { /* noop */ }
     }
     this.proto.dispose();

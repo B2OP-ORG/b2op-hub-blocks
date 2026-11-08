@@ -64,6 +64,17 @@ def exit() -> NoReturn:
     """
     ...
 
+def stop_callbacks() -> int:
+    """Stop every button callback (:func:`hub.buttons.on`) that is still
+    running.
+
+    Each one stops at its next line of Python or inside its current
+    ``time.sleep_ms``. Returns how many were told to stop. Calling it from
+    inside a callback stops all the others, not the caller. Registered
+    callbacks stay registered and run again on the next press.
+    """
+    ...
+
 def powerOff() -> NoReturn:
     """Turn the hub off.
 

@@ -165,9 +165,9 @@ export async function syncProject(projectId: string, opts: SyncOptions): Promise
 
 /** Report a transfer error consistently (console + popup); cancellation is quiet. */
 async function report(action: string, e: unknown): Promise<void> {
-  const { appendConsole, device } = useApp.getState();
+  const { appendConsole } = useApp.getState();
   if (e instanceof CancelledError) {
-    device?.stop().catch(() => {});
+    // The protocol layer already sent ABORT for the cancelled stream.
     appendConsole("info", `[${action} cancelled]\n`);
     return;
   }

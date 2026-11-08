@@ -48,6 +48,11 @@ export function registerHubGenerators(gen: PythonGenerator): void {
     return "hub.imu.reset()\n";
   };
 
+  gen.forBlock["hub_stop_callbacks"] = () => {
+    needsLpf2(gen);
+    return "hub.stop_callbacks()\n";
+  };
+
   gen.forBlock["hub_poweroff"] = () => {
     needsLpf2(gen);
     return "hub.powerOff()\n";

@@ -72,6 +72,13 @@ describe("workspaceToPython", () => {
     expect(py).not.toContain("def loop():");
   });
 
+  it("emits hub.stop_callbacks() for the stop-button-scripts block", () => {
+    const ws = makeWorkspace(
+      underProgramHat({ type: "hub_stop_callbacks" }),
+    );
+    expect(workspaceToPython(ws)).toContain("hub.stop_callbacks()\n");
+  });
+
   it("emits two when_program_starts bodies concatenated", () => {
     const ws = makeWorkspace({
       blocks: {

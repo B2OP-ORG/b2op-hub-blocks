@@ -77,7 +77,6 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
       if (refreshAfter) await refresh();
     } catch (e) {
       if (e instanceof CancelledError || (e as Error).message === "Cancelled") {
-        device?.stop().catch(() => {});
         appendConsole("info", `[${label} cancelled]\n`);
       } else {
         appendConsole("err", `[${label} failed: ${(e as Error).message}]\n`);

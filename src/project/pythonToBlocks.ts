@@ -371,6 +371,7 @@ function matchStatement(line: string): BlockSpec | null {
   if (line === "hub.imu.reset()") return { type: "hub_imu_reset" };
   if (line === "hub.powerOff()") return { type: "hub_poweroff" };
   if (line === "hub.exit()") return { type: "hub_quit" };
+  if (line === "hub.stop_callbacks()") return { type: "hub_stop_callbacks" };
   if ((m = /^hub\.log\.setLevel\((\d)\)$/.exec(line))) {
     if (LOG_LEVELS.has(m[1])) return { type: "hub_log_level", fields: { LEVEL: m[1] } };
   }

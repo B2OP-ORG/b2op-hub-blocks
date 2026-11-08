@@ -38,6 +38,42 @@ while True:          # keep the program running
 
 ::: api hub.buttons.off
 
+## Button functions run side by side
+
+Each press runs your function in its own thread, at the same time as the rest of your program. A slow function never holds up your main loop or the other buttons. If you press the button again before the function finishes, a second copy starts alongside the first.
+
+Because they all run at once, button functions share your program's variables. If two of them change the same variable, use a lock from `_thread.allocate_lock()` so they don't get in each other's way.
+
+## Stop button functions that are still running
+
+`hub.stop_callbacks()` stops every button function that is still running. Each one stops at its next line, or straight away if it's waiting in `time.sleep_ms`. Your functions stay registered, so the next press runs them again.
+
+```python
+import hub, time
+
+@hub.buttons.on("up")
+def ticker():
+    n = 0
+    while True:          # runs until stopped
+        print("tick", n)
+        n += 1
+        time.sleep_ms(500)
+
+@hub.buttons.on("down")
+def stop_all():
+    stopped = hub.stop_callbacks()
+    print("stopped", stopped)
+
+while True:
+    time.sleep_ms(50)
+```
+
+Called from inside a button function, it stops all the *other* ones. When your program ends, the hub stops any that are left on its own. In blocks, use **stop all button scripts** in the Hub category.
+
+The *Button threads* example shows this in action.
+
+::: api hub.stop_callbacks
+
 ## Special center-button holds
 
 - **2 seconds** — stops the running program.

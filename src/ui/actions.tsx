@@ -223,9 +223,9 @@ export async function readDeviceFile(path: string): Promise<Uint8Array> {
 }
 
 async function reportDeviceError(action: string, e: unknown): Promise<void> {
-  const { appendConsole, device } = useApp.getState();
+  const { appendConsole } = useApp.getState();
   if (e instanceof CancelledError || (e as Error)?.message === "Cancelled") {
-    device?.stop().catch(() => {});
+    // The protocol layer already sent ABORT for the cancelled stream.
     appendConsole("info", `[${action} cancelled]\n`);
     return;
   }

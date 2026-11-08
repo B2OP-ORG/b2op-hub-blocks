@@ -99,7 +99,15 @@ export const HUB_BLOCKS = [
       { type: "input_statement", name: "DO" },
     ],
     colour: 210,
-    tooltip: "Hat. Body runs on rising edge of the selected button. Registered via `hub.buttons.on(name)`; fires automatically from firmware.",
+    tooltip: "Hat. Body runs in its own thread on each press of the selected button (pressing again while it runs starts another copy). Registered via `hub.buttons.on(name)`.",
+  },
+  {
+    type: "hub_stop_callbacks",
+    message0: "stop all button scripts",
+    previousStatement: null,
+    nextStatement: null,
+    colour: 210,
+    tooltip: "Stop every 'on button pressed' script that is still running (hub.stop_callbacks()). From inside a button script it stops the others. They run again on the next press.",
   },
   {
     type: "hub_imu_axis",

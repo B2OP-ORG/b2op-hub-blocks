@@ -41,8 +41,13 @@ def on(name, cb=None):
     """Run a function every time a button is pressed.
 
     ``name`` is ``"center"``, ``"up"``, ``"down"``, ``"left"`` or
-    ``"right"``. The function runs once per press, in the background,
-    while the rest of your program keeps going.
+    ``"right"``. The function runs once per press, in its own new thread,
+    while the rest of your program keeps going. Pressing again before it
+    finishes starts another copy alongside the first.
+
+    Stop every callback that is still running with
+    :func:`hub.stop_callbacks`. They are also stopped when your program
+    ends.
 
     Put it above a function::
 

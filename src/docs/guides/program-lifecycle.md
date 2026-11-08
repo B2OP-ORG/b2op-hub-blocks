@@ -48,5 +48,5 @@ When you upload a project, it goes into its own folder on the hub's SD card. On 
 Some things happen without you having to check:
 
 - Ports and sensors update themselves all the time — just read the values.
-- Button functions registered with `hub.buttons.on(...)` run automatically when the button is pressed (see [Buttons](doc:guide:buttons)).
+- Button functions registered with `hub.buttons.on(...)` run automatically, each in its own thread, when the button is pressed. Stop the ones still running with `hub.stop_callbacks()`; they're also stopped when the program ends (see [Buttons](doc:guide:buttons)).
 - Sounds and videos can play while your code continues (`block=False`).

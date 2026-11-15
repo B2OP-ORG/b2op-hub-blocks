@@ -8,6 +8,7 @@ import { BleTransport, bleSupported } from "../transport/ble";
 import { SerialTransport, serialSupported } from "../transport/serial";
 import { MockTransport } from "../transport/mock";
 import { DeviceClient } from "../device/deviceClient";
+import { formatEchoFrame } from "../device/protocol";
 import { useApp, useDark } from "../state/store";
 import { saveLastDeviceName } from "../project/storage";
 import { runProject, runProjectFile, uploadFile, uploadProject } from "../project/deviceSync";
@@ -129,6 +130,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
       });
       client.addStdoutSink((t) => appendConsole("out", t));
       client.addStderrSink((t) => appendConsole("err", t));
+      client.setEchoSink((f) => appendConsole("info", formatEchoFrame(f) + "\n"));
       await client.connect();
       setDevice(client);
       setConnection("connected");

@@ -1,7 +1,8 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "./types";
-import { KIND, FLAGS_NO_ACK, makeFrame } from "../device/protocol";
+import { KIND, FLAGS_NO_ACK, FLAGS_ECHO, FLAGS_ECHO_RX, ERR_BUSY, makeFrame } from "../device/protocol";
 
-const PROTO_VER = 3;
+/** Protocol 1.0.0 as sent in HELLO: u32 BE major<<24 | minor<<16 | patch. */
+const PROTO_VER = 0x01000000;
 const BOARD_NAME = "MockHub";
 const BOARD_VERSION = "1.0.0";
 const FW_VERSION = "v1.1.0";
@@ -86,11 +87,11 @@ function helloBoardPayload(): Uint8Array {
   const name = enc.encode(BOARD_NAME + "\0");
   const ver  = enc.encode(BOARD_VERSION + "\0");
   const fw   = enc.encode(FW_VERSION + "\0");
-  const p = new Uint8Array(1 + name.length + ver.length + fw.length);
-  p[0] = PROTO_VER;
-  p.set(name, 1);
-  p.set(ver, 1 + name.length);
-  p.set(fw, 1 + name.length + ver.length);
+  const p = new Uint8Array(4 + name.length + ver.length + fw.length);
+  new DataView(p.buffer).setUint32(0, PROTO_VER, false);
+  p.set(name, 4);
+  p.set(ver, 4 + name.length);
+  p.set(fw, 4 + name.length + ver.length);
   return p;
 }
 
@@ -114,6 +115,8 @@ export class MockTransport implements Transport {
   /** Test hook: when true, READ chunks are only sent when `pumpRead()` is called. */
   public manualRead = false;
   private readQueue: (() => void)[] = [];
+  /** ECHO_BLE state (the mock behaves like a USB link). */
+  public bleEcho = false;
 
   constructor(opts: MockOptions = {}) {
     this.files = { ...(opts.files ?? {}) };
@@ -263,6 +266,17 @@ export class MockTransport implements Transport {
     for (const cb of this.dataCbs) cb(frame);
   }
 
+  /** Test hook: deliver a BLE frame copy (FLAGS ECHO, + ECHO_RX for host→hub) if echo is on. */
+  emitBleEcho(kind: number, seq: number, payload: Uint8Array, rx: boolean): void {
+    if (!this.bleEcho) return;
+    this.emit(makeFrame(kind, seq, FLAGS_ECHO | (rx ? FLAGS_ECHO_RX : 0), payload));
+  }
+
+  /** One stream (UPLOAD / READ) per link, like the firmware. */
+  private get streaming(): boolean {
+    return this.pendingUpload !== null || this.activeReads.size > 0;
+  }
+
   private reply(frame: Uint8Array): void {
     queueMicrotask(() => this.emit(frame));
   }
@@ -314,7 +328,7 @@ export class MockTransport implements Transport {
         if (1 + pathLen + 4 > payload.length) { this.reply(frameErr(seq, "UPLOAD: bad header")); break; }
         const path = dec.decode(payload.subarray(1, 1 + pathLen));
         const size = new DataView(payload.buffer, payload.byteOffset + 1 + pathLen, 4).getUint32(0, false);
-        if (this.pendingUpload) { this.reply(frameErr(seq, "UPLOAD busy")); break; }
+        if (this.streaming) { this.reply(frameErr(seq, ERR_BUSY)); break; }
         this.reply(frameAck(seq));
         if (size === 0) {
           this.files[path] = new Uint8Array(0);
@@ -332,7 +346,7 @@ export class MockTransport implements Transport {
         const path = dec.decode(payload);
         const bytes = this.files[path];
         if (!bytes) { this.reply(frameErr(seq, `read: no such file: ${path}`)); break; }
-        if (this.activeReads.size) { this.reply(frameErr(seq, "READ busy")); break; }
+        if (this.streaming) { this.reply(frameErr(seq, ERR_BUSY)); break; }
         this.startRead(seq, bytes);
         break;
       }
@@ -406,6 +420,7 @@ export class MockTransport implements Transport {
         if (!result) { if (!noAck) this.reply(frameErr(seq, "CP: bad payload")); break; }
         const [src, dst] = result;
         if (!this.files[src]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${src}`)); break; }
+        if (this.streaming) { this.reply(frameErr(seq, ERR_BUSY)); break; }
         this.reply(frameAck(seq));
         this.files[dst] = this.files[src].slice();
         this.reply(frameOk(seq));
@@ -416,6 +431,11 @@ export class MockTransport implements Transport {
         if (!this.files[path]) { if (!noAck) this.reply(frameErr(seq, `no such file: ${path}`)); break; }
         delete this.files[path];
         if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.ECHO_BLE: {
+        if (payload.length) this.bleEcho = payload[0] !== 0;
+        if (!noAck) this.reply(frameOk(seq, Uint8Array.of(this.bleEcho ? 1 : 0)));
         break;
       }
       case KIND.MKDIR: {

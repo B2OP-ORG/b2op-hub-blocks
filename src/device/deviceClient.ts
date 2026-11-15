@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV2_0_0, PROTOCOL_REGISTRY, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink } from "./protocol";
+import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink } from "./protocol";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -42,14 +42,15 @@ const TMP_RUN_NAME = "__web_run.py";
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
 export class DeviceClient {
-  private proto: HubProtocolV2_0_0;
+  private proto: HubProtocolV1;
   readonly transport: Transport;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private pinging = false;
+  private bleEcho = false;
 
   constructor(transport: Transport) {
     this.transport = transport;
-    this.proto = new HubProtocolV2_0_0(transport);
+    this.proto = new HubProtocolV1(transport);
   }
 
   get boardName(): string { return this.proto.boardName; }
@@ -76,13 +77,8 @@ export class DeviceClient {
       // sends HELLO_REQ and waits for OK with board-info payload if not yet set).
       try {
         await this.proto.requestHello(DEFAULT_TIMEOUT_MS);
-        const protoVer = this.proto.protocolVersion;
-        if (!PROTOCOL_REGISTRY.has(protoVer)) {
-          const newest = Math.max(...PROTOCOL_REGISTRY.keys());
-          throw new Error(protoVer < newest
-            ? `Unsupported device protocol v${protoVer}. Please update the hub firmware.`
-            : `Unsupported device protocol v${protoVer}. Please update the app.`);
-        }
+        const versionError = protoVersionError(this.proto.protocolVersion);
+        if (versionError) throw new Error(versionError);
         useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
       } catch (e) {
         if (e instanceof Error && e.message.startsWith("Unsupported device protocol")) throw e;
@@ -111,6 +107,9 @@ export class DeviceClient {
         }
       }
     }
+    if (useApp.getState().editorSettings.bleEchoOverUsb && this.supportsBleEcho) {
+      try { await this.setBleEcho(true); } catch { /* non-fatal: echo is a debug aid */ }
+    }
     this.pingInterval = setInterval(async () => {
       if (!this.transport.connected || this.pinging) return;
       this.pinging = true;
@@ -132,6 +131,10 @@ export class DeviceClient {
         try { await this.proto.abort(undefined, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
       }
       try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      // Echo is device-global state; don't leave it on for the next USB host.
+      if (this.bleEcho) {
+        try { await this.proto.setBleEcho(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      }
     }
     this.proto.dispose();
     await this.transport.disconnect();
@@ -242,6 +245,26 @@ export class DeviceClient {
       stdout: "",
       error: reply.kind === "ERR" ? dec.decode(reply.payload) : undefined,
     };
+  }
+
+  /** BLE echo is a USB (serial) link feature. */
+  get supportsBleEcho(): boolean {
+    return this.transport.kind === "serial";
+  }
+
+  /**
+   * Ask the hub to copy every BLE frame to this USB link (ECHO_BLE). Echoed
+   * frames go to the sink set with setEchoSink(). No-op (false) when
+   * unsupported. Resolves to the hub's echo state.
+   */
+  async setBleEcho(enabled: boolean): Promise<boolean> {
+    if (!this.supportsBleEcho) return false;
+    this.bleEcho = await this.proto.setBleEcho(enabled);
+    return this.bleEcho;
+  }
+
+  setEchoSink(sink: EchoSink | null): void {
+    this.proto.setEchoSink(sink);
   }
 
   async cmd(cmdId: number, args: Uint8Array = new Uint8Array()): Promise<Uint8Array> {

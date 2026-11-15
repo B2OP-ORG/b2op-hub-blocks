@@ -2,6 +2,21 @@
 
 Custom side-channel over the same byte stream (BLE NUS / USB CDC). Replaces the raw MicroPython REPL entirely for all web-app operations. The device disables `micropython.kbd_intr(-1)` at boot so control bytes on stdin are NOT interpreted as REPL commands — they belong to HubProtocol.
 
+> The authoritative wire spec is the firmware's `docs/source/hub/protocol.rst`
+> (binary framing, `src/device/protocol.ts`). Sections 1–7 below describe the
+> original design and are partly outdated.
+
+---
+
+## Protocol v1.0.0 — per-link sessions
+
+**Versioning.** HELLO starts with `proto_ver` as one big-endian u32: `major<<24 | minor<<16 | patch` (patch = low 16 bits); 1.0.0 = `0x01000000`. The app accepts any device whose major equals `SUPPORTED_PROTO_MAJOR` (1) — see `protoVersionError()`. Firmware from before 1.0.0 sent a single `proto_ver` byte (2–4); it is detected as version 0 and refused with "update the hub firmware".
+
+- **Separate links.** USB CDC and BLE NUS are independent sessions on the hub. A request is answered only on the link it came from; STDOUT, PROG_START and PROG_END go to both. The sessions share only the runner (pending RUN / EXEC, program running).
+- **One stream per link.** While a link runs an UPLOAD, READ or CP, any other stream request on it gets `ERR "busy"`. RUN / EXEC get `"busy"` while the runner is taken. `HubProtocol.oneAtATime()` queues every stream (all kinds), so the app never hits it.
+- **USB output buffered by frame.** The hub queues whole frames for USB and drops whole frames when the host is not reading, so the serial byte stream never contains a partial frame.
+- **BLE echo (USB only).** `ECHO_BLE` (kind `0x1C`, payload `[enable:u8]`, reply `OK [enabled:u8]`) makes the hub copy every BLE frame to USB with FLAGS bit 1 `ECHO` (`0x02`), plus bit 2 `ECHO_RX` (`0x04`) for host→hub frames. `HubProtocol` routes these to the echo sink (`setEchoSink`) and never to waiters or stdout sinks (their SEQ belongs to the BLE host). Settings → Device → *Echo BLE traffic over USB* turns it on for serial connections (sent on connect and when toggled; switched off again on disconnect). The console shows each frame as `[BLE host→hub] …` / `[BLE hub→host] …`.
+
 ---
 
 ## Overview

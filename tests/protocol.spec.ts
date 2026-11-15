@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  validatePath, UploadError, HubProtocolV2_0_0, HubProtocol, PROTOCOL_REGISTRY,
+  validatePath, UploadError, HubProtocolV1, HubProtocol,
+  parseProtoVersion, formatProtoVersion, protoVersionError,
   KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, CancelledError, DEFAULT_TIMEOUT_MS,
-  type ProgramEndInfo,
+  FLAGS_ECHO, FLAGS_ECHO_RX, formatEchoFrame,
+  type ProgramEndInfo, type EchoFrame,
 } from "../src/device/protocol";
 import { MockTransport } from "../src/transport/mock";
 
@@ -16,16 +18,16 @@ function inject(transport: MockTransport, frame: Uint8Array): void {
     .dataCbs.forEach((cb) => cb(frame));
 }
 
-/** Build a HELLO payload: [proto_ver:u8][name\0][ver\0][fw\0] */
+/** Build a HELLO payload: [proto_ver:u32 BE][name\0][ver\0][fw\0] */
 function helloPayload(protoVer: number, name: string, ver: string, fw = ""): Uint8Array {
   const nb = enc.encode(name + "\0");
   const vb = enc.encode(ver + "\0");
   const fb = enc.encode(fw + "\0");
-  const p = new Uint8Array(1 + nb.length + vb.length + fb.length);
-  p[0] = protoVer;
-  p.set(nb, 1);
-  p.set(vb, 1 + nb.length);
-  p.set(fb, 1 + nb.length + vb.length);
+  const p = new Uint8Array(4 + nb.length + vb.length + fb.length);
+  new DataView(p.buffer).setUint32(0, protoVer, false);
+  p.set(nb, 4);
+  p.set(vb, 4 + nb.length);
+  p.set(fb, 4 + nb.length + vb.length);
   return p;
 }
 
@@ -192,17 +194,35 @@ describe("HubProtocol binary frame IO", () => {
 // ── HELLO ─────────────────────────────────────────────────────────────────────
 
 describe("HELLO / requestHello", () => {
-  it("PROTOCOL_REGISTRY maps proto_ver 3 to semver 2.0.0 (v1 dropped)", () => {
-    expect(PROTOCOL_REGISTRY.get(3)).toBe("2.0.0");
-    expect(PROTOCOL_REGISTRY.has(2)).toBe(false);
+  it("proto_ver is a packed u32 semver: major<<24 | minor<<16 | patch", () => {
+    expect(parseProtoVersion(0x01000000)).toEqual({ major: 1, minor: 0, patch: 0 });
+    expect(parseProtoVersion(0x0102012C)).toEqual({ major: 1, minor: 2, patch: 300 });
+    expect(formatProtoVersion(0x0203000A)).toBe("2.3.10");
   });
 
-  it("PROTOCOL_REGISTRY does not contain unknown versions", () => {
-    expect(PROTOCOL_REGISTRY.has(99)).toBe(false);
+  it("accepts any 1.x device, refuses other majors and pre-1.0.0 firmware", () => {
+    expect(protoVersionError(0x01000000)).toBeNull();
+    expect(protoVersionError(0x01050003)).toBeNull();
+    expect(protoVersionError(0)).toMatch(/older than 1\.0\.0.*update the hub firmware/);
+    expect(protoVersionError(0x02000000)).toMatch(/v2\.0\.0.*update the app/);
   });
 
-  it("HubProtocolV2_0_0 is exported and matches HubProtocol alias", () => {
-    expect(HubProtocolV2_0_0).toBe(HubProtocol);
+  it("legacy single-byte proto_ver HELLO parses as version 0 with board info", () => {
+    const transport = new MockTransport();
+    const proto = new HubProtocol(transport);
+    const name = enc.encode("B2OP Hub\0v1.1.0\0v2.2.0\0");
+    const legacy = new Uint8Array(1 + name.length);
+    legacy[0] = 3;
+    legacy.set(name, 1);
+    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, legacy));
+    expect(proto.protocolVersion).toBe(0);
+    expect(proto.boardName).toBe("B2OP Hub");
+    expect(proto.fwVersion).toBe("v2.2.0");
+    proto.dispose();
+  });
+
+  it("HubProtocolV1 is exported and matches HubProtocol alias", () => {
+    expect(HubProtocolV1).toBe(HubProtocol);
   });
 
   it("parses proactive HELLO frame and populates board info", async () => {
@@ -215,7 +235,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(3);
+    expect(proto.protocolVersion).toBe(0x01000000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -228,7 +248,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(3);
+    expect(proto.protocolVersion).toBe(0x01000000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -240,9 +260,9 @@ describe("HELLO / requestHello", () => {
     const sink = vi.fn();
     proto.setHelloSink(sink);
     // Inject a HELLO frame with custom board info.
-    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(3, "MyBoard", "3.1.4", "fw2.0")));
+    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(0x01000000, "MyBoard", "3.1.4", "fw2.0")));
     expect(sink).toHaveBeenCalledWith({
-      protocolVersion: 3,
+      protocolVersion: 0x01000000,
       boardName: "MyBoard",
       boardVersion: "3.1.4",
       fwVersion: "fw2.0",
@@ -657,6 +677,24 @@ describe("v2.0.0 streaming transfers", () => {
     await transport.disconnect();
   });
 
+  it("overlapping streams of different kinds are queued instead of hitting EBUSY", async () => {
+    const a = new Uint8Array(2000).fill(1);
+    const transport = new MockTransport({ files: { "/sd/a": a } });
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const up = new Uint8Array(3000).fill(5);
+    const [ra] = await Promise.all([
+      proto.readFile("/sd/a"),
+      proto.upload("/sd/u", up),
+      proto.cp("/sd/a", "/sd/c"),
+    ]);
+    expect(ra).toEqual(a);
+    expect(transport.files["/sd/u"]).toEqual(up);
+    expect(transport.files["/sd/c"]).toEqual(a);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
   it("queued stream rejects after dispose without sending", async () => {
     const transport = new MockTransport({ files: { "/sd/a": new Uint8Array(3000) } });
     transport.manualRead = true;
@@ -796,5 +834,47 @@ describe("AbortSignal cancel", () => {
     expect(h.frames.length).toBe(0);
     proto.dispose();
     await transport.disconnect();
+  });
+});
+
+// ── BLE echo (ECHO_BLE, FLAGS ECHO / ECHO_RX) ────────────────────────────────
+
+describe("BLE echo", () => {
+  it("setBleEcho sends ECHO_BLE and resolves to the device state", async () => {
+    const transport = new MockTransport();
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    await expect(proto.setBleEcho(true)).resolves.toBe(true);
+    expect(transport.bleEcho).toBe(true);
+    await expect(proto.setBleEcho(false)).resolves.toBe(false);
+    expect(transport.bleEcho).toBe(false);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("echoed frames go to the echo sink, never to waiters or stdout", async () => {
+    const transport = new MockTransport();
+    transport.write = async () => {}; // keep our PING unanswered
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    const echoes: EchoFrame[] = [];
+    const out = vi.fn();
+    proto.setEchoSink((f) => echoes.push(f));
+    proto.addStdoutSink(out);
+    const ping = proto.ping(200);
+    // BLE host's OK for the same SEQ (0) must not settle our PING.
+    inject(transport, makeFrame(KIND.OK, 0, FLAGS_ECHO, new Uint8Array(0)));
+    inject(transport, makeFrame(KIND.STDOUT, 0xFF, FLAGS_ECHO, enc.encode("hi\n")));
+    inject(transport, makeFrame(KIND.READ, 7, FLAGS_ECHO | FLAGS_ECHO_RX, enc.encode("/sd/x.py")));
+    await expect(ping).rejects.toThrow("protocol timeout");
+    expect(out).not.toHaveBeenCalled();
+    expect(echoes.map((e) => [e.direction, e.kind, e.seq, e.flags])).toEqual([
+      ["tx", KIND.OK, 0, 0],
+      ["tx", KIND.STDOUT, 0xFF, 0],
+      ["rx", KIND.READ, 7, 0],
+    ]);
+    expect(formatEchoFrame(echoes[2])).toBe('[BLE host→hub] READ seq=07 "/sd/x.py"');
+    expect(formatEchoFrame(echoes[0])).toBe("[BLE hub→host] OK seq=00 0B");
+    proto.dispose();
   });
 });

@@ -1,14 +1,22 @@
 import type { Transport, Unsubscribe } from "../transport/types";
 
 /**
- * Hub wire protocol v2.0.0 (proto_ver byte = 3). Binary framing.
+ * Hub wire protocol v1.x (proto_ver = 1.0.0). Binary framing.
  *
  * Frame: [0x7E][LEN:varint][SEQ:u8][FLAGS:u8][KIND:u8][PAYLOAD:LEN bytes]
  *
  * LEN  LEB128 LE, up to 5 bytes. Bit 7 = continuation.
  * SEQ  Host→Device: monotonic 0x00–0xFF. Device→Host: 0xFF = unsolicited.
  * FLAGS  bit 0 NO_ACK (no response expected, SEQ still valid for ordering).
+ *        bit 1 ECHO   (device→host, USB only: copy of a BLE frame; see ECHO_BLE)
+ *        bit 2 ECHO_RX (with ECHO: the copied frame was host→hub)
  * KIND   see KIND constants below.
+ *
+ * USB and BLE are separate device-side sessions. A request is answered only
+ * on the link it came from; STDOUT / PROG_START / PROG_END go to both. Each
+ * link runs one stream (UPLOAD / READ / CP) at a time; another stream request
+ * meanwhile gets ERR "busy" (also RUN / EXEC while the runner is taken), so
+ * streams are queued here (see oneAtATime()).
  *
  * Host → Device:
  *   0x01  HELLO_REQ  ()                        → OK with board-info payload
@@ -26,10 +34,13 @@ import type { Transport, Unsubscribe } from "../transport/types";
  *   0x1B  ABORT      [target_seq:u8] or ()     → OK; cancelled stream gets ERR "aborted" on its own SEQ
  *                    Host MUST send ABORT whenever it gives up on a stream locally
  *                    (cancel, timeout, bad chunk, disconnect) or the device keeps streaming.
+ *   0x1C  ECHO_BLE   [enable:u8] or ()         → OK [enabled:u8]  (USB only)
+ *                    While on, every BLE frame is copied to USB with FLAGS ECHO (+ ECHO_RX).
  *   0x25  DATA       [offset:u32 BE][bytes]    UPLOAD chunks (SEQ = the UPLOAD's SEQ)
  *
  * Device → Host:
- *   0x20  HELLO      [proto_ver:u8][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
+ *   0x20  HELLO      [proto_ver:u32 BE][board_name\0][board_ver\0][fw_ver\0]  SEQ=0xFF
+ *                    proto_ver = major<<24 | minor<<16 | patch
  *   0x21  OK         payload (utf8 or structured, see cmd)
  *   0x22  ERR        error message utf8
  *   0x23  ACK        optional msg  (echoes SEQ, resets idle timer)
@@ -56,6 +67,7 @@ export const KIND = {
   RM:         0x19,
   MKDIR:      0x1A,
   ABORT:      0x1B,
+  ECHO_BLE:   0x1C,
   HELLO:      0x20,
   OK:         0x21,
   ERR:        0x22,
@@ -71,6 +83,12 @@ export const KIND = {
 } as const;
 
 export const FLAGS_NO_ACK = 0x01;
+/** Device→host on USB: frame is a copy of BLE traffic (ECHO_BLE on). */
+export const FLAGS_ECHO = 0x02;
+/** With FLAGS_ECHO: the copied frame went host→hub (else hub→host). */
+export const FLAGS_ECHO_RX = 0x04;
+/** Device reply when the link's stream slot / the runner is taken. */
+export const ERR_BUSY = "busy";
 export const SEQ_UNSOLICITED = 0xFF;
 
 /** File bytes per UPLOAD DATA chunk (whole frame must fit the device's 2 KiB frame buffer). */
@@ -78,13 +96,33 @@ export const UPLOAD_CHUNK = 1024;
 /** Max UPLOAD bytes in flight past the device's last PROGRESS (it reports every 4 KiB). */
 export const UPLOAD_WINDOW = 8192;
 
+/** Protocol major version this app implements (any 1.x device is accepted). */
+export const SUPPORTED_PROTO_MAJOR = 1;
+
+export interface ProtoVersion { major: number; minor: number; patch: number; }
+
+/** HELLO proto_ver: one u32 BE = major<<24 | minor<<16 | patch (patch: low 16 bits). */
+export function parseProtoVersion(v: number): ProtoVersion {
+  return { major: (v >>> 24) & 0xFF, minor: (v >>> 16) & 0xFF, patch: v & 0xFFFF };
+}
+
+export function formatProtoVersion(v: number): string {
+  const { major, minor, patch } = parseProtoVersion(v);
+  return `${major}.${minor}.${patch}`;
+}
+
 /**
- * Maps the proto_ver byte (sent in HELLO) to a semver name.
- * Add an entry here when a new incompatible protocol variant is introduced.
+ * null when this app can talk to a device with protocol version `v`, else a
+ * user-facing reason. 0 = pre-1.0.0 firmware (single proto_ver byte).
  */
-export const PROTOCOL_REGISTRY = new Map<number, string>([
-  [3, "2.0.0"],
-]);
+export function protoVersionError(v: number): string | null {
+  const { major } = parseProtoVersion(v);
+  if (major === SUPPORTED_PROTO_MAJOR) return null;
+  const shown = v === 0 ? "older than 1.0.0" : `v${formatProtoVersion(v)}`;
+  return major < SUPPORTED_PROTO_MAJOR
+    ? `Unsupported device protocol ${shown}. Please update the hub firmware.`
+    : `Unsupported device protocol ${shown}. Please update the app.`;
+}
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
 
@@ -153,6 +191,18 @@ export interface HelloInfo {
 }
 export type HelloSink = (info: HelloInfo) => void;
 
+/** A BLE frame the hub copied to USB (ECHO_BLE on). */
+export interface EchoFrame {
+  /** "rx" = host→hub request received over BLE, "tx" = hub→host frame sent over BLE. */
+  direction: "rx" | "tx";
+  seq: number;
+  /** FLAGS as sent on BLE (echo bits removed). */
+  flags: number;
+  kind: number;
+  payload: Uint8Array;
+}
+export type EchoSink = (frame: EchoFrame) => void;
+
 export interface FrameReply {
   kind: "OK" | "ERR" | "DATA";
   /** Raw payload bytes. Decode to text with TextDecoder if needed. */
@@ -182,6 +232,8 @@ export interface IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void;
   setProgramStartSink(sink: ProgramStartSink | null): void;
   setHelloSink(sink: HelloSink | null): void;
+  /** Receives BLE frames echoed over USB; they never reach waiters or stdout sinks. */
+  setEchoSink(sink: EchoSink | null): void;
   /** Add an extra stdout sink; returns unsubscribe function. Multiple sinks allowed. */
   addStdoutSink(sink: StdoutSink): () => void;
   /** Add an extra stderr sink; returns unsubscribe function. Multiple sinks allowed. */
@@ -209,6 +261,8 @@ export interface IHubProtocol {
   exec(code: string, timeoutMs?: number): Promise<FrameReply>;
   /** Send a binary CMD frame. Reply is KIND_OK or KIND_DATA. */
   cmd(payload: Uint8Array, timeoutMs?: number): Promise<FrameReply>;
+  /** ECHO_BLE (USB only): switch the BLE echo; resolves to the new state. */
+  setBleEcho(enabled: boolean, timeoutMs?: number): Promise<boolean>;
 }
 
 // ── Parse state machine ───────────────────────────────────────────────────────
@@ -279,13 +333,13 @@ interface SendOptions {
   signal?: AbortSignal;
 }
 
-// ── HubProtocolV2_0_0 ────────────────────────────────────────────────────────
-// Wire protocol semver v2.0.0 (proto_ver byte = 3).
+// ── HubProtocolV1 ────────────────────────────────────────────────────────────
+// Wire protocol v1.x (proto_ver major 1).
 
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: false });
 
-export class HubProtocolV2_0_0 implements IHubProtocol {
+export class HubProtocolV1 implements IHubProtocol {
   private transport: Transport;
   private unsub: Unsubscribe | null = null;
   private onStdout: StdoutSink | null = null;
@@ -295,13 +349,14 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   private onProgramEnd: ProgramEndSink | null = null;
   private onProgramStart: ProgramStartSink | null = null;
   private onHello: HelloSink | null = null;
+  private onEcho: EchoSink | null = null;
   private programRunning = false;
   private waiters = new Map<number, Waiter>();
   private state: ParseState = freshState();
   private sending = Promise.resolve();
   private _seq = 0;
-  /** Last queued stream per kind (UPLOAD / READ / CP); see oneAtATime(). */
-  private streamTail = new Map<number, Promise<void>>();
+  /** Last queued stream (UPLOAD / READ / CP); see oneAtATime(). */
+  private streamTail: Promise<void> | null = null;
   private disposed = false;
 
   private _protocolVersion = 0;
@@ -346,6 +401,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   setProgramEndSink(sink: ProgramEndSink | null): void   { this.onProgramEnd = sink; }
   setProgramStartSink(sink: ProgramStartSink | null): void { this.onProgramStart = sink; }
   setHelloSink(sink: HelloSink | null): void             { this.onHello = sink; }
+  setEchoSink(sink: EchoSink | null): void               { this.onEcho = sink; }
   addStdoutSink(sink: StdoutSink): () => void {
     this.extraStdoutSinks.add(sink);
     return () => this.extraStdoutSinks.delete(sink);
@@ -403,7 +459,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     onProgress?: ProgressSink,
     signal?: AbortSignal,
   ): Promise<void> {
-    return this.oneAtATime(KIND.UPLOAD, signal, () => this.doUpload(path, bytes, idleTimeoutMs, onProgress, signal));
+    return this.oneAtATime(signal, () => this.doUpload(path, bytes, idleTimeoutMs, onProgress, signal));
   }
 
   private async doUpload(
@@ -490,7 +546,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   }
 
   readFile(path: string, timeoutMs = DEFAULT_TIMEOUT_MS, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array> {
-    return this.oneAtATime(KIND.READ, signal, () => this.doReadFile(path, timeoutMs, onProgress, signal));
+    return this.oneAtATime(signal, () => this.doReadFile(path, timeoutMs, onProgress, signal));
   }
 
   private async doReadFile(path: string, timeoutMs: number, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array> {
@@ -541,7 +597,7 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
   }
 
   cp(src: string, dst: string, timeoutMs = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<void> {
-    return this.oneAtATime(KIND.CP, signal, () => this.doCp(src, dst, timeoutMs, signal));
+    return this.oneAtATime(signal, () => this.doCp(src, dst, timeoutMs, signal));
   }
 
   private async doCp(src: string, dst: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
@@ -573,25 +629,32 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
     return this.sendRequest(KIND.CMD, 0, payload, { timeoutMs });
   }
 
+  async setBleEcho(enabled: boolean, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<boolean> {
+    const reply = await this.sendRequest(KIND.ECHO_BLE, 0, Uint8Array.of(enabled ? 1 : 0), { timeoutMs });
+    if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "ECHO_BLE failed");
+    return reply.payload.length > 0 && reply.payload[0] !== 0;
+  }
+
   // ── Private send helpers ────────────────────────────────────────────────────
 
   /**
-   * The device runs at most one UPLOAD, one READ and one CP at a time and
-   * answers a second one with ERR "<KIND> busy". Queue same-kind streams so
-   * overlapping callers wait their turn instead of failing. A cancelled /
-   * timed-out stream has already queued its ABORT on the send chain, so the
-   * next request reaches the device after it.
+   * The device runs one stream (UPLOAD, READ or CP) per link at a time and
+   * answers any other stream request with ERR "busy". Queue all streams so
+   * overlapping callers wait
+   * their turn instead of failing. A cancelled / timed-out stream has already
+   * queued its ABORT on the send chain, so the next request reaches the
+   * device after it.
    */
-  private oneAtATime<T>(kind: number, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
-    const prev = this.streamTail.get(kind) ?? Promise.resolve();
+  private oneAtATime<T>(signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+    const prev = this.streamTail ?? Promise.resolve();
     const run = prev.then(() => {
       if (this.disposed) throw new Error("Disposed");
       if (signal?.aborted) throw new CancelledError(); // never started: nothing to abort
       return fn();
     });
     const tail = run.then(() => {}, () => {});
-    this.streamTail.set(kind, tail);
-    void tail.then(() => { if (this.streamTail.get(kind) === tail) this.streamTail.delete(kind); });
+    this.streamTail = tail;
+    void tail.then(() => { if (this.streamTail === tail) this.streamTail = null; });
     return run;
   }
 
@@ -723,7 +786,18 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
 
   // ── Frame dispatch ──────────────────────────────────────────────────────────
 
-  private dispatch(seq: number, _flags: number, kind: number, payload: Uint8Array): void {
+  private dispatch(seq: number, flags: number, kind: number, payload: Uint8Array): void {
+    if (flags & FLAGS_ECHO) {
+      // Copy of BLE traffic: its SEQ belongs to the BLE host, never ours.
+      this.onEcho?.({
+        direction: flags & FLAGS_ECHO_RX ? "rx" : "tx",
+        seq,
+        flags: flags & ~(FLAGS_ECHO | FLAGS_ECHO_RX),
+        kind,
+        payload,
+      });
+      return;
+    }
     switch (kind) {
       case KIND.HELLO:
         this.parseHelloPayload(payload);
@@ -815,13 +889,17 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
 
   private parseHelloPayload(payload: Uint8Array): void {
     if (payload.length < 1) return;
-    const protoVer = payload[0];
+    // Pre-1.0.0 firmware sent one proto_ver byte (2..4) followed by the board
+    // name; report it as version 0 ("update the hub firmware").
+    const printable = (i: number) => payload[i] >= 0x20 && payload[i] < 0x7F;
+    const legacy = payload.length < 4 || (payload[0] >= 2 && payload[0] <= 4 && printable(1) && printable(2) && printable(3));
+    const protoVer = legacy ? 0 : new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false);
     const readStr = (start: number): [string, number] => {
       let j = start;
       while (j < payload.length && payload[j] !== 0) j++;
       return [dec.decode(payload.slice(start, j)), j + 1];
     };
-    const [boardName, i1] = readStr(1);
+    const [boardName, i1] = readStr(legacy ? 1 : 4);
     const [boardVersion, i2] = readStr(i1);
     const [fwVersion]        = readStr(i2);
     this._protocolVersion = protoVer;
@@ -908,6 +986,24 @@ export class HubProtocolV2_0_0 implements IHubProtocol {
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
+const KIND_NAMES = new Map<number, string>(Object.entries(KIND).map(([k, v]) => [v, k]));
+
+/** One-line description of an echoed BLE frame, for the console. */
+export function formatEchoFrame(f: EchoFrame): string {
+  const name = KIND_NAMES.get(f.kind) ?? `0x${f.kind.toString(16).padStart(2, "0")}`;
+  const arrow = f.direction === "rx" ? "host→hub" : "hub→host";
+  const seq = f.seq.toString(16).padStart(2, "0");
+  const p = f.payload;
+  let detail = `${p.length}B`;
+  if (f.kind === KIND.ERR || f.kind === KIND.STDOUT || f.kind === KIND.STDERR || f.kind === KIND.PROG_START
+      || (f.direction === "rx" && [KIND.RUN, KIND.READ, KIND.LS, KIND.RM, KIND.MKDIR, KIND.EXEC].includes(f.kind as never))) {
+    detail = JSON.stringify(dec.decode(p.subarray(0, 64)));
+  } else if (f.kind === KIND.DATA && p.length >= 4) {
+    detail = `off=${new DataView(p.buffer, p.byteOffset, 4).getUint32(0, false)} len=${p.length - 4}`;
+  }
+  return `[BLE ${arrow}] ${name} seq=${seq} ${detail}`;
+}
+
 function encodeTwoPaths(src: string, dst: string): Uint8Array {
   const s = enc.encode(src);
   const d = enc.encode(dst);
@@ -950,4 +1046,4 @@ export function validatePath(path: string, policy: UploadPolicy): void {
   throw new UploadError(`Path must be under /sd/ (allowRoot=${policy.allowRoot}): ${path}`);
 }
 
-export { HubProtocolV2_0_0 as HubProtocol };
+export { HubProtocolV1 as HubProtocol };

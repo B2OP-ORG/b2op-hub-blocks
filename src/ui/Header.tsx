@@ -2,16 +2,17 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUpCircle, Bluetooth, Circle, Code2, Layers,
-  Play, Power, Settings, Square, Upload, Zap,
+  Play, Plug, Power, Settings, Square, Upload, Usb, Zap,
 } from "lucide-react";
-import { BleTransport, bleSupported } from "../transport/ble";
+import { BleTransport, bleUnavailable } from "../transport/ble";
 import { SerialTransport, serialSupported } from "../transport/serial";
 import { MockTransport } from "../transport/mock";
 import { DeviceClient } from "../device/deviceClient";
+import { formatEchoFrame } from "../device/protocol";
 import { useApp, useDark } from "../state/store";
 import { saveLastDeviceName } from "../project/storage";
 import { runProject, runProjectFile, uploadFile, uploadProject } from "../project/deviceSync";
-import { openContextMenu } from "./ContextMenu";
+import { openContextMenu, openMenuAt } from "./ContextMenu";
 import { switchActiveFileMode } from "./modeSwitch";
 
 interface Props {
@@ -129,6 +130,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
       });
       client.addStdoutSink((t) => appendConsole("out", t));
       client.addStderrSink((t) => appendConsole("err", t));
+      client.setEchoSink((f) => appendConsole("info", formatEchoFrame(f) + "\n"));
       await client.connect();
       setDevice(client);
       setConnection("connected");
@@ -167,6 +169,15 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
     { label: "Upload changed files", icon: <Upload size={13} />, onSelect: () => uploadProject(projectId, "changed") },
     { label: "Upload all files", icon: <Upload size={13} />, onSelect: () => uploadProject(projectId, "all") },
     { label: activeFile ? `Upload active file (${activeFile.name})` : "Upload active file", disabled: !activeFile, onSelect: () => activeFile && uploadFile(activeFile.id) },
+  ]);
+
+  const bleReason = bleUnavailable();
+  const serialReason = serialSupported() ? null : "Web Serial unsupported in this browser";
+  const canConnect = !bleReason || !serialReason;
+
+  const connectMenu = (el: HTMLElement) => openMenuAt(el, [
+    { label: "Bluetooth", icon: <Bluetooth size={13} />, disabled: !!bleReason, hint: bleReason ?? undefined, onSelect: () => void connect("ble") },
+    { label: "USB Serial", icon: <Usb size={13} />, disabled: !!serialReason, hint: serialReason ?? undefined, onSelect: () => void connect("serial") },
   ]);
 
   const stop = async () => {
@@ -324,12 +335,12 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
       {!device ? (
         <button
           type="button"
-          style={{ ...dis(primaryBtn, busy || !bleSupported()), ...iconPad(3) }}
-          disabled={busy || !bleSupported()}
-          onClick={(e) => connect(e.shiftKey && serialSupported() ? "serial" : "ble")}
-          title={bleSupported() ? "Connect via Bluetooth · hold Shift for USB" : "Web Bluetooth unsupported"}
+          style={{ ...dis(primaryBtn, busy || !canConnect), ...iconPad(3) }}
+          disabled={busy || !canConnect}
+          onClick={(e) => connectMenu(e.currentTarget)}
+          title={canConnect ? "Connect via Bluetooth or USB" : "Neither Web Bluetooth nor Web Serial is available"}
         >
-          <Bluetooth size={13} />{showLabel(3) && " BLE"}
+          <Plug size={13} />{showLabel(3) && " Connect"}
         </button>
       ) : (
         <>

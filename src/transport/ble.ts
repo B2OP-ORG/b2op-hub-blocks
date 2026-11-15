@@ -15,6 +15,22 @@ export function bleSupported(): boolean {
   return typeof navigator !== "undefined" && "bluetooth" in navigator;
 }
 
+// Session-scoped (in-memory, resets on reload) reason why BLE can't be used.
+// Checked once on load for the Web Bluetooth API; set later if connecting
+// fails because no Bluetooth adapter is present.
+let bleUnavailableReason: string | null = bleSupported() ? null : "Web Bluetooth unsupported in this browser";
+
+/** Null when BLE may be used, otherwise a human-readable reason. */
+export function bleUnavailable(): string | null {
+  return bleUnavailableReason;
+}
+
+function isNoAdapterError(e: unknown): boolean {
+  const err = e as { name?: string; message?: string } | null;
+  return !!err && (err.name === "NotFoundError" || err.name === "NotSupportedError")
+    && /adapter/i.test(err.message ?? "");
+}
+
 export class BleTransport implements Transport {
   readonly kind = "ble" as const;
   info: TransportInfo = { name: "" };
@@ -39,20 +55,29 @@ export class BleTransport implements Transport {
   }
 
   async connect(): Promise<void> {
-    if (!bleSupported()) {
-      throw new TransportError("Web Bluetooth not supported in this browser");
+    if (bleUnavailableReason) {
+      throw new TransportError(bleUnavailableReason);
     }
     // Linux BlueZ often drops the NUS service UUID from surfaced advertisement
     // data, so a services-only filter hides the device. Use name-based filters
     // and let optionalServices unlock the actual GATT service on connect.
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [
-        // { services: [NUS_SERVICE] },
-        { namePrefix: "B2OP" },
-        { namePrefix: "Hub" },
-      ],
-      optionalServices: [NUS_SERVICE],
-    });
+    let device: BluetoothDevice;
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [
+          // { services: [NUS_SERVICE] },
+          { namePrefix: "B2OP" },
+          { namePrefix: "Hub" },
+        ],
+        optionalServices: [NUS_SERVICE],
+      });
+    } catch (e) {
+      if (isNoAdapterError(e)) {
+        bleUnavailableReason = "No Bluetooth adapter available";
+        throw new TransportError(bleUnavailableReason);
+      }
+      throw e;
+    }
     this.device = device;
     this.info = { name: device.name ?? "BLE device" };
 

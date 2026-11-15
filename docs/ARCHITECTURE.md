@@ -37,7 +37,7 @@ B2OP-Hub-blocks is a browser-based IDE for programming B2OP Hub (ESP32-S3) micro
 
 ### Device layer (`src/device/`, `src/transport/`)
 
-- **`HubProtocol`** (`src/device/protocol.ts`) — frame-based command protocol over a raw byte pipe. Sends `UPLOAD`, `RUN`, `STOP`, `READ`, `PING`. Parses `OK`, `ERR`, `DATA`, `OUT`, `STDERR` replies. See [HUB_PROTOCOL.md](HUB_PROTOCOL.md) for full spec.
+- **`HubProtocol`** (`src/device/protocol.ts`) — frame-based command protocol over a raw byte pipe. Sends `UPLOAD`, `RUN`, `STOP`, `READ`, `PING`. Parses `OK`, `ERR`, `DATA`, `OUT`, `STDERR` replies. Queues UPLOAD / READ / CP one at a time (the hub runs one stream per link and answers others with ERR `"busy"`); frames flagged `ECHO` (BLE traffic the hub copies to USB) go to the echo sink, not to request waiters. See [HUB_PROTOCOL.md](HUB_PROTOCOL.md) for full spec.
 - **`deviceClient.ts`** — higher-level client: connects a transport, negotiates firmware version, drives the upload-then-run sequence, routes console frames to registered sinks.
 - **Transports** (`src/transport/`) — pluggable byte pipes:
   - `ble.ts` — Web Bluetooth, Nordic UART Service (NUS).

@@ -100,6 +100,8 @@ export interface EditorSettings {
   lspMode: LspMode;
   lspRemoteUrl: string;
   toolboxBlockScale: number;
+  /** USB connections: ask the hub to echo all BLE traffic to the console (debug). */
+  bleEchoOverUsb: boolean;
   sidebar: SidebarSettings;
   monaco: MonacoSettings;
 }
@@ -111,6 +113,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   lspMode: "worker",
   lspRemoteUrl: "ws://localhost:3001",
   toolboxBlockScale: 0.75,
+  bleEchoOverUsb: false,
   sidebar: DEFAULT_SIDEBAR_SETTINGS,
   monaco: DEFAULT_MONACO_SETTINGS,
 };

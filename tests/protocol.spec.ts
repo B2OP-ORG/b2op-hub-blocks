@@ -3,10 +3,12 @@ import {
   validatePath, UploadError, HubProtocolV1, HubProtocol,
   parseProtoVersion, formatProtoVersion, protoVersionError,
   KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, CancelledError, DEFAULT_TIMEOUT_MS,
-  FLAGS_ECHO, FLAGS_ECHO_RX, formatEchoFrame,
+  FLAGS_ECHO, FLAGS_ECHO_RX, formatEchoFrame, UnsupportedFeatureError,
   type ProgramEndInfo, type EchoFrame,
 } from "../src/device/protocol";
 import { MockTransport } from "../src/transport/mock";
+import { PROTO_FEATURES, protoFeatures } from "../src/device/protocolFeatures";
+import { CmdId } from "../src/device/cmdHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -267,6 +269,40 @@ describe("HELLO / requestHello", () => {
       boardVersion: "3.1.4",
       fwVersion: "fw2.0",
     });
+    proto.dispose();
+    await transport.disconnect();
+  });
+});
+
+// ── Feature gating ───────────────────────────────────────────────────────────
+
+describe("protocol feature table", () => {
+  it("newer minors fall back to the newest known table", () => {
+    expect(protoFeatures(0x01000000)).toBe(PROTO_FEATURES[0]);
+    expect(protoFeatures(0x01FF0000)).toBe(PROTO_FEATURES[PROTO_FEATURES.length - 1]);
+  });
+
+  it("allows everything before HELLO, blocks disabled kinds / cmds after", async () => {
+    const table = PROTO_FEATURES[0];
+    const transport = new MockTransport();
+    await transport.connect();
+    const proto = new HubProtocol(transport);
+    expect(proto.features).toBeNull();
+    await proto.requestHello();
+    expect(proto.features).toBe(table);
+
+    table.kinds.MV = false;
+    table.cmds.HUB_GET_BATTERY = false;
+    try {
+      const write = vi.spyOn(transport, "write");
+      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toBeInstanceOf(UnsupportedFeatureError);
+      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toThrow(/MV is not supported.*v1\.0\.0/);
+      await expect(proto.cmd(Uint8Array.of(CmdId.HUB_GET_BATTERY))).rejects.toThrow(/HUB_GET_BATTERY/);
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      table.kinds.MV = true;
+      table.cmds.HUB_GET_BATTERY = true;
+    }
     proto.dispose();
     await transport.disconnect();
   });

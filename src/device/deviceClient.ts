@@ -1,5 +1,6 @@
 import type { Transport } from "../transport/types";
 import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink } from "./protocol";
+import type { CmdName, KindName, ProtoFeatures } from "./protocolFeatures";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
 
@@ -58,6 +59,23 @@ export class DeviceClient {
   get fwVersion(): string { return this.proto.fwVersion; }
   get protocolVersion(): number { return this.proto.protocolVersion; }
 
+  /**
+   * Features of the connected hub's protocol minor, or null before HELLO (or
+   * if HELLO failed); null means nothing is blocked. Unsupported requests
+   * reject with UnsupportedFeatureError.
+   */
+  get features(): ProtoFeatures | null { return this.proto.features; }
+
+  /** Whether the hub implements message type `kind` (true while unknown). */
+  supportsKind(kind: KindName): boolean {
+    return this.proto.features?.kinds[kind] ?? true;
+  }
+
+  /** Whether the hub implements CMD subtype `cmd` (true while unknown). */
+  supportsCmd(cmd: CmdName): boolean {
+    return this.proto.features?.cmds[cmd] ?? true;
+  }
+
   async connect(): Promise<void> {
     await this.transport.connect();
     // Two ping attempts — cold connects sometimes drop the first frame while
@@ -85,7 +103,7 @@ export class DeviceClient {
         /* other hello failures are non-fatal */
       }
 
-      if (this.transport.setChunkSize) {
+      if (this.transport.setChunkSize && this.supportsKind("MTU_REQ")) {
         // Device queries `_ble_uart.instance().mtu()`, which reflects the last
         // ATT MTU exchange. Peripheral triggers the exchange on connect, but it
         // takes a few conn intervals; a query fired immediately after ping may
@@ -111,7 +129,7 @@ export class DeviceClient {
       try { await this.setBleEcho(true); } catch { /* non-fatal: echo is a debug aid */ }
     }
     this.pingInterval = setInterval(async () => {
-      if (!this.transport.connected || this.pinging) return;
+      if (!this.transport.connected || this.pinging || !this.supportsKind("PING")) return;
       this.pinging = true;
       try { await this.proto.ping(DEFAULT_TIMEOUT_MS); } catch { /* ignore; disconnect handler fires on dead link */ }
       finally { this.pinging = false; }
@@ -127,10 +145,12 @@ export class DeviceClient {
     // when disconnect() is called from the error-cleanup path.
     if (this.transport.connected) {
       // The device can't tell we gave up on a transfer — cancel any active stream.
-      if (this.proto.hasActiveStreams()) {
+      if (this.proto.hasActiveStreams() && this.supportsKind("ABORT")) {
         try { await this.proto.abort(undefined, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
       }
-      try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      if (this.supportsKind("STOP")) {
+        try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      }
       // Echo is device-global state; don't leave it on for the next USB host.
       if (this.bleEcho) {
         try { await this.proto.setBleEcho(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
@@ -249,7 +269,7 @@ export class DeviceClient {
 
   /** BLE echo is a USB (serial) link feature. */
   get supportsBleEcho(): boolean {
-    return this.transport.kind === "serial";
+    return this.transport.kind === "serial" && this.supportsKind("ECHO_BLE");
   }
 
   /**

@@ -1,4 +1,6 @@
 import type { Transport, Unsubscribe } from "../transport/types";
+import { CmdId } from "./cmdHelpers";
+import { protoFeatures, type CmdName, type KindName, type ProtoFeatures } from "./protocolFeatures";
 
 /**
  * Hub wire protocol v1.x (proto_ver = 1.0.0). Binary framing.
@@ -94,7 +96,7 @@ export const SEQ_UNSOLICITED = 0xFF;
 /** File bytes per UPLOAD DATA chunk (whole frame must fit the device's 2 KiB frame buffer). */
 export const UPLOAD_CHUNK = 1024;
 /** Max UPLOAD bytes in flight past the device's last PROGRESS (it reports every 4 KiB). */
-export const UPLOAD_WINDOW = 8192;
+export const UPLOAD_WINDOW = 4096;
 
 /** Protocol major version this app implements (any 1.x device is accepted). */
 export const SUPPORTED_PROTO_MAJOR = 1;
@@ -122,6 +124,25 @@ export function protoVersionError(v: number): string | null {
   return major < SUPPORTED_PROTO_MAJOR
     ? `Unsupported device protocol ${shown}. Please update the hub firmware.`
     : `Unsupported device protocol ${shown}. Please update the app.`;
+}
+
+// ── Feature gating ────────────────────────────────────────────────────────────
+
+const KIND_NAMES = new Map<number, KindName>(
+  (Object.entries(KIND) as [KindName, number][]).map(([k, v]) => [v, k]),
+);
+const CMD_NAMES = new Map<number, CmdName>(
+  (Object.entries(CmdId) as [CmdName, number][]).map(([k, v]) => [v, k]),
+);
+
+/** Request blocked locally: the hub's protocol minor doesn't implement it. */
+export class UnsupportedFeatureError extends Error {
+  readonly feature: KindName | CmdName;
+  constructor(feature: KindName | CmdName, protoVer: number) {
+    super(`${feature} is not supported by the hub firmware (protocol v${formatProtoVersion(protoVer)}). Please update the hub firmware.`);
+    this.name = "UnsupportedFeatureError";
+    this.feature = feature;
+  }
 }
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
@@ -363,6 +384,8 @@ export class HubProtocolV1 implements IHubProtocol {
   private _boardName = "";
   private _boardVersion = "";
   private _fwVersion = "";
+  /** Null until HELLO is parsed; until then every request is allowed (handshake). */
+  private _features: ProtoFeatures | null = null;
 
   constructor(transport: Transport) {
     this.transport = transport;
@@ -373,6 +396,19 @@ export class HubProtocolV1 implements IHubProtocol {
   get boardName(): string { return this._boardName; }
   get boardVersion(): string { return this._boardVersion; }
   get fwVersion(): string { return this._fwVersion; }
+  get features(): ProtoFeatures | null { return this._features; }
+
+  /** Null when `kind` may be sent, else the error to fail the request with. */
+  private kindBlocked(kind: number): UnsupportedFeatureError | null {
+    const name = KIND_NAMES.get(kind);
+    if (!this._features || !name || this._features.kinds[name]) return null;
+    return new UnsupportedFeatureError(name, this._protocolVersion);
+  }
+
+  private assertKind(kind: number): void {
+    const err = this.kindBlocked(kind);
+    if (err) throw err;
+  }
 
   hasActiveStreams(): boolean {
     for (const w of this.waiters.values()) if (STREAM_KINDS.has(w.requestKind)) return true;
@@ -469,6 +505,8 @@ export class HubProtocolV1 implements IHubProtocol {
     onProgress?: ProgressSink,
     signal?: AbortSignal,
   ): Promise<void> {
+    this.assertKind(KIND.UPLOAD);
+    this.assertKind(KIND.DATA);
     const pathBytes = enc.encode(path);
     if (pathBytes.length > 255) throw new Error(`path too long: ${path}`);
 
@@ -626,6 +664,10 @@ export class HubProtocolV1 implements IHubProtocol {
   }
 
   async cmd(payload: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<FrameReply> {
+    const cmdName = payload.length > 0 ? CMD_NAMES.get(payload[0]) : undefined;
+    if (this._features && cmdName && !this._features.cmds[cmdName]) {
+      throw new UnsupportedFeatureError(cmdName, this._protocolVersion);
+    }
     return this.sendRequest(KIND.CMD, 0, payload, { timeoutMs });
   }
 
@@ -670,6 +712,8 @@ export class HubProtocolV1 implements IHubProtocol {
     payload: Uint8Array,
     opts: SendOptions,
   ): Promise<FrameReply> {
+    const blocked = this.kindBlocked(kind);
+    if (blocked) return Promise.reject(blocked);
     const seq = this.nextSeq();
     const frame = makeFrame(kind, seq, flags, payload);
     let unwatch = () => {};
@@ -705,6 +749,7 @@ export class HubProtocolV1 implements IHubProtocol {
   }
 
   private sendNoAck(kind: number, payload: Uint8Array): void {
+    this.assertKind(kind);
     const seq = this.nextSeq();
     const frame = makeFrame(kind, seq, FLAGS_NO_ACK, payload);
     const write = (this.transport.writeFast?.bind(this.transport)
@@ -741,6 +786,7 @@ export class HubProtocolV1 implements IHubProtocol {
 
   /** Fire-and-forget ABORT for a stream we gave up on (its ERR "aborted" is dropped). */
   private sendAbort(targetSeq: number): void {
+    if (this.kindBlocked(KIND.ABORT)) return;
     const frame = makeFrame(KIND.ABORT, this.nextSeq(), 0, Uint8Array.of(targetSeq & 0xFF));
     this.sending = this.sending.then(() => this.transport.write(frame)).catch(() => {});
   }
@@ -903,6 +949,7 @@ export class HubProtocolV1 implements IHubProtocol {
     const [boardVersion, i2] = readStr(i1);
     const [fwVersion]        = readStr(i2);
     this._protocolVersion = protoVer;
+    this._features = protoFeatures(protoVer);
     this._boardName = boardName;
     this._boardVersion = boardVersion;
     this._fwVersion = fwVersion;
@@ -986,7 +1033,6 @@ export class HubProtocolV1 implements IHubProtocol {
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
-const KIND_NAMES = new Map<number, string>(Object.entries(KIND).map(([k, v]) => [v, k]));
 
 /** One-line description of an echoed BLE frame, for the console. */
 export function formatEchoFrame(f: EchoFrame): string {

@@ -1,6 +1,6 @@
 import type { Transport, Unsubscribe } from "../transport/types";
 import { CmdId } from "./cmdHelpers";
-import { protoFeatures, type CmdName, type KindName, type ProtoFeatures } from "./protocolFeatures";
+import { protoFeatures, type CmdName, type FlagName, type KindName, type ProtoFeatures } from "./protocolFeatures";
 
 /**
  * Hub wire protocol v1.x (proto_ver = 1.0.0). Binary framing.
@@ -97,6 +97,10 @@ export const SEQ_UNSOLICITED = 0xFF;
 export const UPLOAD_CHUNK = 1024;
 /** Max UPLOAD bytes in flight past the device's last PROGRESS (it reports every 4 KiB). */
 export const UPLOAD_WINDOW = 4096;
+/** DATA frame bytes besides file data: MAGIC + 2-byte LEN varint + SEQ/FLAGS/KIND + offset:u32. */
+export const DATA_FRAME_OVERHEAD = 1 + 2 + 3 + 4;
+/** Smallest data chunk worth the one-write fast path (below it, use acknowledged 1 KiB chunks). */
+const MIN_FAST_UPLOAD_CHUNK = 64;
 
 /** Protocol major version this app implements (any 1.x device is accepted). */
 export const SUPPORTED_PROTO_MAJOR = 1;
@@ -405,6 +409,11 @@ export class HubProtocolV1 implements IHubProtocol {
     return new UnsupportedFeatureError(name, this._protocolVersion);
   }
 
+  /** Capability flags are off until HELLO is parsed (unlike kinds / cmds). */
+  private hasFlag(flag: FlagName): boolean {
+    return this._features?.flags[flag] ?? false;
+  }
+
   private assertKind(kind: number): void {
     const err = this.kindBlocked(kind);
     if (err) throw err;
@@ -525,18 +534,19 @@ export class HubProtocolV1 implements IHubProtocol {
 
     const pump = async (w: Waiter) => {
       const alive = () => !settled && !w.cancelling && this.waiters.get(seq) === w;
-      for (let off = 0; off < bytes.length; off += UPLOAD_CHUNK) {
+      const { chunkSize, write } = this.uploadChunking();
+      for (let off = 0; off < bytes.length; off += chunkSize) {
         while (off - confirmed >= UPLOAD_WINDOW) {
           if (!alive()) return;
           await new Promise<void>((r) => { wake = r; });
         }
         if (!alive()) return;
-        const end = Math.min(off + UPLOAD_CHUNK, bytes.length);
+        const end = Math.min(off + chunkSize, bytes.length);
         const chunk = new Uint8Array(4 + end - off);
         new DataView(chunk.buffer).setUint32(0, off, false);
         chunk.set(bytes.subarray(off, end), 4);
         const frame = makeFrame(KIND.DATA, seq, 0, chunk);
-        const wp = this.sending.then(() => this.transport.write(frame));
+        const wp = this.sending.then(() => write(frame));
         this.sending = wp.catch(() => {});
         try {
           await wp;
@@ -581,6 +591,26 @@ export class HubProtocolV1 implements IHubProtocol {
 
     const reply = await p;
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "UPLOAD failed");
+  }
+
+  /**
+   * UPLOAD DATA chunking. Fast path: each DATA frame goes out as ONE writeFast
+   * call (BLE writeValueWithoutResponse, frame ≤ ATT MTU − 3), so many frames
+   * fit in a connection interval instead of one acknowledged ~MTU write each.
+   * A frame split over several without-response writes can be reordered by
+   * BlueZ and arrive scrambled; whole frames reordered or duplicated are fine
+   * (DATA offsets + the hub's reorder window). Needs the FAST_UPLOAD feature
+   * flag (off until HELLO) and a known MTU; otherwise 1 KiB chunks over
+   * acknowledged `write`.
+   */
+  private uploadChunking(): { chunkSize: number; write: (frame: Uint8Array) => Promise<void> } {
+    const t = this.transport;
+    const mtu = t.info.mtu;
+    if (t.writeFast && mtu && this.hasFlag("FAST_UPLOAD")) {
+      const chunkSize = Math.min(UPLOAD_CHUNK, mtu - 3 - DATA_FRAME_OVERHEAD);
+      if (chunkSize >= MIN_FAST_UPLOAD_CHUNK) return { chunkSize, write: t.writeFast.bind(t) };
+    }
+    return { chunkSize: UPLOAD_CHUNK, write: t.write.bind(t) };
   }
 
   readFile(path: string, timeoutMs = DEFAULT_TIMEOUT_MS, onProgress?: ProgressSink, signal?: AbortSignal): Promise<Uint8Array> {

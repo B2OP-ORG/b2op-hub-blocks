@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   validatePath, UploadError, HubProtocolV1, HubProtocol,
   parseProtoVersion, formatProtoVersion, protoVersionError,
-  KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, CancelledError, DEFAULT_TIMEOUT_MS,
+  KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, DATA_FRAME_OVERHEAD, CancelledError, DEFAULT_TIMEOUT_MS,
   FLAGS_ECHO, FLAGS_ECHO_RX, formatEchoFrame, UnsupportedFeatureError,
   type ProgramEndInfo, type EchoFrame,
 } from "../src/device/protocol";
 import { MockTransport } from "../src/transport/mock";
-import { PROTO_FEATURES, protoFeatures } from "../src/device/protocolFeatures";
+import { PROTO_FEATURES, protoFeatures, supportsFlag } from "../src/device/protocolFeatures";
 import { CmdId } from "../src/device/cmdHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(0x01000000);
+    expect(proto.protocolVersion).toBe(0x01010000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -250,7 +250,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(0x01000000);
+    expect(proto.protocolVersion).toBe(0x01010000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -282,8 +282,14 @@ describe("protocol feature table", () => {
     expect(protoFeatures(0x01FF0000)).toBe(PROTO_FEATURES[PROTO_FEATURES.length - 1]);
   });
 
+  it("FAST_UPLOAD flag starts at minor 1", () => {
+    expect(supportsFlag(0x01000000, "FAST_UPLOAD")).toBe(false);
+    expect(supportsFlag(0x0100FFFF, "FAST_UPLOAD")).toBe(false);
+    expect(supportsFlag(0x01010000, "FAST_UPLOAD")).toBe(true);
+  });
+
   it("allows everything before HELLO, blocks disabled kinds / cmds after", async () => {
-    const table = PROTO_FEATURES[0];
+    const table = PROTO_FEATURES[PROTO_FEATURES.length - 1]; // mock speaks the newest minor
     const transport = new MockTransport();
     await transport.connect();
     const proto = new HubProtocol(transport);
@@ -296,7 +302,7 @@ describe("protocol feature table", () => {
     try {
       const write = vi.spyOn(transport, "write");
       await expect(proto.mv("/sd/a", "/sd/b")).rejects.toBeInstanceOf(UnsupportedFeatureError);
-      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toThrow(/MV is not supported.*v1\.0\.0/);
+      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toThrow(/MV is not supported.*v1\.1\.0/);
       await expect(proto.cmd(Uint8Array.of(CmdId.HUB_GET_BATTERY))).rejects.toThrow(/HUB_GET_BATTERY/);
       expect(write).not.toHaveBeenCalled();
     } finally {
@@ -506,20 +512,53 @@ function chunkPayload(off: number, data: Uint8Array): Uint8Array {
 }
 
 describe("v2.0.0 streaming transfers", () => {
-  it("UPLOAD sends [offset][bytes] DATA chunks ≤ UPLOAD_CHUNK and stores the file", async () => {
+  it("UPLOAD sends each DATA frame as one writeFast call within the MTU (FAST_UPLOAD)", async () => {
+    const transport = new MockTransport();
+    // Subscribe before connect so the proactive HELLO (proto 1.1.0) is seen.
+    const proto = new HubProtocol(transport);
+    await transport.connect();
+    expect(proto.features?.flags.FAST_UPLOAD).toBe(true);
+    const fast: Uint8Array[] = [];
+    const slow: Uint8Array[] = [];
+    const origWrite = transport.write.bind(transport);
+    transport.writeFast = async (c: Uint8Array) => { fast.push(c); return origWrite(c); };
+    transport.write = async (c: Uint8Array) => { slow.push(c); return origWrite(c); };
+    const data = new Uint8Array(20000).map((_, i) => i & 0xFF);
+    await proto.upload("/sd/big.bin", data);
+    expect(transport.files["/sd/big.bin"]).toEqual(data);
+    const mtu = transport.info.mtu!;
+    const chunkSize = mtu - 3 - DATA_FRAME_OVERHEAD;
+    const up = slow.flatMap(parseFrames).find((f) => f.kind === KIND.UPLOAD)!;
+    // Every fast write is exactly one whole DATA frame that fits one GATT write.
+    expect(fast.every((w) => w.length <= mtu - 3)).toBe(true);
+    const chunks = fast.map((w) => { const f = parseFrames(w); expect(f).toHaveLength(1); return f[0]; });
+    expect(chunks.every((c) => c.kind === KIND.DATA && c.seq === up.seq)).toBe(true);
+    expect(slow.flatMap(parseFrames).some((f) => f.kind === KIND.DATA)).toBe(false);
+    expect(new DataView(chunks[1].payload.buffer, chunks[1].payload.byteOffset).getUint32(0, false)).toBe(chunkSize);
+    proto.dispose();
+    await transport.disconnect();
+  });
+
+  it("UPLOAD uses acknowledged UPLOAD_CHUNK writes without FAST_UPLOAD (proto 1.0.x)", async () => {
     const transport = new MockTransport();
     await transport.connect();
     const proto = new HubProtocol(transport);
+    await new Promise((r) => queueMicrotask(r as () => void));
+    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(0x01000000, "MockHub", "1.0.0", "v1.1.0")));
+    expect(proto.features?.flags.FAST_UPLOAD).toBe(false);
+    const fast = vi.fn(async (_c: Uint8Array) => {});
     const frames: { seq: number; kind: number; payload: Uint8Array }[] = [];
     const orig = transport.write.bind(transport);
+    transport.writeFast = fast;
     transport.write = async (c: Uint8Array) => { frames.push(...parseFrames(c)); return orig(c); };
     const data = new Uint8Array(20000).map((_, i) => i & 0xFF);
     await proto.upload("/sd/big.bin", data);
     expect(transport.files["/sd/big.bin"]).toEqual(data);
+    expect(fast).not.toHaveBeenCalled();
     const up = frames.find((f) => f.kind === KIND.UPLOAD)!;
     const chunks = frames.filter((f) => f.kind === KIND.DATA);
     expect(chunks.every((c) => c.seq === up.seq && c.payload.length <= 4 + UPLOAD_CHUNK)).toBe(true);
-    expect(new DataView(chunks[1].payload.buffer).getUint32(0, false)).toBe(UPLOAD_CHUNK);
+    expect(new DataView(chunks[1].payload.buffer, chunks[1].payload.byteOffset).getUint32(0, false)).toBe(UPLOAD_CHUNK);
     proto.dispose();
     await transport.disconnect();
   });

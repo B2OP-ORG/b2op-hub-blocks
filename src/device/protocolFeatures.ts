@@ -5,18 +5,28 @@ import type { CmdId } from "./cmdHelpers";
 /**
  * Per-minor-version feature table for protocol major 1.
  *
- * Each entry lists every message type (KIND) and CMD subtype (CmdId) with a
- * boolean saying whether a device speaking that minor version supports it.
- * The Record types force every KIND / CmdId to appear, so adding a new
- * constant fails to compile until each minor's table says whether it has it.
+ * Each entry lists every message type (KIND), CMD subtype (CmdId) and
+ * capability flag with a boolean saying whether a device speaking that minor
+ * version supports it. The Record types force every KIND / CmdId / flag to
+ * appear, so adding a new one fails to compile until each minor's table says
+ * whether it has it.
  */
 
 export type KindName = keyof typeof KIND;
 export type CmdName = keyof typeof CmdId;
 
+/**
+ * Device capabilities that change how the host may use existing messages
+ * (no new KIND / CmdId). Not to be confused with the frame FLAGS byte.
+ *   FAST_UPLOAD  UPLOAD DATA may go as one BLE write-without-response per
+ *                frame: 8 KiB BLE RX ring, 32-chunk reorder window (1.1).
+ */
+export type FlagName = "FAST_UPLOAD";
+
 export interface ProtoFeatures {
   kinds: Record<KindName, boolean>;
   cmds: Record<CmdName, boolean>;
+  flags: Record<FlagName, boolean>;
 }
 
 const PROTO_1_0: ProtoFeatures = {
@@ -68,11 +78,23 @@ const PROTO_1_0: ProtoFeatures = {
     HUB_GET_BUTTONS:        true,
     HUB_GET_ORIENTATION:    true,
   },
+  flags: {
+    FAST_UPLOAD: false,
+  },
+};
+
+const PROTO_1_1: ProtoFeatures = {
+  kinds: { ...PROTO_1_0.kinds },
+  cmds:  { ...PROTO_1_0.cmds },
+  flags: {
+    FAST_UPLOAD: true,
+  },
 };
 
 /** Index = minor version. */
 export const PROTO_FEATURES: readonly ProtoFeatures[] = [
   PROTO_1_0,
+  PROTO_1_1,
 ];
 
 /**
@@ -90,4 +112,8 @@ export function supportsKind(protoVer: number, kind: KindName): boolean {
 
 export function supportsCmd(protoVer: number, cmd: CmdName): boolean {
   return protoFeatures(protoVer).cmds[cmd];
+}
+
+export function supportsFlag(protoVer: number, flag: FlagName): boolean {
+  return protoFeatures(protoVer).flags[flag];
 }

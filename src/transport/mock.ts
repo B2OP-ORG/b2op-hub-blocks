@@ -1,8 +1,8 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "./types";
 import { KIND, FLAGS_NO_ACK, FLAGS_ECHO, FLAGS_ECHO_RX, ERR_BUSY, makeFrame } from "../device/protocol";
 
-/** Protocol 1.0.0 as sent in HELLO: u32 BE major<<24 | minor<<16 | patch. */
-const PROTO_VER = 0x01000000;
+/** Protocol 1.1.0 as sent in HELLO: u32 BE major<<24 | minor<<16 | patch. */
+const PROTO_VER = 0x01010000;
 const BOARD_NAME = "MockHub";
 const BOARD_VERSION = "1.0.0";
 const FW_VERSION = "v1.1.0";

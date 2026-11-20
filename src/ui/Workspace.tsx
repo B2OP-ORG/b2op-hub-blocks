@@ -5,11 +5,13 @@ import { ReplPanel, ConsoleHeaderActions } from "./ReplPanel";
 import { Drawer, DRAWER_HANDLE } from "./Drawer";
 import { usePalette } from "./theme";
 import { newFileFlow } from "./actions";
+import { isRemoteFile } from "../remote/layout";
 
 // Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
 const BlocklyView = lazy(() => import("./BlocklyView").then((m) => ({ default: m.BlocklyView })));
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
 const ExtraTabView = lazy(() => import("./ExtraTabView").then((m) => ({ default: m.ExtraTabView })));
+const RemoteView = lazy(() => import("./remote/RemoteView").then((m) => ({ default: m.RemoteView })));
 
 function NoFileOpen() {
   const p = usePalette();
@@ -76,6 +78,8 @@ export function Workspace() {
     editor = <Suspense fallback={null}><ExtraTabView tab={extraTab} /></Suspense>;
   } else if (!activeFile) {
     editor = <NoFileOpen />;
+  } else if (isRemoteFile(activeFile.name)) {
+    editor = <Suspense fallback={null}><RemoteView file={activeFile} /></Suspense>;
   } else if (project.type === "blocks") {
     columns = `1fr ${pySize + DRAWER_HANDLE}px`;
     editor = (
@@ -101,7 +105,7 @@ export function Workspace() {
     );
   }
 
-  const isBlocks = !extraTab && !!activeFile && project.type === "blocks";
+  const isBlocks = !extraTab && !!activeFile && !isRemoteFile(activeFile.name) && project.type === "blocks";
 
   return (
     <div

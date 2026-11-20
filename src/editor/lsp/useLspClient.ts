@@ -6,9 +6,10 @@ import type * as monaco from "monaco-editor";
 import { useApp } from "../../state/store";
 import { createWorkerTransport, createWsTransport } from "./transport";
 import { startLspService, type LspService } from "./lspClient";
+import { attachRemoteStub } from "../../remote/sync";
 
 // Module-level singleton so the pyright worker isn't re-spawned on remounts.
-let _singleton: { key: string; service: LspService } | null = null;
+let _singleton: { key: string; service: LspService; detach: () => void } | null = null;
 
 export function useLspService(monacoNs: typeof monaco | null): LspService | null {
   const mode = useApp((s) => s.editorSettings.lspMode);
@@ -31,6 +32,7 @@ export function useLspService(monacoNs: typeof monaco | null): LspService | null
     }
 
     // Tear down old singleton before creating a new one.
+    _singleton?.detach();
     _singleton?.service.dispose();
     _singleton = null;
     setService(null);
@@ -53,7 +55,7 @@ export function useLspService(monacoNs: typeof monaco | null): LspService | null
         return;
       }
       const svc = startLspService(monacoNs, transport);
-      _singleton = { key, service: svc };
+      _singleton = { key, service: svc, detach: attachRemoteStub(svc) };
       setService(svc);
     })();
 

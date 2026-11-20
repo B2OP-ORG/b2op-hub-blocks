@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowUpCircle, Bluetooth, Circle, Code2, Layers,
+  ArrowUpCircle, Bluetooth, Circle, Code2, Gamepad2, Layers,
   Play, Plug, Power, Settings, Square, Upload, Usb, Zap,
 } from "lucide-react";
 import { BleTransport, bleUnavailable } from "../transport/ble";
@@ -14,6 +14,8 @@ import { saveLastDeviceName } from "../project/storage";
 import { runProject, runProjectFile, uploadFile, uploadProject } from "../project/deviceSync";
 import { openContextMenu, openMenuAt } from "./ContextMenu";
 import { switchActiveFileMode } from "./modeSwitch";
+import { applyRemoteEvent } from "../remote/session";
+import { openRemoteController } from "./remote/actions";
 
 interface Props {
   onOpenSettings: () => void;
@@ -116,6 +118,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
         setConnection("disconnected");
         setDevice(null);
         setRunning(false);
+        applyRemoteEvent({ op: "clear", ids: [] });
         appendConsole("info", "[device disconnected]\n");
       });
       // Sinks must be registered before connect() so PROG_START/END frames
@@ -131,6 +134,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
       client.addStdoutSink((t) => appendConsole("out", t));
       client.addStderrSink((t) => appendConsole("err", t));
       client.setEchoSink((f) => appendConsole("info", formatEchoFrame(f) + "\n"));
+      client.setRemoteSink(applyRemoteEvent);
       await client.connect();
       setDevice(client);
       setConnection("connected");
@@ -152,6 +156,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
     setConnBusy(true);
     try {
       await device.disconnect();
+      applyRemoteEvent({ op: "clear", ids: [] });
       setDevice(null);
       setConnection("disconnected");
       setRunning(false);
@@ -327,6 +332,10 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
         {project.type === "blocks"
           ? <><Layers size={13} />{showLabel(3) && " Blocks"}</>
           : <><Code2 size={13} />{showLabel(3) && " Python"}</>}
+      </button>
+      <button type="button" style={{ ...btn, ...iconPad(1) }} onClick={openRemoteController}
+        title="Open the project's remote controller (sliders, buttons, indicators for remote.*)">
+        <Gamepad2 size={13} />{showLabel(1) && " Remote"}
       </button>
 
       <div style={divider} />

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Blocks, ChevronDown, ChevronRight, Copy, Download, Ellipsis, File, FileCode, FilePlus, Folder, FolderOpen,
+  Blocks, ChevronDown, ChevronRight, Copy, Download, Ellipsis, File, FileCode, FilePlus, Folder, FolderOpen, Gamepad2,
   FolderPlus, Import, Pencil, Play, Trash2, Upload,
 } from "lucide-react";
 import { useApp, isFileUnsynced } from "../../state/store";
@@ -14,6 +14,8 @@ import {
   deleteFileFlow, deleteFolderFlow, downloadProjectFile, importFilesFromComputer, newFileFlow, newFolderFlow,
 } from "../actions";
 import { EmptyNote, IconButton, InlineInput, PanelHeader, wrapText } from "./common";
+import { isRemoteFile } from "../../remote/layout";
+import { openRemoteController } from "../remote/actions";
 
 interface DirNode { kind: "dir"; path: string; name: string; children: TreeNode[] }
 interface FileNode { kind: "file"; file: ProjectFile; name: string }
@@ -46,6 +48,7 @@ type Renaming = { kind: "file"; id: string; value: string } | { kind: "dir"; pat
 export function ExplorerTab() {
   const p = usePalette();
   const mfp = useApp((s) => s.mfp);
+  const hasRemote = mfp.files.some((f) => isRemoteFile(f.name));
   const activeFileId = useApp((s) => s.activeFileId);
   const openFileIds = useApp((s) => s.openFileIds);
   const device = useApp((s) => s.device);
@@ -82,6 +85,7 @@ export function ExplorerTab() {
     { label: "New Python file…", icon: <FilePlus size={13} />, onSelect: () => newFileFlow(dir, "python") },
     { label: "New Blocks file…", icon: <Blocks size={13} />, onSelect: () => newFileFlow(dir, "blocks") },
     { label: "New folder…", icon: <FolderPlus size={13} />, onSelect: () => newFolderFlow(dir) },
+    { label: hasRemote ? "Open remote controller" : "New remote controller", icon: <Gamepad2 size={13} />, onSelect: openRemoteController },
     { label: "Import files from computer…", icon: <Import size={13} />, onSelect: () => importFilesFromComputer(dir) },
   ];
 
@@ -94,7 +98,7 @@ export function ExplorerTab() {
   const fileMenu = (e: React.MouseEvent, f: ProjectFile) => {
     openContextMenu(e, [
       { label: "Open", onSelect: () => openFile(f.id) },
-      { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
+      !isRemoteFile(f.name) && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(f.id) },
       "separator",
       { label: "Rename", icon: <Pencil size={13} />, hint: "F2", onSelect: () => setRenaming({ kind: "file", id: f.id, value: baseName(f.name) }) },
@@ -181,8 +185,8 @@ export function ExplorerTab() {
           onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
         >
           <span style={{ ...iconWrap, width: 13 }} />
-          <span style={{ ...iconWrap, color: mode === "blocks" ? "#d97706" : mode === "python" ? p.accent : p.dimText }}>
-            {mode === "blocks" ? <Blocks size={13} /> : mode === "python" ? <FileCode size={13} /> : <File size={13} />}
+          <span style={{ ...iconWrap, color: mode === "blocks" ? "#d97706" : mode === "python" ? p.accent : isRemoteFile(f.name) ? "#db2777" : p.dimText }}>
+            {mode === "blocks" ? <Blocks size={13} /> : mode === "python" ? <FileCode size={13} /> : isRemoteFile(f.name) ? <Gamepad2 size={13} /> : <File size={13} />}
           </span>
           {isRenaming
             ? <InlineInput value={renaming.value} onChange={(v) => setRenaming({ ...renaming, value: v })} onCommit={commitRename} onCancel={() => setRenaming(null)} />

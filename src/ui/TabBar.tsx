@@ -8,6 +8,7 @@ import { openContextMenu } from "./ContextMenu";
 import { usePalette } from "./theme";
 import { showAlert } from "./Dialog";
 import { downloadProjectFile } from "./actions";
+import { isRemoteFile } from "../remote/layout";
 import { InlineInput } from "./sidebar/common";
 
 export function TabBar() {
@@ -41,7 +42,7 @@ export function TabBar() {
     const f = mfp.files.find((x) => x.id === id);
     if (!f) return;
     openContextMenu(e, [
-      { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(id) },
+      !isRemoteFile(f.name) && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(id) },
       "separator",
       { label: "Rename", icon: <Pencil size={13} />, onSelect: () => setRenaming({ id, value: baseName(f.name) }) },

@@ -1,12 +1,34 @@
-# Controls from the app
+# Remote controller
 
-The app connected to your hub — over USB or Bluetooth — can send live values to your program: a slider for speed, a switch for the lights, a text box. Your program can send values back too, for example a sensor reading to show in the app.
+Build a control panel for your program: sliders, switches, buttons, a joystick, a text box — and displays, lamps and gauges that show values your program sends back. It works over USB and Bluetooth and needs hub firmware with protocol 1.2 or newer.
 
-This needs hub firmware with protocol 1.2 or newer.
+## Make the controller
 
-## Read a control
+Click **Remote** in the top bar (or *New remote controller* in the Explorer menu). This opens the project's `controller.remote` file in its own tab.
 
-Every control has a name. Read it with `remote.<name>`:
+- Drag a control or indicator from the bar onto the canvas (or click it to add it below the others).
+- Drag widgets to move them; drag the small square at the corner of the selected widget to resize it. Arrow keys nudge, Delete removes.
+- Select a widget to set its **name** and **id** and its options (range, type, colour, …). The panel also shows the Python code that uses it.
+
+**Controls** are values your program reads. **Indicators** show values your program sends. Names and ids must be unique among the controls, and among the indicators.
+
+The controller is saved with the project and uploaded to the hub with the other files.
+
+## Run it
+
+Press **Run** in the controller tab. The editor tells the hub about every control, uploads changed files and starts `main.py`. Now move the controls — your program sees the new values right away.
+
+You can switch to other tabs while it runs. Press **Edit** to stop the program and change the layout. When the program ends by itself, the controller goes back to edit mode too.
+
+## In blocks
+
+The **Remote** category has a block for every control (`remote speed`) and every indicator (`set indicator level to …`). Use **Create remote name…** to add a new control or indicator without leaving the blocks — it is added to the controller.
+
+A program may use a name that the controller doesn't have (for example after a widget was deleted). The block keeps it and shows a warning.
+
+## Read a control in Python
+
+Every control has a name. Read it with `remote.<name>` — the editor knows the names and types of your controller's controls:
 
 ```python
 import hub, remote, time
@@ -40,9 +62,9 @@ if age is None or age > 500:
 
 ::: api remote.age_ms
 
-## Send values to the app
+## Send values to an indicator
 
-Tell the app about each value once, then send it as often as you like:
+Tell the app about each value once — with the name of the indicator — then send it as often as you like. The id is your choice; the controller shows the one it would use for each indicator:
 
 ```python
 import hub, remote, time

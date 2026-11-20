@@ -17,6 +17,11 @@ export interface LspService {
   dispose(): void;
   openDocument(model: monaco.editor.ITextModel): void;
   closeDocument(uri: string): void;
+  /**
+   * Give the server the text of a file that has no editor (e.g. a generated
+   * stub). The open-document text overrides the server's own copy.
+   */
+  setVirtualFile(uri: string, text: string): void;
 }
 
 export function startLspService(
@@ -282,6 +287,20 @@ export function startLspService(
     semanticTokensChanged.fire();
   }
 
+  const virtualFiles = new Map<string, { version: number; text: string }>();
+  function setVirtualFile(uri: string, text: string): void {
+    const cur = virtualFiles.get(uri);
+    if (cur?.text === text) return;
+    if (!cur) {
+      virtualFiles.set(uri, { version: 1, text });
+      notify("textDocument/didOpen", { textDocument: { uri, languageId: LANGUAGE_ID, version: 1, text } });
+      return;
+    }
+    const version = cur.version + 1;
+    virtualFiles.set(uri, { version, text });
+    notify("textDocument/didChange", { textDocument: { uri, version }, contentChanges: [{ text }] });
+  }
+
   function closeDocument(uri: string): void {
     const listener = openModels.get(uri);
     if (!listener) return;
@@ -306,7 +325,7 @@ export function startLspService(
     pending.clear();
   }
 
-  return { dispose, openDocument, closeDocument };
+  return { dispose, openDocument, closeDocument, setVirtualFile };
 }
 
 // ── LSP wire types (subset used) ─────────────────────────────────────────────

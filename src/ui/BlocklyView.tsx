@@ -2,7 +2,9 @@ import * as Blockly from "blockly/core";
 import { useEffect, useRef } from "react";
 import { registerAllBlocks } from "../blocks";
 import { workspaceToPython } from "../codegen/pythonGen";
-import { buildToolbox } from "../blocks/toolbox";
+import { buildToolbox, remoteFlyout, REMOTE_CATEGORY, REMOTE_CREATE_BUTTON } from "../blocks/toolbox";
+import { FieldRemoteName } from "../blocks/defs/remote";
+import { createRemoteName, onRemoteSymbolsChange } from "../remote/registry";
 import { friendlyTheme } from "./blocklyTheme";
 import "./blockly-theme.css";
 
@@ -71,6 +73,17 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       move: { scrollbars: true, drag: true, wheel: false },
     });
     workspaceRef.current = workspace;
+    workspace.registerToolboxCategoryCallback(REMOTE_CATEGORY, () => remoteFlyout() as Blockly.utils.toolbox.FlyoutDefinition);
+    workspace.registerButtonCallback(REMOTE_CREATE_BUTTON, () => {
+      void createRemoteName().then((sym) => {
+        if (!sym) return;
+        // The dialog closed the flyout: reopen the Remote category to show the new block.
+        const tb = workspace.getToolbox() as Blockly.Toolbox | null;
+        const item = tb?.getToolboxItems().find((i) => (i as Blockly.ToolboxCategory).getName?.() === "Remote");
+        if (tb && item) tb.setSelectedItem(item);
+        else workspace.refreshToolboxSelection();
+      });
+    });
     if (initialState) {
       try {
         Blockly.serialization.workspaces.load(initialState as object, workspace);
@@ -87,6 +100,19 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
     // Fire once for initial preview.
     queueMicrotask(listener);
 
+    // Remote controller names changed (layout edited): relabel / re-warn remote
+    // blocks, refresh an open Remote flyout and regenerate (indicator ids / types).
+    const offRemote = onRemoteSymbolsChange(() => {
+      for (const b of workspace.getAllBlocks(false)) {
+        const f = b.getField("NAME");
+        if (!(f instanceof FieldRemoteName)) continue;
+        f.forceRerender();
+        (b as unknown as { onchange?: (e: unknown) => void }).onchange?.call(b, null);
+      }
+      workspace.refreshToolboxSelection();
+      listener();
+    });
+
     // Initial toolbox chip styling + flyout scale.
     const restyle = () => {
       styleToolboxCategories(host);
@@ -102,6 +128,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
     observer?.observe(toolboxDiv!, { attributes: true, attributeFilter: ["style"], subtree: true, childList: true });
 
     return () => {
+      offRemote();
       observer?.disconnect();
       workspace.removeChangeListener(listener);
       workspace.dispose();

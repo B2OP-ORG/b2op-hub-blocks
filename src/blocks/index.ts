@@ -10,6 +10,7 @@ import { ADVANCED_MOTOR_BLOCKS } from "./defs/advanced_motor";
 import { LVGL_BLOCKS } from "./defs/lvgl";
 import { NEOPIXEL_BLOCKS } from "./defs/neopixel";
 import { RAW_BLOCKS } from "./defs/raw";
+import { REMOTE_BLOCKS, registerRemoteField } from "./defs/remote";
 import { registerHubGenerators } from "./generators/hub";
 import { registerMotorGenerators } from "./generators/motor";
 import { registerSensorGenerators } from "./generators/sensor";
@@ -18,6 +19,7 @@ import { registerAdvancedMotorGenerators } from "./generators/advanced_motor";
 import { registerLvglGenerators } from "./generators/lvgl";
 import { registerNeopixelGenerators } from "./generators/neopixel";
 import { registerRawGenerators } from "./generators/raw";
+import { registerRemoteGenerators } from "./generators/remote";
 import { registerLoopSleepOverrides } from "./generators/loops";
 
 let registered = false;
@@ -27,6 +29,7 @@ export function registerAllBlocks(): void {
   if (registered) return;
   registered = true;
   Blockly.setLocale(En as unknown as { [key: string]: string });
+  registerRemoteField();
   const defs = [
     ...EVENT_BLOCKS,
     ...HUB_BLOCKS,
@@ -37,6 +40,7 @@ export function registerAllBlocks(): void {
     ...LVGL_BLOCKS,
     ...NEOPIXEL_BLOCKS,
     ...RAW_BLOCKS,
+    ...REMOTE_BLOCKS,
   ];
   Blockly.defineBlocksWithJsonArray(defs as unknown as object[]);
   // Strip the leading/trailing quote glyphs from the built-in `text` block by
@@ -55,6 +59,7 @@ export function registerAllBlocks(): void {
   registerLvglGenerators(pythonGenerator);
   registerNeopixelGenerators(pythonGenerator);
   registerRawGenerators(pythonGenerator);
+  registerRemoteGenerators(pythonGenerator);
   registerLoopSleepOverrides(pythonGenerator);
 }
 

@@ -218,8 +218,8 @@ async function startProgram(path: string): Promise<void> {
   }
 }
 
-/** Run the active project's main.py (uploading changed files first). */
-export async function runProject(): Promise<void> {
+/** Run the active project's main.py (uploading changed files first). Resolves to whether it started. */
+export async function runProject(): Promise<boolean> {
   const s = useApp.getState();
   const p = s.mfp;
   const main = p.files.find((f) => f.name === "main.py");
@@ -228,13 +228,15 @@ export async function runProject(): Promise<void> {
       "No main.py",
       `Project "${p.title}" has no main.py at its top level. Create one, or right-click Run → "Run active file".`,
     );
-    return;
+    return false;
   }
   try {
     await syncProject(p.id, { mode: "changed" });
     await startProgram(devicePathFor(p.title, main.name));
+    return true;
   } catch (e) {
     await report("run", e);
+    return false;
   }
 }
 

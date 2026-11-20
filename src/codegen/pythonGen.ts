@@ -2,6 +2,7 @@ import type { Block, Workspace } from "blockly";
 import { pythonGenerator } from "blockly/python";
 import { registerAllBlocks } from "../blocks";
 import { resetSetup } from "../blocks/setup";
+import { resetRemoteGen } from "../blocks/generators/remote";
 import { PROJECT_FORMAT, PROJECT_VERSION } from "../project/format";
 
 registerAllBlocks();
@@ -34,6 +35,7 @@ function indentBody(text: string): string {
  */
 export function workspaceToPython(workspace: Workspace): string {
   resetSetup();
+  resetRemoteGen();
   const gen = pythonGenerator;
   gen.init(workspace);
 

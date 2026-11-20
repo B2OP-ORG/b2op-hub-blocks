@@ -25,6 +25,7 @@ B2OP-Hub-blocks is a browser-based IDE for programming B2OP Hub (ESP32-S3) micro
 - **Monaco editor** (`MonacoView.tsx`) — Python text editor with syntax highlighting and optional LSP-powered completions. Toggled per-project between Blocks and Python modes.
 - **Header & tabs** (`Header.tsx`, `TabBar.tsx`) — project tabs, run/stop controls, mode toggle, connection status.
 - **Console panel** (`ConsolePanel.tsx`) — streams `OUT` and `STDERR` frames from the hub in real time.
+- **Remote controller** (`src/ui/remote/`, `src/remote/`) — `.remote` project files (JSON layout of sliders, switches, buttons, joysticks, text inputs, displays, LEDs, gauges) edited on a canvas in their own tab. See *Remote controller* below.
 - **State** (`src/state/store.ts`) — single Zustand store; all UI components read from it. Device client, project state, and settings live here.
 
 ### Codegen & project layer (`src/codegen/`, `src/project/`)
@@ -80,7 +81,20 @@ Two modes, identical wire format (JSON-RPC over a message channel):
 
 The client (`lspClient.ts`) is custom — it deliberately avoids `monaco-languageclient` to prevent being forced onto `@codingame/monaco-vscode-editor-api` instead of the standard `monaco-editor` package.
 
-Stubs (`src/editor/lsp/stubs/files/`) are vendored from `Lpf2-micropython` and cover `hub`, `lpf2`, `lvgl`, and MicroPython stdlib. Kept in sync via `npm run sync-stubs`.
+Stubs (`src/editor/lsp/stubs/files/`) are vendored from `Lpf2-micropython` and cover `hub`, `lpf2`, `remote`, `lvgl`, and MicroPython stdlib (`remote.pyi` gets the project's controls appended at runtime, see *Remote controller*). Kept in sync via `npm run sync-stubs`.
+
+---
+
+## Remote controller (`src/remote/`, `src/ui/remote/`)
+
+Live controls for user programs over the REMOTE protocol kind (hub ≥ 1.2, see [HUB_PROTOCOL.md](HUB_PROTOCOL.md)).
+
+- **Layout file.** A project has one remote controller, `controller.remote` (`DEFAULT_REMOTE_FILE`), opened from the header *Remote* button or the explorer menu and created on first use. It is an ordinary project file (uploaded with the project — the project travels with the hub). The code treats layouts as a list (`projectSymbols(files)` reads every `*.remote`), so more can be added later. Format: `{ format: "b2op-remote", version: 1, widgets: Widget[] }` (`layout.ts`); each widget has a name, a protocol id, position / size on an 8 px grid and kind options.
+- **Symbols.** Controls (slider int/float, switch / button bool, text input str, joystick → `name_x` / `name_y` ints) are host → hub values read as `remote.<name>`. Indicators (display, LED, gauge) show program messages (`remote.create_message(id, name, type)` + `remote.send(id, v)`), matched **by name**. Controls and indicators are separate id spaces; names / ids must be unique per role across the project (`symbolConflicts`).
+- **Registry** (`registry.ts`, synced from the store by `sync.ts`) holds the current symbols for code that can't import the store: block fields, generators, the LSP stub.
+- **Run mode** (`session.ts`, outside React so other tabs don't stop it): CLEAR → DEFINE all controls → SET start values (acknowledged) → upload changed files + run `main.py`. Then changed controls go out as NO_ACK SETs (sliders / joysticks merged per animation frame, buttons immediately) and every value is resent every 250 ms (repairs SETs the hub dropped as reordered, keeps `remote.age_ms()` fresh). Back to edit mode = STOP + CLEAR; a program that ends by itself (or a disconnect) also returns to edit mode. Program messages are collected for the whole connection (`applyRemoteEvent`, installed as the device's remote sink).
+- **Blocks.** The *Remote* toolbox category is dynamic (`remoteFlyout()`): a "Create remote name…" button (adds a widget to the layout), `remote [name]` reporters for controls and `set indicator [name] to (v)` for indicators. `FieldRemoteName` keeps names the layout doesn't define (shown as "name (not defined)" with a warning). The generator emits `remote.create_message(...)` for every indicator used, with id / type from the layout (undefined names get a free id and a type guessed from the value block), and wraps values in `int()` / `str()` where the hub needs it. `pythonToBlocks` reads them back.
+- **Python stubs.** `remoteStubText()` appends one typed attribute per control to the firmware's `remote.pyi`; `attachRemoteStub()` pushes it to the language server as an open virtual document (`LspService.setVirtualFile`) at the stub path, updated whenever the layout changes.
 
 ---
 

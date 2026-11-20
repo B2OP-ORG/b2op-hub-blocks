@@ -1,4 +1,5 @@
 import { stripBlocksHeader } from "./format";
+import { REMOTE_MODULE_NAMES } from "../remote/layout";
 /**
  * Best-effort Python → Blockly translator used when switching a Python project
  * back to Blocks mode. Handles:
@@ -10,6 +11,8 @@ import { stripBlocksHeader } from "./format";
  * - Expressions: numbers, strings, booleans, variables, `+ - * / % **`,
  *   comparisons (`== != < > <= >=`), `and/or/not`, list literals `[a,b,c]`,
  *   `len(x)`, unary minus, parenthesized groups.
+ * - Remote controller: `remote.<name>` / `remote.get("name")` reads and
+ *   `remote.send(id, v)` (id → name from the `remote.create_message` lines).
  *
  * Anything unsupported becomes a `raw_python` block so the code still runs.
  */
@@ -144,6 +147,10 @@ class ExprParser {
     return false;
   }
   atEnd(): boolean { return this.pos >= this.toks.length; }
+
+  parseRemote(): BlockSpec | null {
+    return parseRemoteRead(this);
+  }
 
   parse(): BlockSpec | null {
     const r = this.parseOr();
@@ -314,6 +321,7 @@ class ExprParser {
     if (t.kind === "NAME") {
       const name = t.value;
       this.pos++;
+      if (name === "remote" && this.match("OP", ".")) return this.parseRemote();
       if (this.match("OP", "(")) {
         this.pos++;
         const args: BlockSpec[] = [];
@@ -334,6 +342,24 @@ class ExprParser {
     }
     return null;
   }
+}
+
+/** `remote.<name>` / `remote.get("name")` after `remote` was consumed (at "."). */
+function parseRemoteRead(p: ExprParser): BlockSpec | null {
+  if (!p.eat("OP", ".")) return null;
+  const attr = p.peek();
+  if (!attr || attr.kind !== "NAME") return null;
+  p.pos++;
+  if (attr.value === "get") {
+    if (!p.eat("OP", "(")) return null;
+    const arg = p.peek();
+    if (!arg || arg.kind !== "STR") return null;
+    p.pos++;
+    if (!p.eat("OP", ")")) return null; // a default value has no block form
+    return { type: "remote_get", fields: { NAME: arg.value } };
+  }
+  if (REMOTE_MODULE_NAMES.has(attr.value) || p.match("OP", "(")) return null;
+  return { type: "remote_get", fields: { NAME: attr.value } };
 }
 
 function callToBlock(name: string, args: BlockSpec[]): BlockSpec | null {
@@ -513,6 +539,7 @@ function isPreambleBoilerplate(line: string): boolean {
   if (/^import\s/.test(line)) return true;
   if (/^from\s/.test(line)) return true;
   if (/^#\s*b2op-hub-blocks\s+v/.test(line)) return true;
+  if (REMOTE_DECL_RE.test(line)) return true;
   if (line === "hub.lcd.init()") return true;
   if (line === "_scr = lv.screen_active()") return true;
   if (line === "leds = None") return true;
@@ -620,6 +647,38 @@ interface Ctx {
   portKind: Map<string, DeviceKind>;
   keepRaw: Set<string>;
   vars: Set<string>;
+  /** Program message id → name, from `remote.create_message(...)` lines. */
+  remoteMsgs: Map<number, string>;
+}
+
+/** A generated `remote.create_message(id, "name", remote.TYPE)` declaration. */
+const REMOTE_DECL_RE = /^remote\.create_message\(\s*(\d+)\s*,\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")\s*,\s*remote\.(?:INT|FLOAT|BOOL|STR)\s*\)$/;
+
+function unescapePy(s: string): string {
+  return s.replace(/\\(.)/g, (_, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+}
+
+function scanRemoteDecls(lines: Line[]): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const l of lines) {
+    const m = REMOTE_DECL_RE.exec(l.text);
+    if (m) out.set(Number(m[1]), unescapePy(m[2] ?? m[3]));
+  }
+  return out;
+}
+
+/** `remote.send(id, value)` → set-indicator block (the int()/str() wrapper is regenerated). */
+function matchRemoteSend(line: string, ctx: Ctx): BlockSpec | null {
+  const m = /^remote\.send\(\s*(\d+)\s*,\s*(.+)\)$/.exec(line);
+  if (!m) return null;
+  const name = ctx.remoteMsgs.get(Number(m[1]));
+  if (name === undefined) return null;
+  let expr = m[2].trim();
+  const wrap = /^(?:int|str)\((.*)\)$/.exec(expr);
+  if (wrap && parseExpr(wrap[1], new Set())) expr = wrap[1];
+  const value = valueInput("VALUE", expr, ctx.vars);
+  if (!value) return null;
+  return { type: "remote_set_indicator", fields: { NAME: name }, inputs: value };
 }
 
 function chunkText(g: Group): string {
@@ -654,6 +713,8 @@ function translateGroup(g: Group, ctx: Ctx): BlockSpec | null {
     if (block) return block;
     const np = matchNeopixelStatement(t, ctx.vars);
     if (np) return np;
+    const rs = matchRemoteSend(t, ctx);
+    if (rs) return rs;
   }
 
   // Compound: while
@@ -1032,6 +1093,7 @@ export function pythonToBlocks(source: string): Translation {
     portKind: new Map(),
     keepRaw: new Set(),
     vars: new Set(),
+    remoteMsgs: scanRemoteDecls(lines),
   };
 
   const { groups } = groupAt(lines, 0, lines.length, 0);

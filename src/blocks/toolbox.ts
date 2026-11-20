@@ -5,6 +5,39 @@ import { ADVANCED_HUB_BLOCKS } from "./defs/advanced_hub";
 import { ADVANCED_MOTOR_BLOCKS } from "./defs/advanced_motor";
 import { LVGL_BLOCKS } from "./defs/lvgl";
 import { NEOPIXEL_BLOCKS } from "./defs/neopixel";
+import { REMOTE_COLOUR } from "./defs/remote";
+import { controlSymbols, indicatorSymbols } from "../remote/registry";
+import { RemoteType } from "../device/protocol";
+
+/** Dynamic toolbox category: blocks for the project's remote controller names. */
+export const REMOTE_CATEGORY = "REMOTE_CONTROLLER";
+/** Flyout button key for "Create remote name…". */
+export const REMOTE_CREATE_BUTTON = "CREATE_REMOTE_NAME";
+
+const VALUE_SHADOW: Record<RemoteType, { type: string; fields: Record<string, string | number> }> = {
+  [RemoteType.Int]: { type: "math_number", fields: { NUM: 0 } },
+  [RemoteType.Float]: { type: "math_number", fields: { NUM: 0 } },
+  [RemoteType.Bool]: { type: "logic_boolean", fields: { BOOL: "TRUE" } },
+  [RemoteType.Str]: { type: "text", fields: { TEXT: "" } },
+};
+
+/** Flyout contents of the Remote category (rebuilt every time it opens). */
+export function remoteFlyout(): object[] {
+  const out: object[] = [{ kind: "button", text: "Create remote name…", callbackkey: REMOTE_CREATE_BUTTON }];
+  const controls = controlSymbols();
+  const indicators = indicatorSymbols();
+  if (!controls.length && !indicators.length) {
+    out.push({ kind: "label", text: "Add controls in the remote controller tab." });
+    return out;
+  }
+  if (controls.length) out.push({ kind: "label", text: "Controls" });
+  for (const s of controls) out.push({ kind: "block", type: "remote_get", fields: { NAME: s.name } });
+  if (indicators.length) out.push({ kind: "label", text: "Indicators" });
+  for (const s of indicators) {
+    out.push({ kind: "block", type: "remote_set_indicator", fields: { NAME: s.name }, inputs: { VALUE: { shadow: VALUE_SHADOW[s.type] } } });
+  }
+  return out;
+}
 
 interface ToolboxDef {
   advanced?: boolean;
@@ -197,6 +230,7 @@ export function buildToolbox(showAdvanced: boolean) {
       categoryOf(SENSOR_BLOCKS, "Sensor", "260", showAdvanced),
       ...screenCategory,
       ...neopixelCategory,
+      { kind: "category", name: "Remote", colour: REMOTE_COLOUR, custom: REMOTE_CATEGORY },
       { kind: "sep" },
       controlCategory,
       ...STANDARD_CATEGORIES,

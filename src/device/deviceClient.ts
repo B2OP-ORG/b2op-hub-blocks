@@ -1,5 +1,5 @@
 import type { Transport } from "../transport/types";
-import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink } from "./protocol";
+import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink, type RemoteDef, type RemoteSetEntry, type RemoteSink } from "./protocol";
 import type { CmdName, KindName, ProtoFeatures } from "./protocolFeatures";
 import { sanitizeFilename } from "../utils/sanitize";
 import { useApp } from "../state/store";
@@ -285,6 +285,31 @@ export class DeviceClient {
 
   setEchoSink(sink: EchoSink | null): void {
     this.proto.setEchoSink(sink);
+  }
+
+  /** REMOTE kind (hub protocol ≥ 1.2): controls for the `remote` module. */
+  get supportsRemote(): boolean {
+    return this.supportsKind("REMOTE");
+  }
+
+  /** Define (or redefine) controls; see HubProtocolV1.remoteDefine(). */
+  remoteDefine(defs: RemoteDef[]): Promise<void> {
+    return this.proto.remoteDefine(defs);
+  }
+
+  /** Send control values (NO_ACK stream unless `ack`). */
+  remoteSet(entries: RemoteSetEntry[], opts: { ack?: boolean } = {}): Promise<void> {
+    return this.proto.remoteSet(entries, opts);
+  }
+
+  /** Remove the given controls, or all of them. */
+  remoteClear(ids?: number[]): Promise<void> {
+    return this.proto.remoteClear(ids);
+  }
+
+  /** Program messages (remote.create_message / remote.send) from the hub. */
+  setRemoteSink(sink: RemoteSink | null): void {
+    this.proto.setRemoteSink(sink);
   }
 
   async cmd(cmdId: number, args: Uint8Array = new Uint8Array()): Promise<Uint8Array> {

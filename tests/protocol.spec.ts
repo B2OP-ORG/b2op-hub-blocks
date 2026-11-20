@@ -3,11 +3,12 @@ import {
   validatePath, UploadError, HubProtocolV1, HubProtocol,
   parseProtoVersion, formatProtoVersion, protoVersionError,
   KIND, makeFrame, decodeVarint, UPLOAD_CHUNK, DATA_FRAME_OVERHEAD, CancelledError, DEFAULT_TIMEOUT_MS,
-  FLAGS_ECHO, FLAGS_ECHO_RX, formatEchoFrame, UnsupportedFeatureError,
-  type ProgramEndInfo, type EchoFrame,
+  FLAGS_ECHO, FLAGS_ECHO_RX, FLAGS_NO_ACK, formatEchoFrame, UnsupportedFeatureError,
+  REMOTE_OP, RemoteType, encodeRemoteDef, encodeRemoteSet, encodeRemoteValue, packRemote, decodeRemote,
+  type ProgramEndInfo, type EchoFrame, type RemoteEvent,
 } from "../src/device/protocol";
 import { MockTransport } from "../src/transport/mock";
-import { PROTO_FEATURES, protoFeatures, supportsFlag } from "../src/device/protocolFeatures";
+import { PROTO_FEATURES, protoFeatures, supportsFlag, supportsKind } from "../src/device/protocolFeatures";
 import { CmdId } from "../src/device/cmdHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -237,7 +238,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(0x01010000);
+    expect(proto.protocolVersion).toBe(0x01020000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -250,7 +251,7 @@ describe("HELLO / requestHello", () => {
     expect(proto.boardName).toBe("MockHub");
     expect(proto.boardVersion).toBe("1.0.0");
     expect(proto.fwVersion).toBe("v1.1.0");
-    expect(proto.protocolVersion).toBe(0x01010000);
+    expect(proto.protocolVersion).toBe(0x01020000);
     proto.dispose();
     await transport.disconnect();
   });
@@ -302,7 +303,7 @@ describe("protocol feature table", () => {
     try {
       const write = vi.spyOn(transport, "write");
       await expect(proto.mv("/sd/a", "/sd/b")).rejects.toBeInstanceOf(UnsupportedFeatureError);
-      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toThrow(/MV is not supported.*v1\.1\.0/);
+      await expect(proto.mv("/sd/a", "/sd/b")).rejects.toThrow(/MV is not supported.*v1\.2\.0/);
       await expect(proto.cmd(Uint8Array.of(CmdId.HUB_GET_BATTERY))).rejects.toThrow(/HUB_GET_BATTERY/);
       expect(write).not.toHaveBeenCalled();
     } finally {
@@ -950,6 +951,164 @@ describe("BLE echo", () => {
     ]);
     expect(formatEchoFrame(echoes[2])).toBe('[BLE host→hub] READ seq=07 "/sd/x.py"');
     expect(formatEchoFrame(echoes[0])).toBe("[BLE hub→host] OK seq=00 0B");
+    proto.dispose();
+  });
+});
+
+// ── REMOTE (protocol 1.2) ─────────────────────────────────────────────────────
+
+/** Proto connected to a mock that has sent HELLO (features known). */
+async function connected(): Promise<{ transport: MockTransport; proto: HubProtocol }> {
+  const transport = new MockTransport();
+  const proto = new HubProtocol(transport);
+  await transport.connect();
+  await new Promise((r) => queueMicrotask(r as () => void));
+  return { transport, proto };
+}
+
+describe("REMOTE", () => {
+  it("is gated to protocol minor 2", () => {
+    expect(supportsKind(0x01010000, "REMOTE")).toBe(false);
+    expect(supportsKind(0x01020000, "REMOTE")).toBe(true);
+  });
+
+  it("rejects locally on a 1.1 hub", async () => {
+    const { transport, proto } = await connected();
+    inject(transport, makeFrame(KIND.HELLO, 0xFF, 0, helloPayload(0x01010000, "MockHub", "1.0.0")));
+    await expect(proto.remoteDefine([{ id: 0, type: RemoteType.Int, name: "speed" }])).rejects.toBeInstanceOf(UnsupportedFeatureError);
+    await expect(proto.remoteSet([{ id: 0, type: RemoteType.Int, value: 1 }])).rejects.toThrow(/REMOTE is not supported/);
+    proto.dispose();
+  });
+
+  it("encodes the protocol.rst example byte for byte", () => {
+    const [def] = packRemote(REMOTE_OP.DEFINE, [
+      encodeRemoteDef({ id: 0, type: RemoteType.Int, name: "speed" }),
+      encodeRemoteDef({ id: 1, type: RemoteType.Float, name: "gain" }),
+    ]);
+    expect(Array.from(def)).toEqual([1, 0, 0, 5, ...enc.encode("speed"), 1, 1, 4, ...enc.encode("gain")]);
+    const [set] = packRemote(REMOTE_OP.SET, [
+      encodeRemoteSet({ id: 0, type: RemoteType.Int, value: 40 }),
+      encodeRemoteSet({ id: 1, type: RemoteType.Float, value: 0.5 }),
+    ]);
+    expect(Array.from(set)).toEqual([2, 0, 0, 0, 0, 0x28, 1, 0, 0, 0, 0x3f]);
+  });
+
+  it("validates names, ids and clamps values", () => {
+    expect(() => encodeRemoteDef({ id: 0, type: RemoteType.Int, name: "" })).toThrow(/bad name/);
+    expect(() => encodeRemoteDef({ id: 0, type: RemoteType.Int, name: "x".repeat(33) })).toThrow(/bad name/);
+    expect(() => encodeRemoteDef({ id: 256, type: RemoteType.Int, name: "a" })).toThrow(/bad id/);
+    expect(Array.from(encodeRemoteValue(RemoteType.Int, 1e12))).toEqual([0x7F, 0xFF, 0xFF, 0xFF]);
+    expect(Array.from(encodeRemoteValue(RemoteType.Int, 2.6))).toEqual([0, 0, 0, 3]);
+    expect(Array.from(encodeRemoteValue(RemoteType.Bool, true))).toEqual([1]);
+    // Str is cut to 255 bytes at a UTF-8 boundary.
+    const s = encodeRemoteValue(RemoteType.Str, "é".repeat(200));
+    expect(s[0]).toBe(254);
+    expect(s.length).toBe(255);
+  });
+
+  it("packs entries into frames without splitting one", () => {
+    const entries = Array.from({ length: 40 }, (_, id) => encodeRemoteDef({ id, type: RemoteType.Int, name: "n".repeat(20) }));
+    const frames = packRemote(REMOTE_OP.DEFINE, entries, 100);
+    expect(frames.every((f) => f.length <= 100 && f[0] === REMOTE_OP.DEFINE)).toBe(true);
+    expect(frames.reduce((n, f) => n + (f.length - 1) / 23, 0)).toBe(40);
+  });
+
+  it("DEFINE / SET / CLEAR reach the device store", async () => {
+    const { transport, proto } = await connected();
+    await proto.remoteDefine([
+      { id: 0, type: RemoteType.Int, name: "speed" },
+      { id: 1, type: RemoteType.Bool, name: "light" },
+      { id: 2, type: RemoteType.Str, name: "msg" },
+      { id: 3, type: RemoteType.Float, name: "gain" },
+    ]);
+    await proto.remoteSet([
+      { id: 0, type: RemoteType.Int, value: -40 },
+      { id: 1, type: RemoteType.Bool, value: true },
+      { id: 2, type: RemoteType.Str, value: "hé" },
+      { id: 3, type: RemoteType.Float, value: 0.25 },
+    ], { ack: true });
+    expect([...transport.remoteControls.values()].map((c) => [c.name, c.value]))
+      .toEqual([["speed", -40], ["light", true], ["msg", "hé"], ["gain", 0.25]]);
+    await proto.remoteClear([1]);
+    expect(transport.remoteControls.has(1)).toBe(false);
+    await proto.remoteClear();
+    expect(transport.remoteControls.size).toBe(0);
+    proto.dispose();
+  });
+
+  it("streams SET with NO_ACK, one fast write per frame within the MTU", async () => {
+    const { transport, proto } = await connected();
+    await proto.remoteDefine([{ id: 0, type: RemoteType.Int, name: "speed" }, { id: 1, type: RemoteType.Str, name: "s" }]);
+    const fast: Uint8Array[] = [];
+    const slow: Uint8Array[] = [];
+    const origWrite = transport.write.bind(transport);
+    transport.writeFast = async (c: Uint8Array) => { fast.push(c); return origWrite(c); };
+    transport.write = async (c: Uint8Array) => { slow.push(c); return origWrite(c); };
+    const replies: Uint8Array[] = [];
+    transport.onData((c) => replies.push(c));
+    await proto.remoteSet([{ id: 0, type: RemoteType.Int, value: 7 }]);
+    // Frame bigger than one GATT write (MTU 185): acknowledged write instead.
+    await proto.remoteSet([{ id: 1, type: RemoteType.Str, value: "x".repeat(200) }]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fast).toHaveLength(1);
+    expect(slow).toHaveLength(1);
+    const frames = [...fast, ...slow].flatMap(parseFrames);
+    expect(frames.every((f) => f.kind === KIND.REMOTE)).toBe(true);
+    expect(fast[0][3]).toBe(FLAGS_NO_ACK); // [7E][len][seq][flags]…
+    expect(transport.remoteControls.get(0)!.value).toBe(7);
+    expect(replies).toHaveLength(0); // NO_ACK: no reply
+    proto.dispose();
+  });
+
+  it("device skips a SET older than the last applied one", async () => {
+    const { transport, proto } = await connected();
+    await proto.remoteDefine([{ id: 0, type: RemoteType.Int, name: "speed" }]);
+    const set = (seq: number, v: number) =>
+      (transport as unknown as { dispatch(s: number, f: number, k: number, p: Uint8Array): void })
+        .dispatch(seq, FLAGS_NO_ACK, KIND.REMOTE, packRemote(REMOTE_OP.SET, [encodeRemoteSet({ id: 0, type: RemoteType.Int, value: v })])[0]);
+    set(10, 0);
+    set(9, 50); // late
+    expect(transport.remoteControls.get(0)!.value).toBe(0);
+    set(11, 20);
+    expect(transport.remoteControls.get(0)!.value).toBe(20);
+    proto.dispose();
+  });
+
+  it("surfaces device ERR", async () => {
+    const { proto } = await connected();
+    await expect(proto.remoteSet([{ id: 9, type: RemoteType.Int, value: 1 }], { ack: true })).rejects.toThrow("REMOTE: unknown id 9");
+    proto.dispose();
+  });
+
+  it("decodes program messages and tracks their types", async () => {
+    const { transport, proto } = await connected();
+    const events: RemoteEvent[] = [];
+    proto.setRemoteSink((e) => events.push(e));
+    transport.emitRemote(packRemote(REMOTE_OP.DEFINE, [
+      encodeRemoteDef({ id: 0, type: RemoteType.Float, name: "distance" }),
+      encodeRemoteDef({ id: 1, type: RemoteType.Str, name: "state" }),
+    ])[0]);
+    transport.emitRemote(packRemote(REMOTE_OP.SET, [
+      encodeRemoteSet({ id: 0, type: RemoteType.Float, value: 12.5 }),
+      encodeRemoteSet({ id: 1, type: RemoteType.Str, value: "ok" }),
+    ])[0]);
+    transport.emitRemote(Uint8Array.of(REMOTE_OP.CLEAR));
+    expect(events).toEqual([
+      { op: "define", defs: [{ id: 0, type: RemoteType.Float, name: "distance" }, { id: 1, type: RemoteType.Str, name: "state" }] },
+      { op: "set", values: [{ id: 0, value: 12.5 }, { id: 1, value: "ok" }] },
+      { op: "clear", ids: [] },
+    ]);
+    // After CLEAR the types are gone: a SET for id 0 can't be decoded.
+    expect(decodeRemote(Uint8Array.of(REMOTE_OP.SET, 0, 1, 2, 3, 4), new Map())).toEqual({ op: "set", values: [] });
+    proto.dispose();
+  });
+
+  it("requestHello clears program messages before the device resends them", async () => {
+    const { proto } = await connected();
+    const events: RemoteEvent[] = [];
+    proto.setRemoteSink((e) => events.push(e));
+    await proto.requestHello();
+    expect(events[0]).toEqual({ op: "clear", ids: [] });
     proto.dispose();
   });
 });

@@ -19,7 +19,7 @@ export interface Guide {
 
 const ORDER: { group: string; ids: string[] }[] = [
   { group: "Start here", ids: ["getting-started", "program-lifecycle", "examples"] },
-  { group: "The hub", ids: ["ports", "light", "buttons", "motion-sensor", "screen", "sound", "battery", "i2c", "board"] },
+  { group: "The hub", ids: ["ports", "light", "buttons", "motion-sensor", "screen", "sound", "battery", "i2c", "board", "app-controls"] },
   { group: "LEGO devices", ids: ["lego-devices", "motors", "sensors", "colors-and-constants", "remote-control", "port-expander", "virtual-ports", "pretend-to-be-a-hub"] },
 ];
 

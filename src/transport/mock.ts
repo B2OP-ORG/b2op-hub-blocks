@@ -1,8 +1,11 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "./types";
-import { KIND, FLAGS_NO_ACK, FLAGS_ECHO, FLAGS_ECHO_RX, ERR_BUSY, makeFrame } from "../device/protocol";
+import {
+  KIND, FLAGS_NO_ACK, FLAGS_ECHO, FLAGS_ECHO_RX, ERR_BUSY, REMOTE_OP, RemoteType, makeFrame, remoteDefault,
+  type RemoteValue,
+} from "../device/protocol";
 
-/** Protocol 1.1.0 as sent in HELLO: u32 BE major<<24 | minor<<16 | patch. */
-const PROTO_VER = 0x01010000;
+/** Protocol 1.2.0 as sent in HELLO: u32 BE major<<24 | minor<<16 | patch. */
+const PROTO_VER = 0x01020000;
 const BOARD_NAME = "MockHub";
 const BOARD_VERSION = "1.0.0";
 const FW_VERSION = "v1.1.0";
@@ -117,6 +120,10 @@ export class MockTransport implements Transport {
   private readQueue: (() => void)[] = [];
   /** ECHO_BLE state (the mock behaves like a USB link). */
   public bleEcho = false;
+  /** REMOTE controls defined by the host: id → slot. */
+  public remoteControls = new Map<number, { type: RemoteType; name: string; value: RemoteValue }>();
+  /** SEQ of the last applied REMOTE SET (stale SETs are skipped, like the firmware). */
+  private remoteSeq: number | null = null;
 
   constructor(opts: MockOptions = {}) {
     this.files = { ...(opts.files ?? {}) };
@@ -281,12 +288,65 @@ export class MockTransport implements Transport {
     queueMicrotask(() => this.emit(frame));
   }
 
+  /** Test hook: send an unsolicited REMOTE frame (program message) to the host. */
+  emitRemote(payload: Uint8Array): void {
+    this.emit(makeFrame(KIND.REMOTE, 0xFF, 0, payload));
+  }
+
+  /** REMOTE handling (mirrors Protocol.cpp handleRemote); returns an error or null. */
+  private handleRemote(seq: number, p: Uint8Array): string | null {
+    if (p.length === 0) return "REMOTE: empty";
+    const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
+    let i = 1;
+    switch (p[0]) {
+      case REMOTE_OP.DEFINE:
+        this.remoteSeq = null;
+        while (i < p.length) {
+          if (p.length - i < 3) return "REMOTE: short";
+          const [id, type, nlen] = [p[i], p[i + 1], p[i + 2]];
+          i += 3;
+          if (type > RemoteType.Str) return "REMOTE: bad type";
+          if (p.length - i < nlen) return "REMOTE: short";
+          if (nlen < 1 || nlen > 32) return "REMOTE: bad name";
+          const name = dec.decode(p.subarray(i, i + nlen));
+          i += nlen;
+          for (const [other, slot] of this.remoteControls) if (slot.name === name && other !== id) this.remoteControls.delete(other);
+          this.remoteControls.set(id, { type: type as RemoteType, name, value: remoteDefault(type as RemoteType) });
+        }
+        return null;
+      case REMOTE_OP.SET:
+        if (this.remoteSeq !== null && ((((seq - this.remoteSeq) & 0xFF) << 24) >> 24) <= 0) return null; // stale
+        this.remoteSeq = seq;
+        while (i < p.length) {
+          const id = p[i++];
+          const slot = this.remoteControls.get(id);
+          if (!slot) return `REMOTE: unknown id ${id}`;
+          const need = slot.type === RemoteType.Bool ? 1 : slot.type === RemoteType.Str ? 1 + (p[i] ?? 0) : 4;
+          if (p.length - i < need) return "REMOTE: short";
+          slot.value = slot.type === RemoteType.Int ? dv.getInt32(i, false)
+            : slot.type === RemoteType.Float ? dv.getFloat32(i, true)
+            : slot.type === RemoteType.Bool ? p[i] !== 0
+            : dec.decode(p.subarray(i + 1, i + need));
+          i += need;
+        }
+        return null;
+      case REMOTE_OP.CLEAR:
+        this.remoteSeq = null;
+        if (p.length === 1) this.remoteControls.clear();
+        for (; i < p.length; i++) this.remoteControls.delete(p[i]);
+        return null;
+      default:
+        return "REMOTE: bad op";
+    }
+  }
+
   private dispatch(seq: number, flags: number, kind: number, payload: Uint8Array): void {
     // NO_ACK: process but don't respond (we still handle the command)
     const noAck = !!(flags & FLAGS_NO_ACK);
 
     switch (kind) {
       case KIND.HELLO_REQ: {
+        this.remoteSeq = null; // new host, new SEQ counter
         if (!noAck) this.reply(frameOk(seq, helloBoardPayload()));
         break;
       }
@@ -448,6 +508,11 @@ export class MockTransport implements Transport {
           this.dirs.add(cur);
         }
         if (!noAck) this.reply(frameOk(seq));
+        break;
+      }
+      case KIND.REMOTE: {
+        const err = this.handleRemote(seq, payload);
+        if (!noAck) this.reply(err ? frameErr(seq, err) : frameOk(seq));
         break;
       }
       default:

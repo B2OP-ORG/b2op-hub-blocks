@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseStub, logicalLines, cleanDoc } from "../src/docs/stubParser";
-import { apiModules, resolveName, resolveQualified, searchIndex, summary } from "../src/docs/apiModel";
+import { apiModules, publicMembers, resolveName, resolveQualified, searchIndex, summary } from "../src/docs/apiModel";
 import { rstToMarkdown } from "../src/docs/rst";
 
 const SRC = `"""Module doc.
@@ -198,5 +198,16 @@ describe("examples model", () => {
     expect(exampleDescription('"""Project demo — a folder.\n\nMore."""')).toBe("Project demo — a folder.");
     expect(exampleDescription("# Blink the LED\nimport hub")).toBe("Blink the LED");
     expect(exampleDescription("import hub")).toBe("");
+  });
+});
+
+describe("remote module reference", () => {
+  it("is a root with its functions and constants", () => {
+    const mod = apiModules().get("remote");
+    expect(mod?.title).toBe("Remote controls");
+    const names = publicMembers(mod!.members).map((m) => m.name);
+    for (const n of ["get", "age_ms", "items", "create_message", "send", "INT", "FLOAT", "BOOL", "STR"]) expect(names).toContain(n);
+    expect(names).not.toContain("__getattr__");
+    expect(resolveQualified("remote.send")).toEqual({ module: "remote", member: "send" });
   });
 });

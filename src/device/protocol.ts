@@ -3,13 +3,14 @@ import { CmdId } from "./cmdHelpers";
 import { protoFeatures, type CmdName, type FlagName, type KindName, type ProtoFeatures } from "./protocolFeatures";
 
 /**
- * Hub wire protocol v1.x (proto_ver = 1.0.0). Binary framing.
+ * Hub wire protocol v1.x (proto_ver = 1.2.0). Binary framing.
  *
  * Frame: [0x7E][LEN:varint][SEQ:u8][FLAGS:u8][KIND:u8][PAYLOAD:LEN bytes]
  *
  * LEN  LEB128 LE, up to 5 bytes. Bit 7 = continuation.
  * SEQ  Host→Device: monotonic 0x00–0xFF. Device→Host: 0xFF = unsolicited.
- * FLAGS  bit 0 NO_ACK (no response expected, SEQ still valid for ordering).
+ * FLAGS  bit 0 NO_ACK (device sends no reply, ≥ 1.2.0; ignored on UPLOAD / READ /
+ *        CP / DATA). SEQ is still a real counter (REMOTE SET drops stale SEQs).
  *        bit 1 ECHO   (device→host, USB only: copy of a BLE frame; see ECHO_BLE)
  *        bit 2 ECHO_RX (with ECHO: the copied frame was host→hub)
  * KIND   see KIND constants below.
@@ -38,6 +39,9 @@ import { protoFeatures, type CmdName, type FlagName, type KindName, type ProtoFe
  *                    (cancel, timeout, bad chunk, disconnect) or the device keeps streaming.
  *   0x1C  ECHO_BLE   [enable:u8] or ()         → OK [enabled:u8]  (USB only)
  *                    While on, every BLE frame is copied to USB with FLAGS ECHO (+ ECHO_RX).
+ *   0x1D  REMOTE     [op:u8][entries…]         → OK  (≥ 1.2.0; controls for the `remote` module)
+ *                    op DEFINE 0x01 [id][type][name_len][name]…, SET 0x02 [id][value]…,
+ *                    CLEAR 0x03 [id]… (none = all). SET is streamed with FLAGS NO_ACK.
  *   0x25  DATA       [offset:u32 BE][bytes]    UPLOAD chunks (SEQ = the UPLOAD's SEQ)
  *
  * Device → Host:
@@ -52,6 +56,8 @@ import { protoFeatures, type CmdName, type FlagName, type KindName, type ProtoFe
  *   0x31  STDERR     utf8 text  SEQ=0xFF
  *   0x32  PROG_END   [ok:u8][message utf8]  SEQ=0xFF
  *   0x33  PROG_START path:utf8              SEQ=0xFF; menu-initiated run started, or hub already running on BLE connect
+ *   0x1D  REMOTE     [op:u8][entries…]      SEQ=0xFF; program messages (remote.create_message /
+ *                    remote.send): DEFINE / SET / CLEAR, same encoding as host → device
  */
 
 // ── Kind constants ────────────────────────────────────────────────────────────
@@ -70,6 +76,7 @@ export const KIND = {
   MKDIR:      0x1A,
   ABORT:      0x1B,
   ECHO_BLE:   0x1C,
+  REMOTE:     0x1D,
   HELLO:      0x20,
   OK:         0x21,
   ERR:        0x22,
@@ -198,6 +205,171 @@ export function makeFrame(
   return frame;
 }
 
+// ── REMOTE (kind 0x1D) ────────────────────────────────────────────────────────
+
+export const REMOTE_OP = { DEFINE: 0x01, SET: 0x02, CLEAR: 0x03 } as const;
+
+/** Slot value type; the number is the wire encoding. */
+export const RemoteType = { Int: 0, Float: 1, Bool: 2, Str: 3 } as const;
+export type RemoteType = typeof RemoteType[keyof typeof RemoteType];
+export type RemoteValue = number | boolean | string;
+
+/** Max name bytes (UTF-8) and Str value bytes. */
+export const REMOTE_MAX_NAME = 32;
+export const REMOTE_MAX_STR = 255;
+/** Payload bytes per REMOTE frame we send / the device sends (device frame buffer is 2 KiB). */
+const REMOTE_FRAME_PAYLOAD = 480;
+
+export interface RemoteDef { id: number; type: RemoteType; name: string; }
+export interface RemoteSetEntry { id: number; type: RemoteType; value: RemoteValue; }
+
+/** Unsolicited REMOTE frame from the device (program messages), decoded. */
+export type RemoteEvent =
+  | { op: "define"; defs: RemoteDef[] }
+  | { op: "set"; values: { id: number; value: RemoteValue }[] }
+  /** `ids` empty = forget every message. */
+  | { op: "clear"; ids: number[] };
+export type RemoteSink = (event: RemoteEvent) => void;
+
+/** Default value of a slot type (what the device starts a slot at). */
+export function remoteDefault(type: RemoteType): RemoteValue {
+  return type === RemoteType.Bool ? false : type === RemoteType.Str ? "" : 0;
+}
+
+function checkRemoteId(id: number): void {
+  if (!Number.isInteger(id) || id < 0 || id > 255) throw new RangeError(`REMOTE: bad id ${id}`);
+}
+
+/** Encoded `[id][type][name_len][name]` DEFINE entry. Throws on a bad name / type / id. */
+export function encodeRemoteDef(d: RemoteDef): Uint8Array {
+  checkRemoteId(d.id);
+  if (!Number.isInteger(d.type) || d.type < 0 || d.type > 3) throw new RangeError(`REMOTE: bad type ${d.type}`);
+  const name = enc.encode(d.name);
+  if (name.length < 1 || name.length > REMOTE_MAX_NAME) throw new RangeError(`REMOTE: bad name "${d.name}"`);
+  const out = new Uint8Array(3 + name.length);
+  out[0] = d.id;
+  out[1] = d.type;
+  out[2] = name.length;
+  out.set(name, 3);
+  return out;
+}
+
+/** Encoded value by slot type (Int i32 BE, Float f32 LE, Bool u8, Str [len][UTF-8]). */
+export function encodeRemoteValue(type: RemoteType, value: RemoteValue): Uint8Array {
+  switch (type) {
+    case RemoteType.Int: {
+      const n = Math.round(Number(value) || 0);
+      const out = new Uint8Array(4);
+      new DataView(out.buffer).setInt32(0, Math.max(-0x80000000, Math.min(0x7FFFFFFF, n)), false);
+      return out;
+    }
+    case RemoteType.Float: {
+      const out = new Uint8Array(4);
+      new DataView(out.buffer).setFloat32(0, Number(value) || 0, true);
+      return out;
+    }
+    case RemoteType.Bool:
+      return Uint8Array.of(value ? 1 : 0);
+    case RemoteType.Str: {
+      let s = enc.encode(String(value));
+      if (s.length > REMOTE_MAX_STR) {
+        // Cut at a UTF-8 boundary so the device's validator accepts it.
+        let end = REMOTE_MAX_STR;
+        while (end > 0 && (s[end] & 0xC0) === 0x80) end--;
+        s = s.subarray(0, end);
+      }
+      const out = new Uint8Array(1 + s.length);
+      out[0] = s.length;
+      out.set(s, 1);
+      return out;
+    }
+    default:
+      throw new RangeError(`REMOTE: bad type ${type as number}`);
+  }
+}
+
+/** Encoded `[id][value]` SET entry. */
+export function encodeRemoteSet(e: RemoteSetEntry): Uint8Array {
+  checkRemoteId(e.id);
+  const v = encodeRemoteValue(e.type, e.value);
+  const out = new Uint8Array(1 + v.length);
+  out[0] = e.id;
+  out.set(v, 1);
+  return out;
+}
+
+/** Pack entries after `op` into payloads of ≤ `max` bytes (an entry never splits). */
+export function packRemote(op: number, entries: Uint8Array[], max = REMOTE_FRAME_PAYLOAD): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  let cur: Uint8Array[] = [];
+  let len = 1;
+  const flush = () => {
+    const p = new Uint8Array(len);
+    p[0] = op;
+    let off = 1;
+    for (const e of cur) { p.set(e, off); off += e.length; }
+    out.push(p);
+    cur = [];
+    len = 1;
+  };
+  for (const e of entries) {
+    if (cur.length && len + e.length > max) flush();
+    cur.push(e);
+    len += e.length;
+  }
+  if (cur.length) flush();
+  return out;
+}
+
+/**
+ * Decode a device REMOTE frame. SET values are decoded with `types` (message
+ * id → type, kept by the caller from earlier DEFINEs); a SET entry for an
+ * unknown id ends the frame (its length is unknown). Null for a bad op.
+ */
+export function decodeRemote(payload: Uint8Array, types: ReadonlyMap<number, RemoteType>): RemoteEvent | null {
+  if (payload.length < 1) return null;
+  const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let i = 1;
+  switch (payload[0]) {
+    case REMOTE_OP.DEFINE: {
+      const defs: RemoteDef[] = [];
+      while (i + 3 <= payload.length) {
+        const id = payload[i], type = payload[i + 1], nlen = payload[i + 2];
+        i += 3;
+        if (type > 3 || i + nlen > payload.length) break;
+        defs.push({ id, type: type as RemoteType, name: dec.decode(payload.subarray(i, i + nlen)) });
+        i += nlen;
+      }
+      return { op: "define", defs };
+    }
+    case REMOTE_OP.SET: {
+      const values: { id: number; value: RemoteValue }[] = [];
+      while (i < payload.length) {
+        const id = payload[i++];
+        const type = types.get(id);
+        if (type === undefined) break;
+        if (type === RemoteType.Str) {
+          if (i >= payload.length || i + 1 + payload[i] > payload.length) break;
+          values.push({ id, value: dec.decode(payload.subarray(i + 1, i + 1 + payload[i])) });
+          i += 1 + payload[i];
+        } else if (type === RemoteType.Bool) {
+          if (i >= payload.length) break;
+          values.push({ id, value: payload[i++] !== 0 });
+        } else {
+          if (i + 4 > payload.length) break;
+          values.push({ id, value: type === RemoteType.Int ? dv.getInt32(i, false) : dv.getFloat32(i, true) });
+          i += 4;
+        }
+      }
+      return { op: "set", values };
+    }
+    case REMOTE_OP.CLEAR:
+      return { op: "clear", ids: Array.from(payload.subarray(1)) };
+    default:
+      return null;
+  }
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export type StdoutSink = (chunk: string) => void;
@@ -288,6 +460,17 @@ export interface IHubProtocol {
   cmd(payload: Uint8Array, timeoutMs?: number): Promise<FrameReply>;
   /** ECHO_BLE (USB only): switch the BLE echo; resolves to the new state. */
   setBleEcho(enabled: boolean, timeoutMs?: number): Promise<boolean>;
+  /** REMOTE DEFINE (acknowledged; split into several frames if needed). */
+  remoteDefine(defs: RemoteDef[], timeoutMs?: number): Promise<void>;
+  /**
+   * REMOTE SET. Default: streamed with FLAGS NO_ACK (resolves once queued);
+   * `ack` waits for OK. Each frame applies atomically on the device.
+   */
+  remoteSet(entries: RemoteSetEntry[], opts?: { ack?: boolean; timeoutMs?: number }): Promise<void>;
+  /** REMOTE CLEAR: the given control ids, or all when omitted / empty. */
+  remoteClear(ids?: number[], timeoutMs?: number): Promise<void>;
+  /** Receives program messages (unsolicited REMOTE frames). */
+  setRemoteSink(sink: RemoteSink | null): void;
 }
 
 // ── Parse state machine ───────────────────────────────────────────────────────
@@ -375,6 +558,9 @@ export class HubProtocolV1 implements IHubProtocol {
   private onProgramStart: ProgramStartSink | null = null;
   private onHello: HelloSink | null = null;
   private onEcho: EchoSink | null = null;
+  private onRemote: RemoteSink | null = null;
+  /** Program message id → type, from device DEFINEs (needed to decode SET). */
+  private remoteMsgTypes = new Map<number, RemoteType>();
   private programRunning = false;
   private waiters = new Map<number, Waiter>();
   private state: ParseState = freshState();
@@ -447,6 +633,7 @@ export class HubProtocolV1 implements IHubProtocol {
   setProgramStartSink(sink: ProgramStartSink | null): void { this.onProgramStart = sink; }
   setHelloSink(sink: HelloSink | null): void             { this.onHello = sink; }
   setEchoSink(sink: EchoSink | null): void               { this.onEcho = sink; }
+  setRemoteSink(sink: RemoteSink | null): void           { this.onRemote = sink; }
   addStdoutSink(sink: StdoutSink): () => void {
     this.extraStdoutSinks.add(sink);
     return () => this.extraStdoutSinks.delete(sink);
@@ -460,6 +647,9 @@ export class HubProtocolV1 implements IHubProtocol {
   // ── Public commands ─────────────────────────────────────────────────────────
 
   async requestHello(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+    // The device resends every program message (DEFINE + SET) after its reply,
+    // so start from nothing: messages that ended while we weren't listening go.
+    this.emitRemote({ op: "clear", ids: [] });
     const reply = await this.sendRequest(KIND.HELLO_REQ, 0, new Uint8Array(0), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "HELLO_REQ failed");
     this.parseHelloPayload(reply.payload);
@@ -705,6 +895,58 @@ export class HubProtocolV1 implements IHubProtocol {
     const reply = await this.sendRequest(KIND.ECHO_BLE, 0, Uint8Array.of(enabled ? 1 : 0), { timeoutMs });
     if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "ECHO_BLE failed");
     return reply.payload.length > 0 && reply.payload[0] !== 0;
+  }
+
+  async remoteDefine(defs: RemoteDef[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+    this.assertKind(KIND.REMOTE);
+    for (const p of packRemote(REMOTE_OP.DEFINE, defs.map(encodeRemoteDef))) {
+      await this.remoteRequest(p, timeoutMs);
+    }
+  }
+
+  async remoteSet(entries: RemoteSetEntry[], opts: { ack?: boolean; timeoutMs?: number } = {}): Promise<void> {
+    this.assertKind(KIND.REMOTE);
+    const payloads = packRemote(REMOTE_OP.SET, entries.map(encodeRemoteSet));
+    if (opts.ack) {
+      for (const p of payloads) await this.remoteRequest(p, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      return;
+    }
+    // NO_ACK stream. A frame that fits one GATT write goes as one BLE
+    // write-without-response; the device drops one that arrives after a newer
+    // SET. Bigger frames (or BLE before the MTU handshake) use acknowledged
+    // writes, which BLE keeps in order.
+    const mtu = this.transport.info.mtu;
+    let last = Promise.resolve();
+    for (const p of payloads) {
+      const frame = makeFrame(KIND.REMOTE, this.nextSeq(), FLAGS_NO_ACK, p);
+      const fast = this.transport.writeFast && mtu && frame.length <= mtu - 3;
+      const write = fast ? this.transport.writeFast!.bind(this.transport) : this.transport.write.bind(this.transport);
+      last = this.sending.then(() => write(frame));
+      this.sending = last.catch(() => {});
+    }
+    await last;
+  }
+
+  async remoteClear(ids: number[] = [], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+    this.assertKind(KIND.REMOTE);
+    ids.forEach(checkRemoteId);
+    // CLEAR entries are 1 byte each, so 255 ids always fit one frame.
+    await this.remoteRequest(Uint8Array.of(REMOTE_OP.CLEAR, ...ids), timeoutMs);
+  }
+
+  private async remoteRequest(payload: Uint8Array, timeoutMs: number): Promise<void> {
+    const reply = await this.sendRequest(KIND.REMOTE, 0, payload, { timeoutMs });
+    if (reply.kind !== "OK") throw new Error(dec.decode(reply.payload) || "REMOTE failed");
+  }
+
+  /** Track message types (for SET decoding) and forward to the sink. */
+  private emitRemote(ev: RemoteEvent): void {
+    if (ev.op === "define") for (const d of ev.defs) this.remoteMsgTypes.set(d.id, d.type);
+    else if (ev.op === "clear") {
+      if (ev.ids.length === 0) this.remoteMsgTypes.clear();
+      else for (const id of ev.ids) this.remoteMsgTypes.delete(id);
+    }
+    this.onRemote?.(ev);
   }
 
   // ── Private send helpers ────────────────────────────────────────────────────
@@ -955,6 +1197,13 @@ export class HubProtocolV1 implements IHubProtocol {
         this.programRunning = true;
         const path = dec.decode(payload);
         this.onProgramStart?.({ path });
+        break;
+      }
+
+      case KIND.REMOTE: {
+        // Only ever unsolicited (program messages); replies to our REMOTE are OK / ERR.
+        const ev = decodeRemote(payload, this.remoteMsgTypes);
+        if (ev) this.emitRemote(ev);
         break;
       }
 

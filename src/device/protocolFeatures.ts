@@ -45,6 +45,7 @@ const PROTO_1_0: ProtoFeatures = {
     MKDIR:      true,
     ABORT:      true,
     ECHO_BLE:   true,
+    REMOTE:     false,
     HELLO:      true,
     OK:         true,
     ERR:        true,
@@ -91,10 +92,22 @@ const PROTO_1_1: ProtoFeatures = {
   },
 };
 
+/**
+ * 1.2: REMOTE kind (controls for the `remote` module + program messages).
+ * The device also honours FLAGS NO_ACK from 1.2 on (older firmware replied
+ * anyway); the host never waits for NO_ACK replies, so that needs no flag.
+ */
+const PROTO_1_2: ProtoFeatures = {
+  kinds: { ...PROTO_1_1.kinds, REMOTE: true },
+  cmds:  { ...PROTO_1_1.cmds },
+  flags: { ...PROTO_1_1.flags },
+};
+
 /** Index = minor version. */
 export const PROTO_FEATURES: readonly ProtoFeatures[] = [
   PROTO_1_0,
   PROTO_1_1,
+  PROTO_1_2,
 ];
 
 /**

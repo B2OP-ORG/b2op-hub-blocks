@@ -1,0 +1,30 @@
+.panel {
+  flex-shrink: 0;
+  border-left: 1px solid var(--p-border);
+  background: var(--p-panel-bg);
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.header { font-weight: 600; }
+.subtitle { color: var(--p-dim-text); font-weight: 400; }
+
+.usage { font-size: 12px; }
+.usageLabel { color: var(--p-dim-text); margin-bottom: 3px; }
+.usageCode {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--p-input-bg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.note { font-size: 12px; margin-top: -6px; }
+.danger { color: var(--p-danger); }
+.warn { color: var(--p-warn-text); }
+.dim { color: var(--p-dim-text); }

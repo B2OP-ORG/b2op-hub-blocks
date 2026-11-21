@@ -1,18 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  splitBlocksHeader, withBlocksHeader, stripBlocksHeader, fileMode, hashContent, normalizeProject,
-  newMultiFileProject, mergeEditorSettings, DEFAULT_MONACO_SETTINGS,
-} from "../src/project/format";
-import { DEFAULT_EDITOR_SETTINGS } from "../src/project/format";
-import { pythonToBlocks } from "../src/project/pythonToBlocks";
+import { splitBlocksHeader, withBlocksHeader, stripBlocksHeader, fileMode, hashContent, normalizeProject, newMultiFileProject } from "../src/project/format";
+import { mergeEditorSettings, DEFAULT_MONACO_SETTINGS } from "../src/settings/editorSettings";
+import { DEFAULT_EDITOR_SETTINGS } from "../src/settings/editorSettings";
+import { pythonToBlocks } from "../src/codegen/pythonToBlocks";
 import { normalizeRelPath, uniqueName, ancestorDirs } from "../src/project/paths";
 import { loadWorkspace, saveProject, loadProject } from "../src/project/storage";
 import { projectToZip, zipToProject } from "../src/project/zip";
 import { zipSync, strToU8 } from "fflate";
-import { MockTransport } from "../src/transport/mock";
+import { MockTransport } from "../src/device/sim/mockHub";
 import { DeviceClient } from "../src/device/deviceClient";
 import { useApp } from "../src/state/store";
-import { changedFiles, devicePathFor, ensureDirs, projectRoot, syncProject } from "../src/project/deviceSync";
+import { changedFiles, devicePathFor, ensureDirs, projectRoot, syncProject } from "../src/run/deviceSync";
 
 describe("blocks header", () => {
   const ws = { blocks: { languageVersion: 0, blocks: [{ type: "when_program_starts", x: 1, y: 2 }] } };

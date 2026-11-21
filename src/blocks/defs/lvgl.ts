@@ -21,7 +21,7 @@ export const LVGL_BLOCKS = [
     type: "lvgl_label",
     message0: "show text %1 at x %2 y %3",
     args0: [
-      { type: "input_value", name: "TEXT", check: "String" },
+      { type: "input_value", name: "TEXT", check: ["String", "Number"] },
       { type: "input_value", name: "X", check: "Number" },
       { type: "input_value", name: "Y", check: "Number" },
     ],
@@ -88,6 +88,6 @@ export const LVGL_BLOCKS = [
     message0: "color hex %1",
     args0: [{ type: "field_input", name: "HEX", text: "FF0000" }],
     output: "Number",
-    colour: 20,
+    colour: 280,
   },
 ] as const;

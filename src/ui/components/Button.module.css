@@ -1,0 +1,23 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.btn:disabled { cursor: default; opacity: 0.5; }
+
+.md { gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.sm { gap: 5px; padding: 3px 10px; border-radius: 5px; font-size: 12px; }
+/* Small outline chip ("+ Add", "default"). */
+.xs { gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+
+.default { background: transparent; color: var(--p-text); border: 1px solid var(--p-border); }
+.primary { background: var(--p-accent); color: #fff; border: 1px solid #155e75; }
+.danger { background: #b91c1c; color: #fff; border: 1px solid #7f1d1d; }
+/* Light red: cancel in progress overlays. */
+.dangerSoft { background: var(--p-danger-bg); color: var(--p-danger); border: 1px solid #f0b4b4; }
+:global([data-theme="dark"]) .dangerSoft { border-color: #6a1c1c; }
+/* Like default, but muted text (secondary actions). */
+.muted { background: transparent; color: var(--p-dim-text); border: 1px solid var(--p-border); }

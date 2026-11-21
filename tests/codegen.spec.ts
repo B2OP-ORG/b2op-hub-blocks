@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
+import { migrateWorkspaceState } from "../src/blocks/migrate";
 
 beforeEach(() => {
   registerAllBlocks();
@@ -156,11 +157,30 @@ describe("workspaceToPython", () => {
     const ws = makeWorkspace(
       underProgramHat({
         type: "hub_led_color",
-        fields: { COLOR: "BLUE" },
+        inputs: { COLOR: { shadow: { type: "color_literal", fields: { COLOR: "BLUE" } } } },
       }),
     );
     const py = workspaceToPython(ws);
     expect(py).toContain("hub.led.setColorIdx(lpf2.color.BLUE)");
+  });
+
+  it("hub_led_color accepts a reporter", () => {
+    const ws = makeWorkspace(
+      underProgramHat({
+        type: "hub_led_color",
+        inputs: { COLOR: { block: { type: "color_get_color", fields: { PORT: "A" } } } },
+      }),
+    );
+    const py = workspaceToPython(ws);
+    expect(py).toContain("hub.led.setColorIdx(dev_a.getColorIdx())");
+  });
+
+  it("migrates the old dropdown hub_led_color", () => {
+    const ws = makeWorkspace(migrateWorkspaceState(
+      underProgramHat({ type: "hub_led_color", fields: { COLOR: "GREEN" } }),
+    ));
+    const py = workspaceToPython(ws);
+    expect(py).toContain("hub.led.setColorIdx(lpf2.color.GREEN)");
   });
 
   it("emits hub.led.setColor for hub_led_rgb", () => {

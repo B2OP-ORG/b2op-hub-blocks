@@ -30,6 +30,7 @@ const KEY_LPF2_IMPORT = "hub_lpf2_import";
 const KEY_DEVICES_IMPORT = "hub_devices_import";
 const KEY_SETUP_PREFIX = "hub_setup_";
 const KEY_LVGL_IMPORT = "lvgl_import";
+const KEY_LVGL_SCR = "lvgl_scr";
 const KEY_TIME_IMPORT = "time_import";
 
 const state = new Map<Port, Registration>();
@@ -47,11 +48,21 @@ export function needsDevices(gen: PythonGenerator): void {
   (gen as unknown as { definitions_: Record<string, string> }).definitions_[KEY_DEVICES_IMPORT] = "from lpf2 import devices";
 }
 
-/** LVGL setup — hub.lcd.init() must run before `import lvgl`. */
+/**
+ * LVGL setup. The firmware already runs LVGL when a program starts, so no
+ * `hub.lcd.init()` (that would restart it). The import is its own definition
+ * so Blockly's finish() hoists it with the other imports.
+ */
 export function needsLvgl(gen: PythonGenerator): void {
   needsLpf2(gen);
-  (gen as unknown as { definitions_: Record<string, string> }).definitions_[KEY_LVGL_IMPORT] =
-    "hub.lcd.init()\nimport lvgl as lv\n_scr = lv.screen_active()";
+  const defs = (gen as unknown as { definitions_: Record<string, string> }).definitions_;
+  defs[KEY_LVGL_IMPORT] = "import lvgl as lv";
+  defs[KEY_LVGL_SCR] = "_scr = lv.screen_active()";
+}
+
+/** Only `import lvgl as lv` — for code that never touches `_scr`. */
+export function needsLvglImport(gen: PythonGenerator): void {
+  (gen as unknown as { definitions_: Record<string, string> }).definitions_[KEY_LVGL_IMPORT] = "import lvgl as lv";
 }
 
 export function needsTime(gen: PythonGenerator): void {

@@ -20,7 +20,6 @@ _COLOR_NAMES = {
     lpf2.color.NONE: "none",
 }
 
-hub.lcd.init()
 hub.lcd.on()
 hub.lcd.backlight(200)
 

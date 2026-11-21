@@ -1,24 +1,37 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { Header } from "./ui/Header";
-import { TabBar } from "./ui/TabBar";
+import { Header } from "./ui/header/Header";
+import { TabBar } from "./ui/workspace/TabBar";
 import { Sidebar } from "./ui/sidebar/Sidebar";
-import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { Workspace } from "./ui/Workspace";
-import { SettingsModal } from "./ui/SettingsModal";
-import { FirmwareUpdatePrompt } from "./ui/FirmwareUpdatePrompt";
-import { ContextMenuHost } from "./ui/ContextMenu";
-import { DialogHost } from "./ui/Dialog";
-import { TransferOverlay } from "./ui/TransferOverlay";
+import { ErrorBoundary } from "./ui/components/ErrorBoundary";
+import { Workspace } from "./ui/workspace/Workspace";
+import { SettingsModal } from "./ui/settings/SettingsModal";
+import { FirmwareUpdatePrompt } from "./ui/firmware/FirmwareUpdatePrompt";
+import { ContextMenuHost } from "./ui/components/ContextMenu";
+import { DialogHost, showAlert } from "./ui/dialog";
+import { TransferOverlay } from "./ui/workspace/TransferOverlay";
 import { useApp } from "./state/store";
 import { downloadProjectZip } from "./ui/actions";
 import { loadWorkspace } from "./project/storage";
-import { usePalette } from "./ui/theme";
+import { useApplyPaletteVars, usePalette } from "./ui/theme";
 import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
+import { startRemoteSync } from "./remote/sync";
+import { startRemoteSession } from "./remote/session";
+import { startAutoReload } from "./run/autoReload";
+import { setSyncAlertHandler } from "./run/deviceSync";
+import "./ui/remote/actions"; // registers the block toolbox "Create remote name…" handler
+import { startSceneSync } from "./scene/sync";
+import "./ui/scene/actions"; // registers the block toolbox "Create scene…" handler
 
-const FirmwareUpdatePage = lazy(() => import("./ui/FirmwareUpdatePage").then((m) => ({ default: m.FirmwareUpdatePage })));
+const FirmwareUpdatePage = lazy(() => import("./ui/firmware/FirmwareUpdatePage").then((m) => ({ default: m.FirmwareUpdatePage })));
 
 const SUPPRESS_KEY = "b2op.suppressFwUpdates";
+
+startRemoteSync();
+startRemoteSession();
+startSceneSync();
+startAutoReload();
+setSyncAlertHandler(showAlert);
 
 // Restore projects before the first render so nothing flashes the default project.
 (() => {
@@ -50,6 +63,7 @@ export default function App() {
   const boardVersion = useApp((s) => s.boardVersion);
   const fwVersion = useApp((s) => s.fwVersion);
   const p = usePalette();
+  useApplyPaletteVars();
 
   // Autosave the active project when it changed (every 2s, on hide and on unload).
   useEffect(() => {

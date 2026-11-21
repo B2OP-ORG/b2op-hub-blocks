@@ -1,10 +1,12 @@
 import { Copy, Download, Ellipsis, FolderOpen, Import, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { useApp } from "../../state/store";
-import { uploadProject, projectRoot } from "../../project/deviceSync";
-import { openContextMenu, openMenuAt, type MenuItem } from "../ContextMenu";
-import { usePalette } from "../theme";
+import { uploadProject, projectRoot } from "../../run/deviceSync";
+import { openContextMenu, openMenuAt, type MenuItem } from "../components/menuStore";
 import { deleteProjectFlow, downloadProjectZip, importZipFlow, newProjectFlow, renameProjectFlow } from "../actions";
-import { IconButton, PanelHeader, wrapText } from "./common";
+import { IconButton } from "../components/IconButton";
+import { ListRow, RowDetail, RowLabel } from "../components/ListRow";
+import { PanelHeader } from "../components/PanelHeader";
+import { useDeviceAvailability } from "../hooks/useDeviceAvailability";
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -16,16 +18,11 @@ function fmtDate(iso: string): string {
 }
 
 export function ProjectsTab() {
-  const p = usePalette();
   const projects = useApp((s) => s.projects);
   const mfp = useApp((s) => s.mfp);
   const activeId = mfp.id;
-  const device = useApp((s) => s.device);
-  const running = useApp((s) => s.running);
   const switchProject = useApp((s) => s.switchProject);
-
-  const canDevice = !!device && !running;
-  const deviceHint = !device ? "connect a hub" : running ? "program running" : undefined;
+  const { canDevice, deviceHint } = useDeviceAvailability();
 
   // "Create / import" lives in its own menu, separate from per-project actions.
   const globalItems: MenuItem[] = [
@@ -59,27 +56,19 @@ export function ProjectsTab() {
         {sorted.map((m) => {
           const active = m.id === activeId;
           return (
-            <div
+            <ListRow
               key={m.id}
+              block bar active={active} padY={6} padX={10}
               title={`Uploads to ${projectRoot(m.title)}/`}
-              style={{
-                padding: "6px 10px",
-                cursor: "pointer",
-                background: active ? p.activeBg : "transparent",
-                borderLeft: `2px solid ${active ? p.accent : "transparent"}`,
-                userSelect: "none",
-              }}
               onClick={() => switchProject(m.id)}
               onDoubleClick={() => useApp.getState().openSidebarTab("explorer")}
               onContextMenu={(e) => projectMenu(e, m.id)}
-              onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = p.hoverBg; }}
-              onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
             >
-              <div style={{ ...wrapText, display: "block", fontWeight: active ? 700 : 500, fontSize: 13 }}>{m.title}</div>
-              <div style={{ fontSize: 11, color: p.dimText, marginTop: 1 }}>
+              <RowLabel style={{ fontWeight: active ? 700 : 500, fontSize: 13 }}>{m.title}</RowLabel>
+              <RowDetail>
                 {m.fileCount} file{m.fileCount === 1 ? "" : "s"} · {fmtDate(m.updatedAt)}
-              </div>
-            </div>
+              </RowDetail>
+            </ListRow>
           );
         })}
       </div>

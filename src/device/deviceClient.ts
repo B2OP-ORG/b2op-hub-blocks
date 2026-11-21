@@ -1,7 +1,7 @@
-import type { Transport } from "../transport/types";
-import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink } from "./protocol";
+import type { Transport } from "./transport/types";
+import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink, type RemoteDef, type RemoteSetEntry, type RemoteSink } from "./protocol";
+import type { CmdName, KindName, ProtoFeatures } from "./protocolFeatures";
 import { sanitizeFilename } from "../utils/sanitize";
-import { useApp } from "../state/store";
 
 const dec = new TextDecoder("utf-8", { fatal: false });
 
@@ -41,6 +41,14 @@ const TMP_RUN_NAME = "__web_run.py";
  * `run(code)` uploads the source as a temp file and asks the on-device runner
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
+/** App hooks the client calls during connect (keeps this layer free of UI state). */
+export interface DeviceClientOptions {
+  /** Called with the board identity once HELLO succeeds. */
+  onBoardInfo?: (name: string, version: string, fwVersion: string) => void;
+  /** Whether to ask the hub to echo BLE traffic over USB after connecting (debug). */
+  bleEchoOverUsb?: () => boolean;
+}
+
 export class DeviceClient {
   private proto: HubProtocolV1;
   readonly transport: Transport;
@@ -48,8 +56,11 @@ export class DeviceClient {
   private pinging = false;
   private bleEcho = false;
 
-  constructor(transport: Transport) {
+  private readonly opts: DeviceClientOptions;
+
+  constructor(transport: Transport, opts: DeviceClientOptions = {}) {
     this.transport = transport;
+    this.opts = opts;
     this.proto = new HubProtocolV1(transport);
   }
 
@@ -57,6 +68,23 @@ export class DeviceClient {
   get boardVersion(): string { return this.proto.boardVersion; }
   get fwVersion(): string { return this.proto.fwVersion; }
   get protocolVersion(): number { return this.proto.protocolVersion; }
+
+  /**
+   * Features of the connected hub's protocol minor, or null before HELLO (or
+   * if HELLO failed); null means nothing is blocked. Unsupported requests
+   * reject with UnsupportedFeatureError.
+   */
+  get features(): ProtoFeatures | null { return this.proto.features; }
+
+  /** Whether the hub implements message type `kind` (true while unknown). */
+  supportsKind(kind: KindName): boolean {
+    return this.proto.features?.kinds[kind] ?? true;
+  }
+
+  /** Whether the hub implements CMD subtype `cmd` (true while unknown). */
+  supportsCmd(cmd: CmdName): boolean {
+    return this.proto.features?.cmds[cmd] ?? true;
+  }
 
   async connect(): Promise<void> {
     await this.transport.connect();
@@ -79,13 +107,13 @@ export class DeviceClient {
         await this.proto.requestHello(DEFAULT_TIMEOUT_MS);
         const versionError = protoVersionError(this.proto.protocolVersion);
         if (versionError) throw new Error(versionError);
-        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
+        this.opts.onBoardInfo?.(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
       } catch (e) {
         if (e instanceof Error && e.message.startsWith("Unsupported device protocol")) throw e;
         /* other hello failures are non-fatal */
       }
 
-      if (this.transport.setChunkSize) {
+      if (this.transport.setChunkSize && this.supportsKind("MTU_REQ")) {
         // Device queries `_ble_uart.instance().mtu()`, which reflects the last
         // ATT MTU exchange. Peripheral triggers the exchange on connect, but it
         // takes a few conn intervals; a query fired immediately after ping may
@@ -96,7 +124,7 @@ export class DeviceClient {
             if (mtu > 23 || attempt === 1) {
               // ATT MTU includes 3 opcode/handle bytes; usable payload = mtu - 3.
               this.transport.setChunkSize(mtu - 3);
-              console.log(`DeviceClient: ATT MTU=${mtu}, chunk=${mtu - 3}`);
+              console.info(`DeviceClient: ATT MTU=${mtu}, chunk=${mtu - 3}`);
               break;
             }
             await new Promise((r) => setTimeout(r, 400));
@@ -107,11 +135,11 @@ export class DeviceClient {
         }
       }
     }
-    if (useApp.getState().editorSettings.bleEchoOverUsb && this.supportsBleEcho) {
+    if (this.opts.bleEchoOverUsb?.() && this.supportsBleEcho) {
       try { await this.setBleEcho(true); } catch { /* non-fatal: echo is a debug aid */ }
     }
     this.pingInterval = setInterval(async () => {
-      if (!this.transport.connected || this.pinging) return;
+      if (!this.transport.connected || this.pinging || !this.supportsKind("PING")) return;
       this.pinging = true;
       try { await this.proto.ping(DEFAULT_TIMEOUT_MS); } catch { /* ignore; disconnect handler fires on dead link */ }
       finally { this.pinging = false; }
@@ -127,10 +155,12 @@ export class DeviceClient {
     // when disconnect() is called from the error-cleanup path.
     if (this.transport.connected) {
       // The device can't tell we gave up on a transfer — cancel any active stream.
-      if (this.proto.hasActiveStreams()) {
+      if (this.proto.hasActiveStreams() && this.supportsKind("ABORT")) {
         try { await this.proto.abort(undefined, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
       }
-      try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      if (this.supportsKind("STOP")) {
+        try { await this.proto.stop(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
+      }
       // Echo is device-global state; don't leave it on for the next USB host.
       if (this.bleEcho) {
         try { await this.proto.setBleEcho(false, DEFAULT_TIMEOUT_MS); } catch { /* noop */ }
@@ -249,7 +279,7 @@ export class DeviceClient {
 
   /** BLE echo is a USB (serial) link feature. */
   get supportsBleEcho(): boolean {
-    return this.transport.kind === "serial";
+    return this.transport.kind === "serial" && this.supportsKind("ECHO_BLE");
   }
 
   /**
@@ -265,6 +295,31 @@ export class DeviceClient {
 
   setEchoSink(sink: EchoSink | null): void {
     this.proto.setEchoSink(sink);
+  }
+
+  /** REMOTE kind (hub protocol ≥ 1.2): controls for the `remote` module. */
+  get supportsRemote(): boolean {
+    return this.supportsKind("REMOTE");
+  }
+
+  /** Define (or redefine) controls; see HubProtocolV1.remoteDefine(). */
+  remoteDefine(defs: RemoteDef[]): Promise<void> {
+    return this.proto.remoteDefine(defs);
+  }
+
+  /** Send control values (NO_ACK stream unless `ack`). */
+  remoteSet(entries: RemoteSetEntry[], opts: { ack?: boolean } = {}): Promise<void> {
+    return this.proto.remoteSet(entries, opts);
+  }
+
+  /** Remove the given controls, or all of them. */
+  remoteClear(ids?: number[]): Promise<void> {
+    return this.proto.remoteClear(ids);
+  }
+
+  /** Program messages (remote.create_message / remote.send) and program-set control values from the hub. */
+  setRemoteSink(sink: RemoteSink | null): void {
+    this.proto.setRemoteSink(sink);
   }
 
   async cmd(cmdId: number, args: Uint8Array = new Uint8Array()): Promise<Uint8Array> {

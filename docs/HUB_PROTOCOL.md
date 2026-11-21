@@ -3,19 +3,27 @@
 Custom side-channel over the same byte stream (BLE NUS / USB CDC). Replaces the raw MicroPython REPL entirely for all web-app operations. The device disables `micropython.kbd_intr(-1)` at boot so control bytes on stdin are NOT interpreted as REPL commands — they belong to HubProtocol.
 
 > The authoritative wire spec is the firmware's `docs/source/hub/protocol.rst`
-> (binary framing, `src/device/protocol.ts`). Sections 1–7 below describe the
+> (binary framing, `src/device/protocol/`). Sections 1–7 below describe the
 > original design and are partly outdated.
 
 ---
 
-## Protocol v1.0.0 — per-link sessions
+## Protocol v1.x — per-link sessions (current: 1.2.0)
 
-**Versioning.** HELLO starts with `proto_ver` as one big-endian u32: `major<<24 | minor<<16 | patch` (patch = low 16 bits); 1.0.0 = `0x01000000`. The app accepts any device whose major equals `SUPPORTED_PROTO_MAJOR` (1) — see `protoVersionError()`. Firmware from before 1.0.0 sent a single `proto_ver` byte (2–4); it is detected as version 0 and refused with "update the hub firmware".
+**Versioning.** HELLO starts with `proto_ver` as one big-endian u32: `major<<24 | minor<<16 | patch` (patch = low 16 bits); 1.0.0 = `0x01000000`. The app accepts any device whose major equals `SUPPORTED_PROTO_MAJOR` (1) — see `protoVersionError()`. Firmware from before 1.0.0 sent a single `proto_ver` byte (2–4); it is detected as version 0 and refused with "update the hub firmware". What a device supports comes from the per-minor table in `src/device/protocolFeatures.ts`: `kinds` and `cmds` gate requests (all allowed until HELLO), `flags` are capabilities that change how existing messages may be used (all off until HELLO) — currently `FAST_UPLOAD` (minor ≥ 1). Minor 2 adds the `REMOTE` kind.
 
 - **Separate links.** USB CDC and BLE NUS are independent sessions on the hub. A request is answered only on the link it came from; STDOUT, PROG_START and PROG_END go to both. The sessions share only the runner (pending RUN / EXEC, program running).
 - **One stream per link.** While a link runs an UPLOAD, READ or CP, any other stream request on it gets `ERR "busy"`. RUN / EXEC get `"busy"` while the runner is taken. `HubProtocol.oneAtATime()` queues every stream (all kinds), so the app never hits it.
 - **USB output buffered by frame.** The hub queues whole frames for USB and drops whole frames when the host is not reading, so the serial byte stream never contains a partial frame.
 - **BLE echo (USB only).** `ECHO_BLE` (kind `0x1C`, payload `[enable:u8]`, reply `OK [enabled:u8]`) makes the hub copy every BLE frame to USB with FLAGS bit 1 `ECHO` (`0x02`), plus bit 2 `ECHO_RX` (`0x04`) for host→hub frames. `HubProtocol` routes these to the echo sink (`setEchoSink`) and never to waiters or stdout sinks (their SEQ belongs to the BLE host). Settings → Device → *Echo BLE traffic over USB* turns it on for serial connections (sent on connect and when toggled; switched off again on disconnect). The console shows each frame as `[BLE host→hub] …` / `[BLE hub→host] …`.
+- **Fast BLE uploads (`FAST_UPLOAD` flag, hub ≥ 1.1).** UPLOAD DATA frames are sized so each one fits a single GATT write (`chunk = MTU − 3 − DATA_FRAME_OVERHEAD`, ≤ `UPLOAD_CHUNK`) and sent with `writeFast` (BLE `writeValueWithoutResponse`) — many frames per connection interval instead of one acknowledged ~MTU write each (~3.4 KiB/s before). A frame split over several without-response writes can be reordered by BlueZ and arrive scrambled; whole frames reordered or duplicated are safe (DATA offsets + the hub's 32-chunk reorder window). Flow control is unchanged: ≤ `UPLOAD_WINDOW` (4 KiB) past the last PROGRESS, which fits the hub's 8 KiB BLE RX ring. Hubs without the flag (1.0.x: 4 KiB ring, 8-chunk window), serial links and BLE before the MTU handshake keep 1 KiB chunks over acknowledged `write` — see `HubProtocolV1.uploadChunking()`.
+- **NO_ACK honoured (hub ≥ 1.2).** FLAGS bit 0 `NO_ACK` now means the hub sends no reply at all (also no deferred EXEC OK / ERR); it is ignored on UPLOAD / READ / CP / DATA. Older firmware replied anyway. The app never registers a waiter for NO_ACK frames, so both behave the same here.
+- **REMOTE (kind `0x1D`, hub ≥ 1.2).** Live values for the `remote` Python module. Payload `[op:u8][entries…]`: DEFINE `0x01` `[id][type][name_len][name]…`, SET `0x02` `[id][value]…`, CLEAR `0x03` `[id]…` (none = all). Types: 0 Int (`i32` BE), 1 Float (`f32` LE), 2 Bool (`u8`), 3 Str (`[len:u8][UTF-8]`, ≤ 255 bytes); names 1–32 bytes. Host → hub = *controls* (read by programs as `remote.<name>`); hub → host = *program messages* (`remote.create_message` / `remote.send`), sent unsolicited (SEQ `0xFF`) with the same encoding; separate id spaces.
+  - `HubProtocolV1.remoteDefine()` / `remoteClear()` are acknowledged; DEFINE entries are packed into frames of ≤ 480 payload bytes (`packRemote()`).
+  - `remoteSet()` streams with FLAGS `NO_ACK`: a frame that fits one GATT write (`≤ MTU − 3`) goes as one `writeFast` (BLE write-without-response), bigger ones use acknowledged `write`. The hub skips a SET whose SEQ is not newer than the last applied one on that link (reordered writes can't override newer values); DEFINE / CLEAR / HELLO_REQ restart that ordering.
+  - Failsafe: when the link that last wrote a control drops, its value returns to the type default on the hub (names and types stay).
+  - Program messages: `setRemoteSink()` receives decoded `RemoteEvent`s (`define` / `set` / `clear`). `HubProtocolV1` keeps the message id → type map needed to decode SET. After HELLO_REQ the hub resends every current message (DEFINE + SET), so `requestHello()` first emits a local `clear`. The hub sends CLEAR (empty) at program end.
+  - Older hubs: the request is blocked locally with `UnsupportedFeatureError` (firmware < 1.2 would answer `ERR "unknown kind: 0x1d"`).
 
 ---
 

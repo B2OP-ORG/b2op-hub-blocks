@@ -106,13 +106,3 @@ export function zipToProject(data: Uint8Array, fallbackTitle: string): ZipImport
   };
   return { project, skipped };
 }
-
-export function downloadBytes(bytes: Uint8Array, filename: string, type = "application/octet-stream"): void {
-  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}

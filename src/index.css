@@ -23,6 +23,24 @@ button { font: inherit; }
 .tabbar-dark::-webkit-scrollbar-track { background: #0a0f13; }
 .tabbar-dark::-webkit-scrollbar-thumb { background: #0e7490; border-radius: 2px; }
 
+/* Remote controller canvas: slim rounded scrollbars in the palette colours.
+   Set --sb-thumb, --sb-thumb-hover and --sb-track inline. */
+.remote-canvas::-webkit-scrollbar { width: 10px; height: 10px; }
+.remote-canvas::-webkit-scrollbar-track { background: var(--sb-track); }
+.remote-canvas::-webkit-scrollbar-corner { background: var(--sb-track); }
+.remote-canvas::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 5px;
+}
+.remote-canvas::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); background-clip: padding-box; }
+/* Firefox (no ::-webkit-scrollbar): the standard properties. Not set for
+   Chromium, where they would override the rounded styles above. */
+@supports not selector(::-webkit-scrollbar) {
+  .remote-canvas { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) var(--sb-track); }
+}
+
 :root {
   --cyan-100: #cceff6;
   --cyan-200: #67e8f9;

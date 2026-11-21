@@ -2,13 +2,21 @@ import type { Block, Workspace } from "blockly";
 import { pythonGenerator } from "blockly/python";
 import { registerAllBlocks } from "../blocks";
 import { resetSetup } from "../blocks/setup";
+import { resetRemoteGen } from "../blocks/generators/remote";
+import { resetLvglGen } from "../blocks/generators/lvgl";
+import { eventParams, needsScene } from "../blocks/generators/scene";
+import { splitWidgetRef } from "../blocks/defs/scene";
+import { findSceneWidget, sceneList } from "../scene/registry";
 import { PROJECT_FORMAT, PROJECT_VERSION } from "../project/format";
 
 registerAllBlocks();
 
 const DEFS_SEPARATOR = "\n\n\n";
+/** Scene module names already added to the generator's reserved words (it only appends). */
+const reservedModules = new Set<string>();
 const PROGRAM_HAT = "when_program_starts";
 const BUTTON_HAT = "on_button_pressed";
+const SCENE_HAT = "scene_on_event";
 const VALID_BUTTONS = new Set(["center", "up", "down", "left", "right"]);
 const PROC_TYPES = new Set(["procedures_defnoreturn", "procedures_defreturn"]);
 
@@ -34,7 +42,15 @@ function indentBody(text: string): string {
  */
 export function workspaceToPython(workspace: Workspace): string {
   resetSetup();
+  resetRemoteGen();
+  resetLvglGen();
   const gen = pythonGenerator;
+  // Scene modules are imported by name: keep user variables from shadowing them.
+  const newModules = sceneList().map((s) => s.module.split(".")[0]).filter((m) => !reservedModules.has(m));
+  if (newModules.length) {
+    for (const m of newModules) reservedModules.add(m);
+    gen.addReservedWords(newModules.join(","));
+  }
   gen.init(workspace);
 
   for (const top of workspace.getTopBlocks(true)) {
@@ -47,6 +63,7 @@ export function workspaceToPython(workspace: Workspace): string {
   const mainBodies: string[] = [];
   const buttonDefs: string[] = [];
   const buttonCounts: Record<string, number> = {};
+  const handlerNames = new Set<string>();
 
   for (const top of workspace.getTopBlocks(true)) {
     if (top.type === PROGRAM_HAT) {
@@ -66,10 +83,24 @@ export function workspaceToPython(workspace: Workspace): string {
       const suffix = n === 1 ? "" : `_${n}`;
       const name = `_on_btn_${btn}${suffix}`;
       buttonDefs.push(`@hub.buttons.on("${btn}")\ndef ${name}():\n${indentBody(globalDecl + body)}`);
+    } else if (top.type === SCENE_HAT) {
+      const [module, widget] = splitWidgetRef(top.getFieldValue("WIDGET") ?? "");
+      if (!module || !widget) continue;
+      needsScene(gen, module);
+      const child: Block | null = top.getInputTargetBlock("DO");
+      const code = child ? gen.blockToCode(child) : "";
+      const body = Array.isArray(code) ? code[0] : code;
+      const kind = findSceneWidget(module, widget)?.kind;
+      const { params, prelude } = eventParams(kind, body);
+      const base = `_on_${module.split(".").join("_")}_${widget}`;
+      let name = base;
+      for (let n = 2; handlerNames.has(name); n++) name = `${base}_${n}`;
+      handlerNames.add(name);
+      buttonDefs.push(`def ${name}(${params}):\n${indentBody(globalDecl + prelude + body)}\n\n\n${module}.on("${widget}", ${name})`);
     }
   }
 
-  if (buttonDefs.length) {
+  if (Object.keys(buttonCounts).length) {
     (gen as unknown as { definitions_: Record<string, string> }).definitions_["hub_lpf2_import"] = "import hub, lpf2";
   }
 

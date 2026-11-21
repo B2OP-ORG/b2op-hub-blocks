@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import { pythonToBlocks, type BlockSpec } from "../src/project/pythonToBlocks";
+import { pythonToBlocks, type BlockSpec } from "../src/codegen/pythonToBlocks";
 
 const VH = "# b2op-hub-blocks v2.0.0";
 
@@ -68,7 +68,20 @@ describe("pythonToBlocks", () => {
     const src = `${VH}\nimport hub, lpf2\n\nhub.led.setColorIdx(lpf2.color.RED)\n`;
     const chain = translate(src);
     expect(chain?.type).toBe("hub_led_color");
-    expect(chain?.fields?.COLOR).toBe("RED");
+    expect(chain?.inputs?.COLOR.shadow?.type).toBe("color_literal");
+    expect(chain?.inputs?.COLOR.shadow?.fields?.COLOR).toBe("RED");
+  });
+
+  it("recognizes hub_led_color with a reporter", () => {
+    const src = `${VH}
+import hub, lpf2
+
+hub.led.setColorIdx(x)
+`;
+    const chain = translate(src);
+    expect(chain?.type).toBe("hub_led_color");
+    expect(chain?.inputs?.COLOR.block?.type).toBe("variables_get");
+    expect(chain?.inputs?.COLOR.shadow?.type).toBe("color_literal");
   });
 
   it("recognizes hub_led_rgb with numeric literals", () => {
@@ -450,8 +463,9 @@ describe("round-trip (blocks → python → blocks → python)", () => {
   it("preserves hub_led_color exactly", () => {
     const { first, second } = roundTrip({
       type: "hub_led_color",
-      fields: { COLOR: "RED" },
+      inputs: { COLOR: { shadow: { type: "color_literal", fields: { COLOR: "RED" } } } },
     });
+    expect(first).toContain("hub.led.setColorIdx(lpf2.color.RED)");
     expect(second).toBe(first);
   });
 
@@ -484,7 +498,7 @@ describe("round-trip (blocks → python → blocks → python)", () => {
           next: {
             block: {
               type: "hub_led_color",
-              fields: { COLOR: "BLUE" },
+              inputs: { COLOR: { shadow: { type: "color_literal", fields: { COLOR: "BLUE" } } } },
             },
           },
         },

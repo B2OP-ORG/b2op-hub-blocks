@@ -1,0 +1,16 @@
+.title {
+  font-size: 11px;
+  color: var(--p-dim-text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--p-border);
+  background: var(--p-surface);
+  color: var(--p-text);
+  font-size: 12px;
+  cursor: grab;
+}

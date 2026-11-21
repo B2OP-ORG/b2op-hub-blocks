@@ -30,7 +30,6 @@ import hub, time
 
 VIDEO_FILE = "/sd/demo.avi"
 
-hub.lcd.init()
 hub.lcd.on()
 hub.lcd.backlight(200)
 

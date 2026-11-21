@@ -1,0 +1,27 @@
+/* Stacked "label above control" used by the property panels. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.grow { flex: 1; min-width: 0; }
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 13px;
+  border: 1px solid var(--p-border);
+  background: var(--p-input-bg);
+  color: var(--p-text);
+}
+.bad { border-color: var(--p-danger); }
+
+.textarea { resize: vertical; font-family: inherit; }
+
+.error { color: var(--p-danger); }
+
+/* Side by side fields (e.g. Min / Max). */
+.row { display: flex; gap: 8px; }

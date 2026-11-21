@@ -1,0 +1,129 @@
+import { SCREEN_H, SCREEN_W, childrenOf, isContainer, type SceneDoc, type SceneWidget } from "../../scene/model";
+import { contentOffset, drawnSize, isOutside } from "../../scene/geometry";
+import { usePalette } from "../theme";
+import type { WidgetDrag } from "../hooks/useWidgetDrag";
+import { MARGIN } from "./constants";
+import type { PreviewState, Stop } from "./preview";
+import { SceneWidgetBody } from "./widgets";
+
+/** What every widget node needs to draw itself and start drags. */
+export interface SceneNodeContext {
+  /** Committed scene (selection / tab lookups). */
+  doc: SceneDoc;
+  /** What is drawn: the preview copy in preview mode, else `doc`. */
+  shownDoc: SceneDoc;
+  preview: PreviewState | null;
+  selected: string | null;
+  /** Focus stop in preview mode. */
+  stop: Stop | undefined;
+  drag: WidgetDrag<SceneWidget> | null;
+  scale: number;
+  panCursor: string | undefined;
+  overTrash: boolean;
+  onBeginDrag: (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize") => void;
+  onDragMove: (e: React.PointerEvent) => void;
+  onDragEnd: () => void;
+}
+
+/** Which tab of a tab view to draw: the one holding the selection, else its value. */
+function tabShown(ctx: SceneNodeContext, tv: SceneWidget): number {
+  const sel = ctx.preview ? undefined : ctx.doc.widgets.find((w) => w.uid === ctx.selected);
+  if (sel) {
+    let q: SceneWidget | undefined = sel;
+    while (q?.parent) {
+      if (q.parent === tv.uid) return q.tab ?? 0;
+      q = ctx.doc.widgets.find((o) => o.uid === q!.parent);
+    }
+  }
+  return tv.value ?? 0;
+}
+
+/** The widgets of one container level (recursing into containers). */
+function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: string; tab?: number }) {
+  const p = usePalette();
+  const { preview, drag, scale, stop } = ctx;
+  return (
+    <>
+      {childrenOf(ctx.shownDoc, parent, tab).map((w0) => {
+        const w = drag?.uid === w0.uid ? drag.cur : w0;
+        if (preview && w.hidden) return null;
+        const size = drawnSize(w);
+        const isSel = !preview && w.uid === ctx.selected;
+        const focused = !!stop && stop.uid === w.uid;
+        const off = contentOffset(w);
+        const outside = !preview && isOutside(ctx.shownDoc, w);
+        return (
+          <div key={w.uid}
+            onPointerDown={(e) => ctx.onBeginDrag(e, w0, "move")}
+            onPointerMove={ctx.onDragMove}
+            onPointerUp={ctx.onDragEnd}
+            onPointerCancel={ctx.onDragEnd}
+            style={{
+              position: "absolute", left: w.x, top: w.y, width: size.w, height: size.h,
+              outline: isSel ? `${1 / scale * 2}px solid ${p.accent}` : undefined, outlineOffset: 1 / scale,
+              opacity: drag?.uid === w.uid && ctx.overTrash ? 0.3 : outside ? 0.4 : !preview && w.hidden ? 0.45 : 1,
+              ...(outside && !isSel ? { outline: `${2 / scale}px dashed ${p.danger}` } : {}),
+              cursor: ctx.panCursor ?? (preview ? "default" : drag?.uid === w.uid ? "grabbing" : "grab"),
+              touchAction: "none", userSelect: "none",
+            }}>
+            <SceneWidgetBody w={w} focused={focused} focusItem={focused ? stop?.item : undefined} editing={focused && preview?.editing} />
+            {isContainer(w.kind) && (
+              <div style={{ position: "absolute", left: off.x, top: off.y, width: w.w - off.x, height: w.h - off.y, overflow: "hidden" }}>
+                <SceneLevel ctx={ctx} parent={w.uid} tab={w.kind === "tabview" ? tabShown(ctx, w) : undefined} />
+              </div>
+            )}
+            {isSel && w.kind !== "line" && (
+              <span onPointerDown={(e) => ctx.onBeginDrag(e, w0, "resize")} title="Resize (Shift: 4 px steps)"
+                style={{ position: "absolute", right: -6 / scale * 2, bottom: -6 / scale * 2, width: 10 / scale * 2, height: 10 / scale * 2, borderRadius: 2 / scale, background: p.accent, cursor: "nwse-resize" }} />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** Scrollable, zoomable canvas with the hub's bezel and screen. */
+export function SceneCanvas({ ctx, canvasRef, screenRef, canvasProps, showHint }: {
+  ctx: SceneNodeContext;
+  canvasRef: React.Ref<HTMLDivElement>;
+  /** The LCD screen element: drop positions are measured from it. */
+  screenRef: React.Ref<HTMLDivElement>;
+  /** Event handlers of the scroll container (keys, pan / zoom, deselect). */
+  canvasProps: React.HTMLAttributes<HTMLDivElement>;
+  showHint: boolean;
+}) {
+  const p = usePalette();
+  const { scale, preview } = ctx;
+  return (
+    <div
+      ref={canvasRef}
+      tabIndex={0}
+      {...canvasProps}
+      className="remote-canvas"
+      style={{
+        flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", position: "relative", outline: "none",
+        background: p.panelAltBg, touchAction: "none", cursor: ctx.panCursor,
+        ["--sb-track" as string]: p.panelAltBg,
+        ["--sb-thumb" as string]: `color-mix(in srgb, ${p.accent} 55%, transparent)`,
+        ["--sb-thumb-hover" as string]: p.accent,
+      }}
+    >
+      <div style={{ position: "relative", width: (SCREEN_W + MARGIN * 2) * scale, height: (SCREEN_H + MARGIN * 2) * scale, margin: "0 auto" }}>
+        <div style={{ position: "absolute", left: 0, top: 0, transformOrigin: "0 0", transform: `scale(${scale})` }}>
+          {/* Bezel + screen */}
+          <div style={{ position: "absolute", left: MARGIN - 6, top: MARGIN - 6, width: SCREEN_W + 12, height: SCREEN_H + 12, borderRadius: 6, background: "#1f2933", boxShadow: "0 2px 8px rgba(0,0,0,.35)" }} />
+          {/* Edit mode doesn't clip the screen, so widgets outside it can still be seen and dragged back. */}
+          <div ref={screenRef} style={{ position: "absolute", left: MARGIN, top: MARGIN, width: SCREEN_W, height: SCREEN_H, background: ctx.shownDoc.bg, overflow: preview ? "hidden" : "visible" }}>
+            <SceneLevel ctx={ctx} />
+          </div>
+          {showHint && (
+            <div style={{ position: "absolute", left: MARGIN + 8, top: MARGIN + 40, width: SCREEN_W - 16, color: "#9ca3af", fontSize: 7, lineHeight: 1.4, textAlign: "center", pointerEvents: "none" }}>
+              Drag widgets here from the bar above (or click one). Drop one on the bin to delete it.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

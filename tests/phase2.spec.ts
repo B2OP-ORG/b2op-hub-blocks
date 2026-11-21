@@ -76,6 +76,53 @@ describe("Phase 2 blocks", () => {
     expect(py).toContain("import lvgl as lv");
     expect(py).toContain("_scr = lv.screen_active()");
     expect(py).toContain("_scr.clean()");
+    // LVGL is already running on the hub — never restart it.
+    expect(py).not.toContain("hub.lcd.init()");
+    expect(py.indexOf("import lvgl as lv")).toBeLessThan(py.indexOf("_scr = lv.screen_active()"));
+  });
+
+  it("LVGL widgets get friendly sequential names", () => {
+    const label = (text: string, next?: object) => ({
+      type: "lvgl_label",
+      inputs: { TEXT: { block: { type: "text", fields: { TEXT: text } } } },
+      ...(next ? { next: { block: next } } : {}),
+    });
+    const ws = makeWorkspace(underHat(label("a", label("b", { type: "lvgl_circle" }))));
+    const py = workspaceToPython(ws);
+    expect(py).toContain("label0 = lv.label(_scr)");
+    expect(py).toContain("label1 = lv.label(_scr)");
+    expect(py).toContain("circle0 = lv.obj(_scr)");
+    expect(py).not.toMatch(/_lbl_/);
+  });
+
+  it("LVGL widget names skip names taken by user variables", () => {
+    const ws = makeWorkspace({
+      variables: [{ name: "label0", id: "v1" }],
+      blocks: {
+        languageVersion: 0,
+        blocks: [{ type: "when_program_starts", inputs: { DO: { block: {
+          type: "variables_set", fields: { VAR: { id: "v1" } },
+          inputs: { VALUE: { block: { type: "math_number", fields: { NUM: 1 } } } },
+          next: { block: { type: "lvgl_label" } },
+        } } } }],
+      },
+    });
+    const py = workspaceToPython(ws);
+    expect(py).toContain("label0 = 1");
+    expect(py).toContain("label1 = lv.label(_scr)");
+  });
+
+  it("indents generated blocks with 4 spaces", () => {
+    const ws = makeWorkspace(underHat({
+      type: "controls_repeat_ext",
+      inputs: {
+        TIMES: { block: { type: "math_number", fields: { NUM: 3 } } },
+        DO: { block: { type: "text_print", inputs: { TEXT: { block: { type: "text", fields: { TEXT: "x" } } } } } },
+      },
+    }));
+    const py = workspaceToPython(ws);
+    expect(py).toMatch(/\n {4}print\('x'\)/);
+    expect(py).not.toMatch(/\n {2}print/);
   });
 
   it("LVGL label emits create + set_text + set_pos", () => {
@@ -90,7 +137,7 @@ describe("Phase 2 blocks", () => {
       }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toMatch(/_lbl_\w+ = lv\.label\(_scr\)/);
+    expect(py).toContain("label0 = lv.label(_scr)");
     expect(py).toContain(`.set_text('hi')`);
     expect(py).toContain(`.set_pos(10, 20)`);
   });
@@ -109,7 +156,7 @@ describe("Phase 2 blocks", () => {
       }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toMatch(/_rect_\w+ = lv\.obj\(_scr\)/);
+    expect(py).toContain("rect0 = lv.obj(_scr)");
     expect(py).toContain(".set_pos(5, 6)");
     expect(py).toContain(".set_size(40, 20)");
     expect(py).toContain("lv.color_hex(0xFF0000)");
@@ -149,7 +196,8 @@ describe("Phase 2 blocks", () => {
       }),
     );
     const py = workspaceToPython(ws);
-    expect(py).toMatch(/_line_\w+ = lv\.line\(_scr\)/);
+    expect(py).toContain("line0 = lv.line(_scr)");
+    expect(py).toContain("line0.set_points(line0_pts, 2)");
     expect(py).toContain(`{"x": 0, "y": 0}`);
     expect(py).toContain(`{"x": 50, "y": 25}`);
     expect(py).toContain(".set_style_line_width(3, 0)");

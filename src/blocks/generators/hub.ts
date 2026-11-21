@@ -19,8 +19,8 @@ export function registerHubGenerators(gen: PythonGenerator): void {
 
   gen.forBlock["hub_led_color"] = (block: Block) => {
     needsLpf2(gen);
-    const color = block.getFieldValue("COLOR");
-    return `hub.led.setColorIdx(lpf2.color.${color})\n`;
+    const color = gen.valueToCode(block, "COLOR", Order.NONE) || "lpf2.color.BLACK";
+    return `hub.led.setColorIdx(${color})\n`;
   };
 
   gen.forBlock["hub_led_rgb"] = (block: Block) => {

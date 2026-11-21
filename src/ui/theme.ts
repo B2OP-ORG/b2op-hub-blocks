@@ -1,4 +1,5 @@
-import { useDark } from "../state/store";
+import { useLayoutEffect } from "react";
+import { useApp } from "../state/store";
 
 /** Shared colour tokens for light/dark chrome. */
 export interface Palette {
@@ -82,4 +83,36 @@ export function palette(dark: boolean): Palette {
 
 export function usePalette(): Palette {
   return palette(useDark());
+}
+
+/** App-wide light/dark theme (a user setting, independent of the editor mode). */
+export function useDark(): boolean {
+  return useApp((s) => s.editorSettings.darkMode);
+}
+
+/** CSS custom property name for a palette key: `accentText` → `--p-accent-text`. */
+export function paletteVar(key: Exclude<keyof Palette, "dark">): string {
+  return "--p-" + key.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+}
+
+/** Every palette colour as CSS custom properties (used by the CSS modules in ui/components). */
+export function paletteVars(p: Palette): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (k !== "dark") vars[paletteVar(k as Exclude<keyof Palette, "dark">)] = String(v);
+  }
+  return vars;
+}
+
+/**
+ * Publish the active palette as CSS variables on <html>, so CSS modules
+ * (and portals rendered outside the app root) can use `var(--p-…)`.
+ */
+export function useApplyPaletteVars(): void {
+  const p = usePalette();
+  useLayoutEffect(() => {
+    const root = document.documentElement.style;
+    for (const [k, v] of Object.entries(paletteVars(p))) root.setProperty(k, v);
+    document.documentElement.dataset.theme = p.dark ? "dark" : "light";
+  }, [p]);
 }

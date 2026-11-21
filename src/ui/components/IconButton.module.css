@@ -1,0 +1,18 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.btn:disabled { cursor: default; opacity: 0.4; }
+
+/* Editor toolbars (scene / remote): fixed 26×24 hit box. */
+.toolbar { width: 26px; height: 24px; padding: 0; color: var(--p-text); }
+
+/* Panel headers and rows: muted icon, hover highlight. */
+.subtle { padding: 3px; color: var(--p-dim-text); }
+.subtle:not(:disabled):hover { background: var(--p-hover-bg); }

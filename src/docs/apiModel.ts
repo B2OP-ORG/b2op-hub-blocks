@@ -1,6 +1,6 @@
 // User-facing API reference model, built by parsing the bundled LSP stubs.
 
-import { STUBS } from "../editor/lsp/stubs";
+import { STUBS } from "../lsp/stubs";
 import { parseStub, type ApiClass, type ApiMember } from "./stubParser";
 
 export interface ApiModule {
@@ -16,7 +16,7 @@ export interface ApiModule {
 }
 
 /** Top-level packages shown in the reference. Others (typings, lvgl, …) are MicroPython/internal. */
-const ROOTS = ["hub", "lpf2"];
+const ROOTS = ["hub", "lpf2", "remote"];
 
 /** Friendly names for modules. Missing entries fall back to the module name. */
 const TITLES: Record<string, string> = {
@@ -51,6 +51,7 @@ const TITLES: Record<string, string> = {
   "lpf2.port_num.movehub": "BOOST Move hub ports",
   "lpf2.port_num.poweredup": "Powered Up hub ports",
   "lpf2.port_num.poweredupremote": "Powered Up remote ports",
+  remote: "Remote controls",
 };
 
 export const isPublic = (name: string) => !name.startsWith("_");

@@ -1,0 +1,11 @@
+.callout { margin: 6px 0; font-size: 13px; }
+
+.warn {
+  background: var(--p-warn-bg);
+  border: 1px solid var(--p-warn-border);
+  color: var(--p-warn-text);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.ok { opacity: 0.85; }

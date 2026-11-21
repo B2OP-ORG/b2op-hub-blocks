@@ -16,7 +16,7 @@ Items marked **firmware-blocked** depend on device-side changes before the web a
 
 ### LVGL blocks (UI) — standalone
 
-Wrap a curated subset of `lvgl` (v9 binding on device). Emit `import lvgl as lv` + `hub.lcd.init()` once at program start.
+Wrap a curated subset of `lvgl` (v9 binding on device). Emit `import lvgl as lv` once at program start (LVGL is already running; never call `hub.lcd.init()`).
 
 - [ ] `lvgl_init_screen` — screen root object handle
 - [ ] `lvgl_label` — text, x, y, color

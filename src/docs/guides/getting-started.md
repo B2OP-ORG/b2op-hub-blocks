@@ -42,6 +42,10 @@ The output appears in the **Console** at the bottom of the editor.
 - Call `hub.exit()` to stop from anywhere in your code.
 - Hold the hub's **center button for 2 seconds** to stop any program.
 
+## Reloading
+
+**Reload** in the top bar stops the running program, uploads the files you changed and runs it again. To do that automatically while you edit, open **Settings → Run & reload**: blocks files, scene files and Python files each have their own rule — off, after a delay since your last change, or when you leave the editor (click outside it, switch file tab or switch window).
+
 ## Where next?
 
 - Look at the **Examples** tab for ready-made programs you can open and change.

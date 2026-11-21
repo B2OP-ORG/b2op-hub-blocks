@@ -29,6 +29,9 @@ export const IMU_AXIS = [
   ["roll", "roll"],
 ] as const;
 
+/** Hue shared by the Control category, its blocks and Blockly's loop blocks (theme). */
+export const CONTROL_COLOUR = "45";
+
 /** Hat / event blocks. */
 export const EVENT_BLOCKS = [
   {
@@ -55,7 +58,7 @@ export const EVENT_BLOCKS = [
     type: "hub_quit",
     message0: "quit program",
     previousStatement: null,
-    colour: 0,
+    colour: 45,
     tooltip: "Exit the program. Runner shows Done screen.",
   },
 ] as const;
@@ -64,11 +67,12 @@ export const HUB_BLOCKS = [
   {
     type: "hub_led_color",
     message0: "set hub LED to %1",
-    args0: [{ type: "field_dropdown", name: "COLOR", options: [...COLOR_OPTIONS] }],
+    args0: [{ type: "input_value", name: "COLOR", check: "Number" }],
     previousStatement: null,
     nextStatement: null,
     colour: 210,
-    tooltip: "Set the hub's built-in LED to a named color.",
+    inputsInline: true,
+    tooltip: "Set the hub's built-in LED to a color (color index, e.g. from a 'color' block or a color sensor).",
   },
   {
     type: "hub_led_rgb",
@@ -128,13 +132,13 @@ export const HUB_BLOCKS = [
     message0: "power off hub",
     previousStatement: null,
     nextStatement: null,
-    colour: 0,
+    colour: 210,
   },
   {
     type: "color_literal",
     message0: "color %1",
     args0: [{ type: "field_dropdown", name: "COLOR", options: [...COLOR_OPTIONS] }],
     output: "Number",
-    colour: 20,
+    colour: 210,
   },
 ] as const;

@@ -105,7 +105,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.src) {
     console.log("Usage: node scripts/sync-stubs.mjs --src <path-to-b2op-hub-micropython>");
-    process.exit(args.help ? 0 : 1);
+    // process.exit(args.help ? 0 : 1);
+    args.src = "../b2op-hub-micropython";
   }
   const SRC = path.resolve(args.src);
   if (!(await pathExists(SRC))) {

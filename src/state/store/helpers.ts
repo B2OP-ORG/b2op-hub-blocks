@@ -56,3 +56,14 @@ export function projectHelpers(set: SetState, get: GetState) {
       }),
   };
 }
+
+/** Move the item `id` to sit before (or `after`) `targetId`. Returns `list` itself when nothing changes. */
+export function reorder<T>(list: T[], idOf: (x: T) => string, id: string, targetId: string, after: boolean): T[] {
+  if (id === targetId) return list;
+  const item = list.find((x) => idOf(x) === id);
+  if (!item || !list.some((x) => idOf(x) === targetId)) return list;
+  const rest = list.filter((x) => x !== item);
+  const at = rest.findIndex((x) => idOf(x) === targetId) + (after ? 1 : 0);
+  const next = [...rest.slice(0, at), item, ...rest.slice(at)];
+  return next.every((x, i) => x === list[i]) ? list : next;
+}

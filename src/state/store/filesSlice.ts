@@ -2,7 +2,7 @@ import type { StateCreator } from "zustand";
 import { fileToProject, newBlocksProject, withBlocksHeader, type FileMode, type ProjectFile, type ProjectSettings } from "../../project/format";
 import { deriveProject, mergeFiles, pathTaken, touch, withFolders } from "../../project/ops";
 import { isWithin, normalizeRelPath, relJoin, uniqueName } from "../../project/paths";
-import { projectHelpers } from "./helpers";
+import { projectHelpers, reorder } from "./helpers";
 import type { AppState } from "./types";
 
 /** File management inside the active project. */
@@ -11,6 +11,8 @@ export interface FilesSlice {
   closeFile: (id: string) => void;
   closeOtherFiles: (id: string) => void;
   closeAllFiles: () => void;
+  /** Reorder open file tabs: move `id` before (or `after`) `targetId`. */
+  moveOpenFile: (id: string, targetId: string, after: boolean) => void;
   updateFile: (id: string, content: string) => void;
   /** Rename/move a file to a new project-relative path. Returns an error message or null. */
   renameFile: (id: string, newPath: string) => string | null;
@@ -53,6 +55,11 @@ export const createFilesSlice: StateCreator<AppState, [], [], FilesSlice> = (set
     }),
 
     closeAllFiles: () => set((s) => ({ openFileIds: [], activeFileId: "", project: deriveProject(s.mfp, ""), pythonPreview: "" })),
+
+    moveOpenFile: (id, targetId, after) => set((s) => {
+      const openFileIds = reorder(s.openFileIds, (x) => x, id, targetId, after);
+      return openFileIds === s.openFileIds ? {} : { openFileIds };
+    }),
 
     updateFile: (id, content) => {
       const s = get();

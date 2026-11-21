@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import { SIDEBAR_TAB_IDS, type SidebarTabId } from "../../settings/editorSettings";
 import { loadSidebarLayout, saveSidebarLayout } from "../../settings/storage";
+import { reorder } from "./helpers";
 import { EXAMPLE_PREVIEW_ID, type AppState, type ExtraTab } from "./types";
 
 /** Sidebar layout and extra (non-file) editor tabs. */
@@ -24,6 +25,8 @@ export interface UiSlice {
   closeExtraTab: (id: string) => void;
   updateExtraTab: (id: string, patch: Partial<Omit<ExtraTab, "id">>) => void;
   closeOtherExtraTabs: (id: string) => void;
+  /** Reorder extra tabs: move `id` before (or `after`) `targetId`. */
+  moveExtraTab: (id: string, targetId: string, after: boolean) => void;
 }
 
 export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get) => {
@@ -62,5 +65,9 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get)
     }),
     updateExtraTab: (id, patch) => set((s) => ({ extraTabs: s.extraTabs.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
     closeOtherExtraTabs: (id) => set((s) => ({ extraTabs: s.extraTabs.filter((x) => x.id === id), activeExtraTab: s.extraTabs.some((x) => x.id === id) ? id : null })),
+    moveExtraTab: (id, targetId, after) => set((s) => {
+      const extraTabs = reorder(s.extraTabs, (x) => x.id, id, targetId, after);
+      return extraTabs === s.extraTabs ? {} : { extraTabs };
+    }),
   };
 };

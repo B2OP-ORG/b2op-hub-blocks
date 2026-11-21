@@ -1,7 +1,7 @@
 import { usePalette } from "../theme";
 
 /** One tab in the editor tab bar (file or doc / example), with a close button. */
-export function EditorTab({ active, title, italic, padLeft = 11, gap = 4, dirty, onClick, onClose, onDoubleClick, onContextMenu, children }: {
+export function EditorTab({ active, title, italic, padLeft = 11, gap = 4, dirty, onClick, onClose, onDoubleClick, onContextMenu, drag, dropSide, children }: {
   active: boolean;
   title: string;
   /** Non-file tabs (docs, example previews). */
@@ -14,6 +14,10 @@ export function EditorTab({ active, title, italic, padLeft = 11, gap = 4, dirty,
   onClose: () => void;
   onDoubleClick?: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  /** Drag-to-reorder handlers; omitted while the tab can't be dragged (e.g. renaming). */
+  drag?: Pick<React.HTMLAttributes<HTMLDivElement>, "onDragStart" | "onDragOver" | "onDragLeave" | "onDrop" | "onDragEnd">;
+  /** Show the drop marker on this side while another tab is dragged over. */
+  dropSide?: "before" | "after";
   children: React.ReactNode;
 }) {
   const p = usePalette();
@@ -28,7 +32,10 @@ export function EditorTab({ active, title, italic, padLeft = 11, gap = 4, dirty,
         borderBottom: active ? `2px solid ${p.accent}` : border,
         borderRadius: "4px 4px 0 0", cursor: "pointer", fontWeight: active ? 600 : 400, fontSize: 13, fontStyle: italic ? "italic" : undefined,
         userSelect: "none", maxWidth: 220, whiteSpace: "nowrap", flexShrink: 0,
+        boxShadow: dropSide ? `inset ${dropSide === "before" ? 2 : -2}px 0 0 ${p.accent}` : undefined,
       }}
+      draggable={!!drag}
+      {...drag}
       onClick={onClick}
       onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(); } }}
       onDoubleClick={onDoubleClick}

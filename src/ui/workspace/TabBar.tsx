@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { BookOpen, Download, Eye, Pencil, Play, Upload, X } from "lucide-react";
 import { useApp } from "../../state/store";
 import { isFileUnsynced, runProjectFile, uploadFile } from "../../run/deviceSync";
@@ -14,7 +15,57 @@ import { useDeviceAvailability } from "../hooks/useDeviceAvailability";
 import { useInlineRename } from "../hooks/useInlineRename";
 import { EditorTab, TabLabel } from "./EditorTab";
 
-/** Open files, then doc / example tabs. Double-click a file tab to rename it. */
+const TAB_DND_TYPE = "application/x-b2op-editor-tab";
+type TabGroup = "file" | "extra";
+type DropSide = "before" | "after";
+
+/** Drag-to-reorder within one tab group (files and doc / example tabs don't mix). */
+function useTabReorder(onMove: (group: TabGroup, id: string, targetId: string, after: boolean) => void) {
+  const dragging = useRef<{ group: TabGroup; id: string } | null>(null);
+  const [drop, setDrop] = useState<{ group: TabGroup; id: string; side: DropSide } | null>(null);
+  const end = () => { dragging.current = null; setDrop(null); };
+  const sideAt = (e: React.DragEvent<HTMLDivElement>): DropSide => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientX < r.left + r.width / 2 ? "before" : "after";
+  };
+  /** The drag in progress, if it's a tab from `group`. */
+  const source = (e: React.DragEvent, group: TabGroup) => {
+    const d = dragging.current;
+    return d && d.group === group && e.dataTransfer.types.includes(TAB_DND_TYPE) ? d : null;
+  };
+
+  const handlers = (group: TabGroup, id: string) => ({
+    onDragStart: (e: React.DragEvent<HTMLDivElement>) => {
+      dragging.current = { group, id };
+      e.dataTransfer.setData(TAB_DND_TYPE, id);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: React.DragEvent<HTMLDivElement>) => {
+      const d = source(e, group);
+      if (!d) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const side = sideAt(e);
+      setDrop((prev) => (d.id === id ? null : prev?.group === group && prev.id === id && prev.side === side ? prev : { group, id, side }));
+    },
+    onDragLeave: (e: React.DragEvent<HTMLDivElement>) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      setDrop((prev) => (prev?.group === group && prev.id === id ? null : prev));
+    },
+    onDrop: (e: React.DragEvent<HTMLDivElement>) => {
+      const d = source(e, group);
+      if (!d) return;
+      e.preventDefault();
+      onMove(group, d.id, id, sideAt(e) === "after");
+      end();
+    },
+    onDragEnd: end,
+  });
+  const dropSide = (group: TabGroup, id: string) => (drop?.group === group && drop.id === id ? drop.side : undefined);
+  return { handlers, dropSide };
+}
+
+/** Open files, then doc / example tabs. Double-click a file tab to rename it; drag a tab to reorder. */
 export function TabBar() {
   const p = usePalette();
   const mfp = useApp((s) => s.mfp);
@@ -26,6 +77,11 @@ export function TabBar() {
   const extraTabs = useApp((s) => s.extraTabs);
   const activeExtraTab = useApp((s) => s.activeExtraTab);
   const { canDevice, deviceHint } = useDeviceAvailability();
+  const reorder = useTabReorder((group, id, targetId, after) => {
+    const st = useApp.getState();
+    if (group === "file") st.moveOpenFile(id, targetId, after);
+    else st.moveExtraTab(id, targetId, after);
+  });
 
   const rename = useInlineRename<{ id: string; value: string }>(async (r, value) => {
     const f = useApp.getState().mfp.files.find((x) => x.id === r.id);
@@ -82,6 +138,8 @@ export function TabBar() {
             onClose={() => closeFile(fileId)}
             onDoubleClick={() => rename.start({ id: fileId, value: baseName(file.name) })}
             onContextMenu={(e) => tabMenu(e, fileId)}
+            drag={isRenaming ? undefined : reorder.handlers("file", fileId)}
+            dropSide={reorder.dropSide("file", fileId)}
           >
             {isRenaming && rename.inputProps ? <InlineInput {...rename.inputProps} /> : <TabLabel>{baseName(file.name)}</TabLabel>}
           </EditorTab>
@@ -97,6 +155,8 @@ export function TabBar() {
             italic padLeft={9} gap={5}
             onClick={() => useApp.getState().openExtraTab(t)}
             onClose={close}
+            drag={reorder.handlers("extra", t.id)}
+            dropSide={reorder.dropSide("extra", t.id)}
             onContextMenu={(e) => openContextMenu(e, [
               { label: "Close", icon: <X size={13} />, onSelect: close },
               { label: "Close others", disabled: extraTabs.length <= 1, onSelect: () => useApp.getState().closeOtherExtraTabs(t.id) },

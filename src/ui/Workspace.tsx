@@ -86,6 +86,7 @@ export function Workspace() {
   } else if (isRemoteFile(activeFile.name)) {
     editor = <Suspense fallback={null}><RemoteView file={activeFile} /></Suspense>;
   } else if (isSceneFile(activeFile)) {
+    columns = `1fr ${pySize + DRAWER_HANDLE}px`;
     editor = <Suspense fallback={null}><SceneView file={activeFile} /></Suspense>;
   } else if (project.type === "blocks") {
     columns = `1fr ${pySize + DRAWER_HANDLE}px`;
@@ -112,7 +113,8 @@ export function Workspace() {
     );
   }
 
-  const isBlocks = !extraTab && !!activeFile && !isRemoteFile(activeFile.name) && !isSceneFile(activeFile) && project.type === "blocks";
+  const isScene = !extraTab && !!activeFile && isSceneFile(activeFile);
+  const isBlocks = !extraTab && !!activeFile && !isRemoteFile(activeFile.name) && !isScene && project.type === "blocks";
 
   return (
     <div
@@ -127,12 +129,12 @@ export function Workspace() {
       <div ref={setEditorArea} style={{ background: isBlocks ? "#ffffff" : p.surface, overflow: "hidden", minWidth: 0, minHeight: 0 }}>
         {editor}
       </div>
-      {isBlocks && (
+      {(isBlocks || isScene) && activeFile && (
         <div style={{ gridRow: "1 / span 2", gridColumn: 2, minWidth: 0, minHeight: 0 }}>
-          {/* Shows the whole file as stored/uploaded: blocks header line + generated Python. */}
+          {/* Shows the whole file as stored/uploaded: blocks/scene header line + generated Python. */}
           <Drawer side="right" label="Python" storageKey="drawer.python" defaultSize={360} dark={p.dark} onSizeChange={setPySize}>
             <Suspense fallback={null}>
-              <MonacoView value={activeFile.content} readOnly />
+              <MonacoView value={activeFile.content} readOnly lspUri={lspUri} />
             </Suspense>
           </Drawer>
         </div>

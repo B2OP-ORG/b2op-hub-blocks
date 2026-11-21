@@ -8,7 +8,7 @@
 // local copy of the scene. Pan / zoom: see ../remote/canvasView.ts.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Code2, Eye, Maximize2, Monitor, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, Maximize2, Monitor, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import { usePalette, type Palette } from "../theme";
@@ -74,7 +74,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const parsed = useMemo(() => splitSceneHeader(file.content), [file.content]);
   const [selected, setSelected] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [showCode, setShowCode] = useState(false);
   // Preview: local copy of the scene, the focus stop, edit mode and the last event.
   const [preview, setPreview] = useState<{ doc: SceneDoc; focus: number; editing: boolean; log: string } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -141,8 +140,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const want = withSceneHeader(doc0, sceneToPython(doc0, module));
     if (want !== file.content) useApp.getState().updateFile(file.id, want);
   }, [doc0, module, file.id, file.content]);
-
-  const python = useMemo(() => (doc0 ? sceneToPython(doc0, module) : ""), [doc0, module]);
 
   if (!parsed.doc) {
     return (
@@ -399,7 +396,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
           <ModeButton p={p} active={!!preview} onClick={startPreview} icon={<Eye size={13} />} label="Preview"
             title="Try the hub buttons: ↑ ↓ = up / down, Enter = center, ← = left" />
         </div>
-        <ModeButton p={p} active={showCode} onClick={() => setShowCode(!showCode)} icon={<Code2 size={13} />} label="Python" title="Show the generated Python module" toggle />
         <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 2 }}>
           <IconButton p={p} title="Zoom out (Ctrl −)" onClick={() => cv.zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= MIN_ZOOM}><ZoomOut size={14} /></IconButton>
           <button type="button" title="Reset zoom (Ctrl 0)" onClick={() => cv.zoomTo(1)}
@@ -478,11 +474,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
             </div>
           )}
           </div>
-          {showCode && (
-            <pre style={{ margin: 0, height: "40%", flexShrink: 0, overflow: "auto", padding: 10, borderTop: `1px solid ${p.border}`, background: p.inputBg, fontSize: 11, lineHeight: 1.4 }}>
-              {python}
-            </pre>
-          )}
         </div>
 
         {/* Palette drag: the real widget follows the pointer, at the canvas scale. */}
@@ -511,14 +502,14 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
 // ── Small pieces ─────────────────────────────────────────────────────────────
 
-function ModeButton({ p, active, onClick, icon, label, title, toggle }: { p: Palette; active: boolean; onClick: () => void; icon: React.ReactNode; label: string; title: string; toggle?: boolean }) {
+function ModeButton({ p, active, onClick, icon, label, title }: { p: Palette; active: boolean; onClick: () => void; icon: React.ReactNode; label: string; title: string }) {
   return (
-    <button type="button" disabled={active && !toggle} onClick={onClick} title={title} aria-pressed={active}
+    <button type="button" disabled={active} onClick={onClick} title={title} aria-pressed={active}
       style={{
         display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", fontSize: 12, fontWeight: 600,
-        border: toggle ? `1px solid ${p.border}` : "none", borderRadius: toggle ? 6 : 0,
+        border: "none", borderRadius: 0,
         background: active ? p.accent : "transparent", color: active ? p.accentText : p.text,
-        cursor: active && !toggle ? "default" : "pointer",
+        cursor: active ? "default" : "pointer",
       }}>
       {icon}{label}
     </button>

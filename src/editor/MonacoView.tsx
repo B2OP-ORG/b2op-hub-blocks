@@ -114,7 +114,9 @@ export function MonacoView({ value, language = "python", readOnly = false, onCha
   const lspUriRef = useRef(lspUri);
   lspUriRef.current = lspUri;
 
-  const lspEnabled = language === "python" && !readOnly;
+  // Read-only views (generated Python) still get hovers, diagnostics and
+  // semantic tokens; only a view with an `lspUri` is opened on the server.
+  const lspEnabled = language === "python";
   const service = useLspService(lspEnabled ? monacoNs : null);
 
   // Register / unregister document with LSP service when model or service changes.

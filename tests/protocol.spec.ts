@@ -7,7 +7,7 @@ import {
   REMOTE_OP, RemoteType, encodeRemoteDef, encodeRemoteSet, encodeRemoteValue, packRemote, decodeRemote,
   type ProgramEndInfo, type EchoFrame, type RemoteEvent,
 } from "../src/device/protocol";
-import { MockTransport } from "../src/transport/mock";
+import { MockTransport } from "../src/device/sim/mockHub";
 import { PROTO_FEATURES, protoFeatures, supportsFlag, supportsKind } from "../src/device/protocolFeatures";
 import { CmdId } from "../src/device/cmdHelpers";
 

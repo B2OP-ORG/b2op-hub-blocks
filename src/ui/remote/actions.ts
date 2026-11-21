@@ -1,5 +1,5 @@
 import { useApp } from "../../state/store";
-import { showAlert, showList, showPrompt } from "../Dialog";
+import { showAlert, showList, showPrompt } from "../dialog";
 import {
   CONTROL_KINDS, DEFAULT_REMOTE_FILE, INDICATOR_KINDS, KIND_LABEL, emptyLayout, freeSpot, isRemoteFile, makeWidget,
   nameProblem, parseLayout, projectSymbols, roleOf, serializeLayout, widgetSymbols, type RemoteSymbol, type WidgetKind,

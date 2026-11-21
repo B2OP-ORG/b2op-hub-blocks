@@ -1,0 +1,25 @@
+.bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--p-border);
+  flex-wrap: wrap;
+  box-sizing: border-box;
+}
+
+/* Top bar of an editor: icon, file name, mode toggle, zoom. */
+.main { gap: 10px; background: var(--p-panel-bg); }
+
+/* Second bar: widget palette or a status hint. */
+.palette { gap: 6px; min-height: 40px; background: var(--p-panel-alt-bg); }
+
+.title { font-weight: 600; }
+
+.hint { font-size: 12px; color: var(--p-dim-text); }
+
+.separator {
+  width: 1px;
+  align-self: stretch;
+  background: var(--p-border);
+  margin: 0 4px;
+}

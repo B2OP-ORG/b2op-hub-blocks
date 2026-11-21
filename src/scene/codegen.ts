@@ -5,17 +5,8 @@
 //
 // Only `lvgl` is imported, so the module also works from plain Python files.
 
-import {
-  LONG_MODES,
-  SCREEN_H,
-  SCREEN_W,
-  contentOffset,
-  creationOrder,
-  hexColor,
-  QR_CAPACITY_M,
-  type SceneDoc,
-  type SceneWidget,
-} from "./model";
+import { LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
+import { contentOffset, QR_CAPACITY_M } from "./geometry";
 
 const I = "    ";
 const py = (s: string) => JSON.stringify(s); // JSON string literals are valid Python literals

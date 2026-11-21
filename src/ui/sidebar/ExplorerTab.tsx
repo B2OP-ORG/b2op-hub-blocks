@@ -1,52 +1,33 @@
 import { useMemo, useState } from "react";
 import {
-  Blocks, ChevronDown, ChevronRight, Copy, Download, Ellipsis, File, FileCode, FilePlus, Folder, FolderOpen, Gamepad2,
-  FolderPlus, Import, Pencil, Play, Trash2, Upload,
-  Monitor,
+  Blocks, ChevronDown, ChevronRight, Copy, Download, Ellipsis, FilePlus, Folder, FolderOpen, Gamepad2,
+  FolderPlus, Import, Monitor, Pencil, Play, Trash2, Upload,
 } from "lucide-react";
-import { useApp, isFileUnsynced } from "../../state/store";
-import { baseName, fileMode, type ProjectFile } from "../../project/format";
+import { useApp } from "../../state/store";
+import { isFileUnsynced, runProjectFile, uploadFile, uploadProject } from "../../run/deviceSync";
+import { baseName, type ProjectFile } from "../../project/format";
 import { relDirname, relJoin } from "../../project/paths";
-import { runProjectFile, uploadFile, uploadProject } from "../../project/deviceSync";
-import { openContextMenu, openMenuAt, type MenuItem } from "../ContextMenu";
+import { isRemoteFile } from "../../remote/layout";
+import { isSceneFile } from "../../scene/project";
 import { usePalette } from "../theme";
-import { showAlert } from "../Dialog";
+import { showAlert } from "../dialog";
 import {
   deleteFileFlow, deleteFolderFlow, downloadProjectFile, importFilesFromComputer, newFileFlow, newFolderFlow,
 } from "../actions";
-import { EmptyNote, IconButton, InlineInput, PanelHeader, wrapText } from "./common";
-import { isRemoteFile } from "../../remote/layout";
+import { openContextMenu, openMenuAt, type MenuItem } from "../components/menuStore";
+import { EmptyNote } from "../components/EmptyNote";
+import { IconButton } from "../components/IconButton";
+import { InlineInput } from "../components/InlineInput";
+import { ListRow, RowIcon, RowLabel } from "../components/ListRow";
+import { PanelHeader } from "../components/PanelHeader";
+import { useDeviceAvailability } from "../hooks/useDeviceAvailability";
+import { useInlineRename } from "../hooks/useInlineRename";
 import { openRemoteController } from "../remote/actions";
 import { newSceneFlow } from "../scene/actions";
-import { isSceneFile } from "../../scene/project";
+import { FileIcon } from "./FileIcon";
+import { buildTree, type DirNode, type TreeNode } from "./tree";
 
-interface DirNode { kind: "dir"; path: string; name: string; children: TreeNode[] }
-interface FileNode { kind: "file"; file: ProjectFile; name: string }
-type TreeNode = DirNode | FileNode;
-
-function buildTree(files: ProjectFile[], folders: string[]): TreeNode[] {
-  const root: DirNode = { kind: "dir", path: "", name: "", children: [] };
-  const dirs = new Map<string, DirNode>([["", root]]);
-  const ensureDir = (path: string): DirNode => {
-    const existing = dirs.get(path);
-    if (existing) return existing;
-    const parent = ensureDir(relDirname(path));
-    const node: DirNode = { kind: "dir", path, name: baseName(path), children: [] };
-    parent.children.push(node);
-    dirs.set(path, node);
-    return node;
-  };
-  for (const d of folders) ensureDir(d);
-  for (const f of files) ensureDir(relDirname(f.name)).children.push({ kind: "file", file: f, name: baseName(f.name) });
-  const sort = (n: DirNode) => {
-    n.children.sort((a, b) => (a.kind !== b.kind ? (a.kind === "dir" ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true })));
-    n.children.forEach((c) => c.kind === "dir" && sort(c));
-  };
-  sort(root);
-  return root.children;
-}
-
-type Renaming = { kind: "file"; id: string; value: string } | { kind: "dir"; path: string; value: string } | null;
+type Renaming = { kind: "file"; id: string; value: string } | { kind: "dir"; path: string; value: string };
 
 export function ExplorerTab() {
   const p = usePalette();
@@ -54,23 +35,14 @@ export function ExplorerTab() {
   const hasRemote = mfp.files.some((f) => isRemoteFile(f.name));
   const activeFileId = useApp((s) => s.activeFileId);
   const openFileIds = useApp((s) => s.openFileIds);
-  const device = useApp((s) => s.device);
-  const running = useApp((s) => s.running);
   const deviceName = useApp((s) => s.deviceName);
   const openFile = useApp((s) => s.openFile);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [renaming, setRenaming] = useState<Renaming>(null);
+  const { canDevice, deviceHint } = useDeviceAvailability();
 
   const tree = useMemo(() => buildTree(mfp.files, mfp.folders), [mfp.files, mfp.folders]);
-  const canDevice = !!device && !running;
-  const deviceHint = !device ? "connect a hub" : running ? "program running" : undefined;
 
-  const commitRename = async () => {
-    const r = renaming;
-    if (!r) return;
-    setRenaming(null);
-    const value = r.value.trim();
-    if (!value) return;
+  const rename = useInlineRename<Renaming>(async (r, value) => {
     const st = useApp.getState();
     let err: string | null = null;
     if (r.kind === "file") {
@@ -82,7 +54,8 @@ export function ExplorerTab() {
       err = st.renameFolder(r.path, relJoin(relDirname(r.path), value));
     }
     if (err) await showAlert("Can't rename", err);
-  };
+  });
+  const { renaming } = rename;
 
   const backgroundItems = (dir = ""): MenuItem[] => [
     { label: "New Python file…", icon: <FilePlus size={13} />, onSelect: () => newFileFlow(dir, "python") },
@@ -105,7 +78,7 @@ export function ExplorerTab() {
       !isRemoteFile(f.name) && !isSceneFile(f) && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(f.id) },
       "separator",
-      { label: "Rename", icon: <Pencil size={13} />, hint: "F2", onSelect: () => setRenaming({ kind: "file", id: f.id, value: baseName(f.name) }) },
+      { label: "Rename", icon: <Pencil size={13} />, hint: "F2", onSelect: () => rename.start({ kind: "file", id: f.id, value: baseName(f.name) }) },
       { label: "Duplicate", icon: <Copy size={13} />, onSelect: () => useApp.getState().duplicateFile(f.id) },
       { label: "Download", icon: <Download size={13} />, onSelect: () => downloadProjectFile(f.id) },
       "separator",
@@ -117,7 +90,7 @@ export function ExplorerTab() {
     openContextMenu(e, [
       ...backgroundItems(d.path),
       "separator",
-      { label: "Rename", icon: <Pencil size={13} />, onSelect: () => setRenaming({ kind: "dir", path: d.path, value: d.name }) },
+      { label: "Rename", icon: <Pencil size={13} />, onSelect: () => rename.start({ kind: "dir", path: d.path, value: d.name }) },
       { label: "Delete", icon: <Trash2 size={13} />, danger: true, onSelect: () => deleteFolderFlow(d.path) },
     ]);
   };
@@ -128,20 +101,6 @@ export function ExplorerTab() {
     return n;
   });
 
-  const rowBase = (depth: number, active: boolean): React.CSSProperties => ({
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 5,
-    padding: `3px 8px 3px ${8 + depth * 12}px`,
-    background: active ? p.activeBg : "transparent",
-    color: p.text,
-    cursor: "pointer",
-    borderLeft: `2px solid ${active ? p.accent : "transparent"}`,
-    userSelect: "none",
-  });
-
-  const iconWrap: React.CSSProperties = { display: "inline-flex", alignItems: "center", height: 16, flexShrink: 0, color: p.dimText };
-
   const renderNodes = (nodes: TreeNode[], depth: number): React.ReactNode =>
     nodes.map((n) => {
       if (n.kind === "dir") {
@@ -149,19 +108,13 @@ export function ExplorerTab() {
         const isRenaming = renaming?.kind === "dir" && renaming.path === n.path;
         return (
           <div key={"d:" + n.path}>
-            <div
-              style={rowBase(depth, false)}
-              onClick={() => toggle(n.path)}
-              onContextMenu={(e) => dirMenu(e, n)}
-              onMouseEnter={(e) => { e.currentTarget.style.background = p.hoverBg; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-            >
-              <span style={iconWrap}>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span>
-              <span style={iconWrap}>{isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}</span>
-              {isRenaming
-                ? <InlineInput value={renaming.value} onChange={(v) => setRenaming({ ...renaming, value: v })} onCommit={commitRename} onCancel={() => setRenaming(null)} />
-                : <span style={{ ...wrapText, fontWeight: 600 }}>{n.name}</span>}
-            </div>
+            <ListRow depth={depth} bar onClick={() => toggle(n.path)} onContextMenu={(e) => dirMenu(e, n)}>
+              <RowIcon>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</RowIcon>
+              <RowIcon>{isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}</RowIcon>
+              {isRenaming && rename.inputProps
+                ? <InlineInput {...rename.inputProps} />
+                : <RowLabel style={{ fontWeight: 600 }}>{n.name}</RowLabel>}
+            </ListRow>
             {!isCollapsed && renderNodes(n.children, depth + 1)}
           </div>
         );
@@ -171,50 +124,43 @@ export function ExplorerTab() {
       const isOpen = openFileIds.includes(f.id);
       const isRenaming = renaming?.kind === "file" && renaming.id === f.id;
       const unsynced = isFileUnsynced(mfp, f, deviceName || undefined);
-      const scene = isSceneFile(f);
-      const mode = !scene && /\.pyi?$/i.test(f.name) ? fileMode(f) : null;
       return (
-        <div
+        <ListRow
           key={f.id}
+          depth={depth}
+          bar
+          active={active}
           tabIndex={0}
-          style={rowBase(depth, active)}
           title={f.name}
           onClick={() => openFile(f.id)}
           onKeyDown={(e) => {
-            if (e.key === "F2") setRenaming({ kind: "file", id: f.id, value: baseName(f.name) });
+            if (e.key === "F2") rename.start({ kind: "file", id: f.id, value: baseName(f.name) });
             if (e.key === "Enter") openFile(f.id);
             if (e.key === "Delete") void deleteFileFlow(f.id);
           }}
           onContextMenu={(e) => fileMenu(e, f)}
-          onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = p.hoverBg; }}
-          onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
         >
-          <span style={{ ...iconWrap, width: 13 }} />
-          <span style={{ ...iconWrap, color: scene ? "#7c3aed" : mode === "blocks" ? "#d97706" : mode === "python" ? p.accent : isRemoteFile(f.name) ? "#db2777" : p.dimText }}>
-            {scene ? <Monitor size={13} /> : mode === "blocks" ? <Blocks size={13} /> : mode === "python" ? <FileCode size={13} /> : isRemoteFile(f.name) ? <Gamepad2 size={13} /> : <File size={13} />}
-          </span>
-          {isRenaming
-            ? <InlineInput value={renaming.value} onChange={(v) => setRenaming({ ...renaming, value: v })} onCommit={commitRename} onCancel={() => setRenaming(null)} />
-            : <span style={{ ...wrapText, fontWeight: isOpen ? 600 : 400, opacity: isOpen ? 1 : 0.85 }}>{n.name}</span>}
+          <RowIcon width={13} />
+          <FileIcon file={f} />
+          {isRenaming && rename.inputProps
+            ? <InlineInput {...rename.inputProps} />
+            : <RowLabel style={{ fontWeight: isOpen ? 600 : 400, opacity: isOpen ? 1 : 0.85 }}>{n.name}</RowLabel>}
           {unsynced && !isRenaming && (
             <span title="Changed since last upload" style={{ color: p.accent, fontSize: 9, lineHeight: "16px", flexShrink: 0 }}>●</span>
           )}
-        </div>
+        </ListRow>
       );
     });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <PanelHeader title="Explorer" subtitle={mfp.title}>
-        <IconButton
-          title="More actions"
-          onClick={(e) => openMenuAt(e.currentTarget, [...backgroundItems(), ...projectItems()])}
-        >
+        <IconButton title="More actions" onClick={(e) => openMenuAt(e.currentTarget, [...backgroundItems(), ...projectItems()])}>
           <Ellipsis size={15} />
         </IconButton>
       </PanelHeader>
       <div
-        style={{ flex: 1, overflowY: "auto", paddingBottom: 24 }}
+        style={{ flex: 1, overflowY: "auto", paddingBottom: 24, color: p.text }}
         onContextMenu={(e) => openContextMenu(e, [...backgroundItems(), ...projectItems()])}
       >
         {tree.length === 0

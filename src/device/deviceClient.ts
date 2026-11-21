@@ -1,8 +1,7 @@
-import type { Transport } from "../transport/types";
+import type { Transport } from "./transport/types";
 import { HubProtocolV1, protoVersionError, DEFAULT_TIMEOUT_MS, validatePath, type UploadPolicy, type ProgramEndSink, type ProgramStartSink, type DirEntry, type StdoutSink, type StderrSink, type EchoSink, type RemoteDef, type RemoteSetEntry, type RemoteSink } from "./protocol";
 import type { CmdName, KindName, ProtoFeatures } from "./protocolFeatures";
 import { sanitizeFilename } from "../utils/sanitize";
-import { useApp } from "../state/store";
 
 const dec = new TextDecoder("utf-8", { fatal: false });
 
@@ -42,6 +41,14 @@ const TMP_RUN_NAME = "__web_run.py";
  * `run(code)` uploads the source as a temp file and asks the on-device runner
  * to execute it via `runner.run_program(path)`. No raw REPL anywhere.
  */
+/** App hooks the client calls during connect (keeps this layer free of UI state). */
+export interface DeviceClientOptions {
+  /** Called with the board identity once HELLO succeeds. */
+  onBoardInfo?: (name: string, version: string, fwVersion: string) => void;
+  /** Whether to ask the hub to echo BLE traffic over USB after connecting (debug). */
+  bleEchoOverUsb?: () => boolean;
+}
+
 export class DeviceClient {
   private proto: HubProtocolV1;
   readonly transport: Transport;
@@ -49,8 +56,11 @@ export class DeviceClient {
   private pinging = false;
   private bleEcho = false;
 
-  constructor(transport: Transport) {
+  private readonly opts: DeviceClientOptions;
+
+  constructor(transport: Transport, opts: DeviceClientOptions = {}) {
     this.transport = transport;
+    this.opts = opts;
     this.proto = new HubProtocolV1(transport);
   }
 
@@ -97,7 +107,7 @@ export class DeviceClient {
         await this.proto.requestHello(DEFAULT_TIMEOUT_MS);
         const versionError = protoVersionError(this.proto.protocolVersion);
         if (versionError) throw new Error(versionError);
-        useApp.getState().setBoardInfo(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
+        this.opts.onBoardInfo?.(this.proto.boardName, this.proto.boardVersion, this.proto.fwVersion);
       } catch (e) {
         if (e instanceof Error && e.message.startsWith("Unsupported device protocol")) throw e;
         /* other hello failures are non-fatal */
@@ -125,7 +135,7 @@ export class DeviceClient {
         }
       }
     }
-    if (useApp.getState().editorSettings.bleEchoOverUsb && this.supportsBleEcho) {
+    if (this.opts.bleEchoOverUsb?.() && this.supportsBleEcho) {
       try { await this.setBleEcho(true); } catch { /* non-fatal: echo is a debug aid */ }
     }
     this.pingInterval = setInterval(async () => {

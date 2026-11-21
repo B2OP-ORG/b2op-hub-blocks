@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Sync LSP stubs from the Lpf2-micropython firmware tree into
-// src/editor/lsp/stubs/files, then append per-file overlays from
+// src/lsp/stubs/files, then append per-file overlays from
 // scripts/stubs-overlay for symbols that live in the on-device Python
 // shim layer (e.g. hub.sleep) and are not present in the fw source.
 //
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
-const DEST = path.join(REPO_ROOT, "src/editor/lsp/stubs/files");
+const DEST = path.join(REPO_ROOT, "src/lsp/stubs/files");
 const OVERLAY = path.join(REPO_ROOT, "scripts/stubs-overlay");
 
 const LOCAL_ONLY = new Set(["pyrightconfig.json"]);

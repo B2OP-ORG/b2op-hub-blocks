@@ -1,6 +1,6 @@
 // User-facing API reference model, built by parsing the bundled LSP stubs.
 
-import { STUBS } from "../editor/lsp/stubs";
+import { STUBS } from "../lsp/stubs";
 import { parseStub, type ApiClass, type ApiMember } from "./stubParser";
 
 export interface ApiModule {

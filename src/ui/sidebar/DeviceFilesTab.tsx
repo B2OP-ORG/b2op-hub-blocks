@@ -1,30 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
 import {
   ArrowUp, Copy, Download, File, FileInput, Folder, FolderInput, FolderPlus, Move, Pencil, Play, RefreshCw, Trash2, Upload,
 } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { DirEntry } from "../../device/protocol";
 import { devJoin, devParent } from "../../project/paths";
-import { CancelledError, runDevicePath, uploadWithProgress } from "../../project/deviceSync";
-import { pickFiles } from "../../project/download";
-import { downloadBytes } from "../../project/zip";
-import { openContextMenu, type MenuItem } from "../ContextMenu";
+import { runDevicePath, uploadWithProgress } from "../../run/deviceSync";
+import { downloadBytes, pickFiles } from "../../utils/download";
+import { openContextMenu, type MenuItem } from "../components/menuStore";
 import { usePalette } from "../theme";
-import { showAlert, showConfirm, showPrompt } from "../Dialog";
+import { showConfirm, showPrompt } from "../dialog";
 import {
   loadDeviceDirAsProject, loadDeviceFileIntoPickedProject, loadDeviceFileIntoProject, readDeviceFile,
 } from "../actions";
-import { EmptyNote, IconButton, InlineInput, PanelHeader, wrapText } from "./common";
-
-function crumbs(cwd: string): { label: string; path: string }[] {
-  const out = [{ label: "/", path: "/" }];
-  let acc = "";
-  for (const part of cwd.split("/").filter(Boolean)) {
-    acc += "/" + part;
-    out.push({ label: part, path: acc });
-  }
-  return out;
-}
+import { EmptyNote } from "../components/EmptyNote";
+import { IconButton } from "../components/IconButton";
+import { InlineInput } from "../components/InlineInput";
+import { ListRow, RowIcon, RowLabel } from "../components/ListRow";
+import { PanelHeader } from "../components/PanelHeader";
+import { useInlineRename } from "../hooks/useInlineRename";
+import { Breadcrumbs } from "./Breadcrumbs";
+import { useDeviceFiles } from "./useDeviceFiles";
 
 export function DeviceFilesTab({ active }: { active: boolean }) {
   const p = usePalette();
@@ -34,65 +29,12 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
   const projectId = useApp((s) => s.mfp.id);
   const projectTitle = useApp((s) => s.mfp.title);
   const appendConsole = useApp((s) => s.appendConsole);
+  const { cwd, setCwd, entries, loading, error, busy, refresh, op, minRoot } = useDeviceFiles(active);
 
-  const [cwd, setCwd] = useState("/sd");
-  const [entries, setEntries] = useState<DirEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [renaming, setRenaming] = useState<{ name: string; value: string } | null>(null);
-
-  const minRoot = allowRoot ? "/" : "/sd";
-
-  const refresh = useCallback(async (path = cwd) => {
-    if (!device) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await device.ls(path);
-      result.sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true })));
-      setEntries(result);
-    } catch (e) {
-      setError((e as Error).message);
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [device, cwd]);
-
-  // Load when the tab is shown, the path changes, or a hub connects.
-  useEffect(() => {
-    if (active && device) void refresh(cwd);
-  }, [active, device, cwd]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!allowRoot && !cwd.startsWith("/sd")) setCwd("/sd");
-  }, [allowRoot, cwd]);
-
-  /** Run a device operation with busy state + error popup, then refresh. */
-  const op = async (label: string, fn: () => Promise<void>, refreshAfter = true) => {
-    setBusy(true);
-    try {
-      await fn();
-      if (refreshAfter) await refresh();
-    } catch (e) {
-      if (e instanceof CancelledError || (e as Error).message === "Cancelled") {
-        appendConsole("info", `[${label} cancelled]\n`);
-      } else {
-        appendConsole("err", `[${label} failed: ${(e as Error).message}]\n`);
-        await showAlert(`Couldn't ${label}`, (e as Error).message);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const commitRename = () => {
-    const r = renaming;
-    setRenaming(null);
-    if (!device || !r || !r.value.trim() || r.value.trim() === r.name) return;
-    void op("rename", () => device.mv(devJoin(cwd, r.name), devJoin(cwd, r.value.trim())));
-  };
+  const rename = useInlineRename<{ name: string; value: string }>((r, value) => {
+    if (!device || value === r.name) return;
+    void op("rename", () => device.mv(devJoin(cwd, r.name), devJoin(cwd, value)));
+  });
 
   const copyOrMove = async (kind: "copy" | "move", name: string) => {
     if (!device) return;
@@ -167,7 +109,7 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
     const path = devJoin(cwd, e.name);
     const common: MenuItem[] = [
       "separator",
-      { label: "Rename", icon: <Pencil size={13} />, disabled, hint, onSelect: () => setRenaming({ name: e.name, value: e.name }) },
+      { label: "Rename", icon: <Pencil size={13} />, disabled, hint, onSelect: () => rename.start({ name: e.name, value: e.name }) },
       { label: "Copy to…", icon: <Copy size={13} />, disabled, hint, onSelect: () => copyOrMove("copy", e.name) },
       { label: "Move to…", icon: <Move size={13} />, disabled, hint, onSelect: () => copyOrMove("move", e.name) },
       "separator",
@@ -199,36 +141,13 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
     );
   }
 
-  const path = crumbs(cwd);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <PanelHeader title="SD card">
         <IconButton title="Up" disabled={cwd === minRoot || cwd === "/" || busy} onClick={() => setCwd(devParent(cwd))}><ArrowUp size={14} /></IconButton>
         <IconButton title="Refresh" disabled={busy || loading} onClick={() => void refresh()}><RefreshCw size={14} /></IconButton>
       </PanelHeader>
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2, padding: "4px 10px", borderBottom: `1px solid ${p.border}`, fontSize: 12 }}>
-        {path.map((c, i) => {
-          const allowed = allowRoot || c.path.startsWith("/sd");
-          return (
-            <span key={c.path} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-              {i > 1 && <span style={{ opacity: 0.4 }}>/</span>}
-              <button
-                type="button"
-                disabled={!allowed || busy}
-                onClick={() => setCwd(c.path)}
-                style={{
-                  background: "none", border: "none", padding: "1px 3px", borderRadius: 3, color: p.text,
-                  fontWeight: i === path.length - 1 ? 700 : 400, cursor: allowed ? "pointer" : "default",
-                  opacity: allowed ? 1 : 0.45, fontSize: 12, overflowWrap: "anywhere", textAlign: "left",
-                }}
-              >
-                {c.label}
-              </button>
-            </span>
-          );
-        })}
-      </div>
+      <Breadcrumbs cwd={cwd} allowRoot={allowRoot} disabled={busy} onNavigate={setCwd} />
       {error && <div style={{ padding: "6px 10px", color: p.danger, fontSize: 12, overflowWrap: "anywhere" }}>{error}</div>}
       <div
         style={{ flex: 1, overflowY: "auto", paddingBottom: 24, opacity: busy ? 0.6 : 1 }}
@@ -237,25 +156,21 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
         {loading && entries.length === 0 && <EmptyNote>Loading…</EmptyNote>}
         {!loading && !error && entries.length === 0 && <EmptyNote>Empty folder. Right-click to upload files or create a folder.</EmptyNote>}
         {entries.map((e) => {
-          const isRenaming = renaming?.name === e.name;
+          const isRenaming = rename.renaming?.name === e.name;
           return (
-            <div
+            <ListRow
               key={e.name}
               title={devJoin(cwd, e.name)}
-              style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "3px 10px", cursor: "pointer", userSelect: "none" }}
+              padX={10} gap={6}
               onClick={() => { if (e.isDir) setCwd(devJoin(cwd, e.name)); }}
               onDoubleClick={() => { if (!e.isDir && !disabled) void op("load file", () => loadDeviceFileIntoProject(devJoin(cwd, e.name), projectId), false); }}
               onContextMenu={(ev) => entryMenu(ev, e)}
-              onMouseEnter={(ev) => { ev.currentTarget.style.background = p.hoverBg; }}
-              onMouseLeave={(ev) => { ev.currentTarget.style.background = "transparent"; }}
             >
-              <span style={{ display: "inline-flex", alignItems: "center", height: 16, color: e.isDir ? "#d97706" : p.dimText, flexShrink: 0 }}>
-                {e.isDir ? <Folder size={13} /> : <File size={13} />}
-              </span>
-              {isRenaming
-                ? <InlineInput value={renaming.value} onChange={(v) => setRenaming({ ...renaming, value: v })} onCommit={commitRename} onCancel={() => setRenaming(null)} />
-                : <span style={{ ...wrapText, fontWeight: e.isDir ? 600 : 400 }}>{e.name}</span>}
-            </div>
+              <RowIcon color={e.isDir ? "#d97706" : undefined}>{e.isDir ? <Folder size={13} /> : <File size={13} />}</RowIcon>
+              {isRenaming && rename.inputProps
+                ? <InlineInput {...rename.inputProps} />
+                : <RowLabel style={{ fontWeight: e.isDir ? 600 : 400 }}>{e.name}</RowLabel>}
+            </ListRow>
           );
         })}
       </div>

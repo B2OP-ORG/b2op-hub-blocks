@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { startLspService } from "../src/editor/lsp/lspClient";
-import type { RpcMessage, Transport } from "../src/editor/lsp/transport";
+import { startLspService } from "../src/lsp/lspClient";
+import type { RpcMessage, Transport } from "../src/lsp/transport";
 
 const OWNER = "b2op-hub-lsp";
 const URI = "file:///workspace/main.py";

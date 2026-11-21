@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import { checkTranslation, workspaceFromPython } from "../src/project/modeSwitch";
+import { checkTranslation, workspaceFromPython } from "../src/codegen/translate";
 import { remoteFlyout } from "../src/blocks/toolbox";
 import { migrateWorkspaceState } from "../src/blocks/migrate";
 import { RemoteType } from "../src/device/protocol";

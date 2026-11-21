@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_EDITOR_SETTINGS, mergeEditorSettings } from "../src/project/format";
+import { DEFAULT_EDITOR_SETTINGS, mergeEditorSettings } from "../src/settings/editorSettings";
 
 describe("EditorSettings LSP defaults", () => {
   it("defaults LSP to in-browser worker mode", () => {

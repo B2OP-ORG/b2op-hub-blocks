@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MockTransport } from "../src/transport/mock";
+import { MockTransport } from "../src/device/sim/mockHub";
 import { DeviceClient } from "../src/device/deviceClient";
 
 async function makeClient(opts?: Parameters<typeof MockTransport>[0]) {

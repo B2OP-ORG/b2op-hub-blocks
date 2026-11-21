@@ -16,7 +16,7 @@
 
 import { create } from "zustand";
 import { useApp } from "../state/store";
-import { isReloading, setBeforeRunHook, setReloadEndHook } from "../project/deviceSync";
+import { isReloading, setBeforeRunHook, setReloadEndHook } from "../run/deviceSync";
 import { remoteDefault, type RemoteEvent, type RemoteType, type RemoteValue } from "../device/protocol";
 import { initialValue, isRemoteFile, symbolConflicts, tryParseLayout, widgetSymbols, type RemoteSymbol } from "./layout";
 

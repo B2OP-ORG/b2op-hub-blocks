@@ -1,5 +1,4 @@
-// Type-only imports: protocol.ts imports this module at runtime.
-import type { KIND } from "./protocol";
+import type { KIND } from "./protocol/constants";
 import type { CmdId } from "./cmdHelpers";
 
 /**

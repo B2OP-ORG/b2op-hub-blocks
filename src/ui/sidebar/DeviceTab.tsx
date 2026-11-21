@@ -1,8 +1,8 @@
 import { Zap } from "lucide-react";
 import { useApp } from "../../state/store";
-import { DevicePanel } from "../DevicePanel";
+import { DevicePanel } from "../device/DevicePanel";
 import { usePalette } from "../theme";
-import { PanelHeader } from "./common";
+import { PanelHeader } from "../components/PanelHeader";
 
 export function DeviceTab() {
   const p = usePalette();

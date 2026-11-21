@@ -1,0 +1,3 @@
+.box { padding: 24px; color: var(--p-text); font-size: 13px; }
+.title { font-weight: 600; margin-bottom: 6px; }
+.error { color: var(--p-danger); margin-bottom: 12px; }

@@ -1,5 +1,5 @@
 import { useApp } from "../../state/store";
-import { showAlert, showPrompt } from "../Dialog";
+import { showAlert, showPrompt } from "../dialog";
 import { emptyScene, moduleNameProblem, withSceneHeader } from "../../scene/model";
 import { sceneToPython } from "../../scene/codegen";
 import { setCreateSceneHandler } from "../../scene/registry";

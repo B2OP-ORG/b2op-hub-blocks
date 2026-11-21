@@ -3,8 +3,8 @@
 // `remote.pyi` (typed attributes for the project's controls).
 
 import { useApp } from "../state/store";
-import { STUBS } from "../editor/lsp/stubs";
-import type { LspService } from "../editor/lsp/lspClient";
+import { STUBS } from "../lsp/stubs";
+import type { LspService } from "../lsp/lspClient";
 import { projectSymbols } from "./layout";
 import { onRemoteSymbolsChange, remoteSymbols, setRemoteSymbols } from "./registry";
 import { remoteStubText } from "./stub";

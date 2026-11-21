@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtBytes, fmtSpeed } from "../src/ui/TransferOverlay";
+import { fmtBytes, fmtSpeed } from "../src/utils/format";
 
 describe("transfer size formatting", () => {
   it("picks B / kB / MB by magnitude", () => {

@@ -1,6 +1,6 @@
 // Keeps the scene registry (block fields, generators) in step with the active
 // project. The language server sees scene modules as ordinary project files
-// (editor/lsp/projectFiles.ts).
+// (lsp/projectFiles.ts).
 
 import { useApp } from "../state/store";
 import { projectScenes } from "./project";

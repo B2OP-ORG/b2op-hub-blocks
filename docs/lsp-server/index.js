@@ -1,7 +1,7 @@
 // Remote Pyright bridge for the b2op-hub-blocks Python editor.
 //
 // The browser client speaks raw JSON-RPC over WebSocket (one JSON object per
-// text frame — see src/editor/lsp/transport.ts). Pyright's language server
+// text frame — see src/lsp/transport.ts). Pyright's language server
 // speaks LSP with Content-Length framing over stdio. This bridge translates
 // between the two: unframe → forward to ws; ws frame → wrap with headers →
 // send to Pyright.
@@ -15,7 +15,7 @@ import { dirname, resolve } from "node:path";
 import { WebSocketServer } from "ws";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const STUBS_DIR = resolve(__dirname, "../../src/editor/lsp/stubs/files");
+const STUBS_DIR = resolve(__dirname, "../../src/lsp/stubs/files");
 const STUBS_URI = pathToFileURL(STUBS_DIR).href.replace(/\/$/, "");
 const PORT = Number(process.env.LSP_PORT ?? 3001);
 

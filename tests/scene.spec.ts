@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import {
-  DISPLAY_KINDS, INPUT_KINDS, SCENE_HEADER_PREFIX, emptyScene, makeWidget, nameProblem, parseScene, splitSceneHeader,
-  uniqueName, withSceneHeader, absolutePos, moduleNameProblem, isOutside, clampedPos, qrLayout, drawnSize, type SceneDoc, type SceneKind,
-} from "../src/scene/model";
+import { DISPLAY_KINDS, INPUT_KINDS, SCENE_HEADER_PREFIX, emptyScene, makeWidget, nameProblem, parseScene, splitSceneHeader, uniqueName, withSceneHeader, moduleNameProblem, type SceneDoc, type SceneKind } from "../src/scene/model";
+import { absolutePos, isOutside, clampedPos, qrLayout, drawnSize } from "../src/scene/geometry";
 import { sceneToPython } from "../src/scene/codegen";
 import { isSceneFile, projectScenes } from "../src/scene/project";
 import { setScenes } from "../src/scene/registry";

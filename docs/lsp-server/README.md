@@ -21,13 +21,13 @@ Point the client at it in **Settings → Python LSP → Mode: Remote → URL: `w
 
 ## Wire format
 
-The browser transport sends **one JSON-RPC object per WebSocket text frame** (see `src/editor/lsp/transport.ts`). This bridge adds/strips the `Content-Length` framing Pyright expects on stdio.
+The browser transport sends **one JSON-RPC object per WebSocket text frame** (see `src/lsp/transport.ts`). This bridge adds/strips the `Content-Length` framing Pyright expects on stdio.
 
 Both ends must stay in sync. If you change the framing in `transport.ts`, update `index.js` to match.
 
 ## Stubs
 
-Working directory is set to `src/editor/lsp/stubs/files/`, which contains `pyrightconfig.json` pointing `stubPath` at itself. Pyright resolves `import hub`, `import lpf2`, `import lvgl as lv` against the same vendored stubs the worker uses, so completion behavior is consistent between modes.
+Working directory is set to `src/lsp/stubs/files/`, which contains `pyrightconfig.json` pointing `stubPath` at itself. Pyright resolves `import hub`, `import lpf2`, `import lvgl as lv` against the same vendored stubs the worker uses, so completion behavior is consistent between modes.
 
 Stubs are shared with the worker — refresh both at once with `npm run sync-stubs -- --src ../Lpf2-micropython` from the repo root.
 

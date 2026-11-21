@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import { pythonToBlocks, type BlockSpec } from "../src/project/pythonToBlocks";
+import { pythonToBlocks, type BlockSpec } from "../src/codegen/pythonToBlocks";
 
 const VH = "# b2op-hub-blocks v2.0.0";
 

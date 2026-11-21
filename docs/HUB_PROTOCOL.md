@@ -3,7 +3,7 @@
 Custom side-channel over the same byte stream (BLE NUS / USB CDC). Replaces the raw MicroPython REPL entirely for all web-app operations. The device disables `micropython.kbd_intr(-1)` at boot so control bytes on stdin are NOT interpreted as REPL commands — they belong to HubProtocol.
 
 > The authoritative wire spec is the firmware's `docs/source/hub/protocol.rst`
-> (binary framing, `src/device/protocol.ts`). Sections 1–7 below describe the
+> (binary framing, `src/device/protocol/`). Sections 1–7 below describe the
 > original design and are partly outdated.
 
 ---

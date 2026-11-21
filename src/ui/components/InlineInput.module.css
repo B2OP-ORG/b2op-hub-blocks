@@ -1,0 +1,11 @@
+.input {
+  flex: 1;
+  min-width: 0;
+  background: var(--p-input-bg);
+  color: var(--p-text);
+  border: 1px solid var(--p-accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+  outline: none;
+}

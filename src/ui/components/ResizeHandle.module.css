@@ -1,0 +1,14 @@
+.handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  background: transparent;
+  touch-action: none;
+  z-index: 5;
+  position: relative;
+}
+.handle:hover, .handle:active { background: var(--p-accent); }
+
+/* Overlap the neighbouring borders so the hit area straddles them. */
+.left { margin: 0 -2px 0 -3px; }
+.right { margin: 0 -3px 0 -2px; }

@@ -30,42 +30,138 @@ function fmt(v: RemoteValue | undefined, float: boolean): string {
   return Number.isInteger(v) ? v.toFixed(1) : String(Math.round(v * 100) / 100);
 }
 
+/** Inset between a track's edge and its knob, in px. */
+const INSET = 3;
+/** Knob diameter: as big as the track allows (container query units of the track). */
+const KNOB = `calc(100cqmin - ${INSET * 2}px)`;
+
+/**
+ * Whether a widget's body is taller than wide, so a slider / switch runs
+ * bottom-to-top. Uses the card size minus its padding and name header.
+ */
+function isVertical(w: Widget): boolean {
+  return w.h - 38 > w.w - 24;
+}
+
+/** Snap a raw slider value to the widget's step, range and type. */
+function quantize(raw: number, min: number, max: number, step: number, float: boolean): number {
+  let v = step > 0 ? min + Math.round((raw - min) / step) * step : raw;
+  v = Math.max(min, Math.min(max, v));
+  return float ? Math.round(v * 1e6) / 1e6 : Math.round(v);
+}
+
+/**
+ * Slider: a pill track that fills the card, with the knob inside the track
+ * (never larger than it). Horizontal, or bottom-to-top when the card is taller
+ * than wide. Pointer drag, arrows / PageUp / PageDown / Home / End.
+ */
 function Slider({ w, p, live, values, onChange }: WidgetProps) {
   const min = w.min ?? -100, max = w.max ?? 100;
-  const step = w.step ?? (w.valueType === "float" ? 0.1 : 1);
-  const v = num(values[w.name], w.initial ?? 0);
+  const float = w.valueType === "float";
+  const step = w.step ?? (float ? 0.1 : 1);
+  const vertical = isVertical(w);
+  const v = live ? num(values[w.name], w.initial ?? 0) : (w.initial ?? 0);
+  const frac = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0;
+  const ref = useRef<HTMLDivElement>(null);
+  const set = (raw: number, merge: boolean) => {
+    const q = quantize(raw, min, max, step, float);
+    if (q !== v) onChange(w.name, q, merge);
+  };
+  const fromPointer = (e: React.PointerEvent) => {
+    const el = ref.current!;
+    const r = el.getBoundingClientRect();
+    // Work in the track's own (unzoomed) px: the canvas may be scaled.
+    const scale = el.offsetWidth ? r.width / el.offsetWidth : 1;
+    const d = Math.min(el.offsetWidth, el.offsetHeight) - INSET * 2;
+    const usable = (vertical ? el.offsetHeight : el.offsetWidth) - INSET * 2 - d;
+    const along = (vertical ? r.bottom - e.clientY : e.clientX - r.left) / scale;
+    const f = usable > 0 ? (along - INSET - d / 2) / usable : 0;
+    set(min + Math.max(0, Math.min(1, f)) * (max - min), true);
+  };
   const release = () => { if (live && w.springBack) onChange(w.name, w.initial ?? 0); };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!live) return;
+    const big = Math.max(step, (max - min) / 10);
+    const keys: Record<string, number> = {
+      ArrowRight: v + step, ArrowUp: v + step, ArrowLeft: v - step, ArrowDown: v - step,
+      PageUp: v + big, PageDown: v - big, Home: min, End: max,
+    };
+    if (e.key in keys) { e.preventDefault(); set(keys[e.key], false); }
+  };
+  // Knob travel along the track: from INSET to (track length - INSET - knob).
+  const travel = `(${vertical ? "100cqh" : "100cqw"} - ${INSET * 2}px - ${KNOB})`;
+  const offset = `calc(${INSET}px + ${frac} * ${travel})`;
+  const filled = `calc(${frac} * ${travel} + ${KNOB} + ${INSET * 2}px)`;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, height: "100%" }}>
-      <input
-        type="range" min={min} max={max} step={step} value={live ? v : (w.initial ?? 0)} disabled={!live}
-        onChange={(e) => onChange(w.name, w.valueType === "float" ? Number(e.target.value) : Math.round(Number(e.target.value)), true)}
-        onPointerUp={release} onKeyUp={release}
-        style={{ flex: 1, minWidth: 0, accentColor: p.accent }}
-      />
-      <span style={{ minWidth: 40, textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13 }}>
-        {fmt(live ? v : (w.initial ?? 0), w.valueType === "float")}
+    <div style={{ display: "flex", flexDirection: vertical ? "column" : "row", alignItems: "stretch", gap: vertical ? 4 : 12, height: "100%" }}>
+      <div
+        ref={ref} role="slider" aria-label={w.name} aria-valuemin={min} aria-valuemax={max} aria-valuenow={v}
+        aria-orientation={vertical ? "vertical" : "horizontal"} aria-disabled={!live} tabIndex={live ? 0 : -1}
+        onPointerDown={(e) => { if (!live || e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.focus(); fromPointer(e); }}
+        onPointerMove={(e) => { if (live && e.currentTarget.hasPointerCapture(e.pointerId)) fromPointer(e); }}
+        onPointerUp={release} onPointerCancel={release}
+        onKeyDown={onKeyDown}
+        onKeyUp={(e) => { if (/^(Arrow|Page|Home|End)/.test(e.key)) release(); }}
+        style={{
+          position: "relative", flex: 1, minWidth: 0, minHeight: 0, containerType: "size", borderRadius: 9999, overflow: "hidden",
+          background: p.border, cursor: live ? "pointer" : "default", touchAction: "none", outline: "none",
+          boxShadow: "inset 0 1px 2px rgba(0,0,0,.25)",
+        }}
+      >
+        <span style={{
+          position: "absolute", borderRadius: 9999, background: p.accent,
+          ...(vertical ? { left: 0, right: 0, bottom: 0, height: filled } : { left: 0, top: 0, bottom: 0, width: filled }),
+        }} />
+        <span style={{
+          position: "absolute", width: KNOB, height: KNOB, borderRadius: "50%", background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.35)",
+          ...(vertical
+            ? { left: "50%", bottom: offset, transform: "translateX(-50%)" }
+            : { top: "50%", left: offset, transform: "translateY(-50%)" }),
+        }} />
+      </div>
+      <span style={{ alignSelf: "center", minWidth: vertical ? 0 : 44, textAlign: vertical ? "center" : "right", fontVariantNumeric: "tabular-nums", fontSize: 16, fontWeight: 600 }}>
+        {fmt(v, float)}
       </span>
     </div>
   );
 }
 
+/**
+ * Switch: a pill that fills the card; the knob slides inside it (to the right,
+ * or up when the card is taller than wide), ON / OFF on the free side.
+ */
 function Switch({ w, p, live, values, onChange }: WidgetProps) {
   const on = live && values[w.name] === true;
+  const vertical = isVertical(w);
+  const end = `calc(100% - ${INSET}px - ${KNOB})`;
+  const labelAt = `calc(${KNOB} / 2 + ${INSET}px)`;
+  const knobPos: React.CSSProperties = vertical
+    ? { left: "50%", transform: "translateX(-50%)", top: on ? `${INSET}px` : end, transition: "top .15s" }
+    : { top: "50%", transform: "translateY(-50%)", left: on ? end : `${INSET}px`, transition: "left .15s" };
+  const labelPos: React.CSSProperties = vertical
+    ? { left: "50%", transform: "translate(-50%, -50%)", top: on ? `calc(100% - ${KNOB} / 2 - ${INSET}px - ${KNOB} / 2)` : `calc(${KNOB} + ${INSET}px + ${KNOB} / 2)` }
+    : { top: "50%", transform: "translateY(-50%)", ...(on ? { left: labelAt } : { right: labelAt }) };
   return (
-    <div style={{ display: "flex", alignItems: "center", height: "100%" }}>
-      <button
-        type="button" role="switch" aria-checked={on} disabled={!live}
-        onClick={() => onChange(w.name, !on)}
-        style={{
-          width: 52, height: 28, borderRadius: 14, border: "none", padding: 3, cursor: live ? "pointer" : "default",
-          background: on ? p.accent : p.border, display: "flex", justifyContent: on ? "flex-end" : "flex-start", transition: "background .15s",
-        }}
-      >
-        <span style={{ width: 22, height: 22, borderRadius: 11, background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }} />
-      </button>
-      <span style={{ marginLeft: 10, fontSize: 13, color: p.dimText }}>{on ? "on" : "off"}</span>
-    </div>
+    <button
+      type="button" role="switch" aria-checked={on} aria-label={w.name} disabled={!live}
+      onClick={() => onChange(w.name, !on)}
+      style={{
+        position: "relative", display: "block", width: "100%", height: "100%", padding: 0, border: "none", borderRadius: 9999,
+        containerType: "size", background: on ? p.accent : p.border, cursor: live ? "pointer" : "default",
+        transition: "background .15s", boxShadow: "inset 0 1px 2px rgba(0,0,0,.25)", overflow: "hidden",
+      }}
+    >
+      <span style={{
+        position: "absolute", fontWeight: 700, letterSpacing: 0.5, whiteSpace: "nowrap",
+        fontSize: `clamp(10px, ${vertical ? "30cqw" : "38cqh"}, 18px)`, color: on ? p.accentText : p.dimText, ...labelPos,
+      }}>
+        {on ? "ON" : "OFF"}
+      </span>
+      <span style={{
+        position: "absolute", width: KNOB, height: KNOB, borderRadius: "50%", background: "#fff",
+        boxShadow: "0 1px 3px rgba(0,0,0,.35)", ...knobPos,
+      }} />
+    </button>
   );
 }
 
@@ -81,7 +177,7 @@ function PushButton({ w, p, live, values, onChange }: WidgetProps) {
       onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") set(false); }}
       style={{
         width: "100%", height: "100%", borderRadius: 8, border: `1px solid ${p.accent}`, cursor: live ? "pointer" : "default",
-        background: down ? p.accent : "transparent", color: down ? p.accentText : p.text, fontWeight: 600, fontSize: 13,
+        background: down ? p.accent : "transparent", color: down ? p.accentText : p.text, fontWeight: 600, fontSize: 15,
         touchAction: "none", userSelect: "none",
       }}
     >
@@ -134,15 +230,15 @@ function TextInput({ w, p, live, values, onChange }: WidgetProps) {
   const sent = typeof values[w.name] === "string" ? (values[w.name] as string) : "";
   const submit = () => onChange(w.name, draft);
   return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center", height: "100%" }}>
+    <div style={{ display: "flex", gap: 6, alignItems: "stretch", height: "100%" }}>
       <input
         value={live ? draft : ""} disabled={!live} placeholder={live ? (sent ? `sent: ${sent}` : "type, then Enter") : ""}
         onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         maxLength={255}
-        style={{ flex: 1, minWidth: 0, padding: "5px 8px", borderRadius: 6, border: `1px solid ${p.border}`, background: p.inputBg, color: p.text, fontSize: 13 }}
+        style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "5px 10px", borderRadius: 8, border: `1px solid ${p.border}`, background: p.inputBg, color: p.text, fontSize: 15 }}
       />
       <button type="button" disabled={!live} onClick={submit}
-        style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: p.accent, color: p.accentText, fontSize: 12, cursor: live ? "pointer" : "default" }}>
+        style={{ padding: "5px 14px", borderRadius: 8, border: "none", background: p.accent, color: p.accentText, fontSize: 14, fontWeight: 600, cursor: live ? "pointer" : "default" }}>
         Send
       </button>
     </div>

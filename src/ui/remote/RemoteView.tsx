@@ -1,18 +1,27 @@
 // Remote controller tab: edit mode (drag widgets onto a canvas, set names /
-// ids / options) and run mode (main.py runs, controls stream to the hub,
-// indicators show program messages). Run mode lives in remote/session.ts, so
-// it survives switching tabs; only going back to edit mode stops the program.
+// ids / options), preview mode (looks and reacts like run mode, but nothing is
+// sent and indicators show sample values) and run mode (main.py runs, controls
+// stream to the hub, indicators show program messages). Run mode lives in
+// remote/session.ts, so it survives switching tabs; only going back to edit
+// mode stops the program. Preview is local to the view.
+//
+// Canvas: widgets may sit anywhere, also at negative positions. The scroll
+// area is the home view (0,0 + visible size) and grows past any widget that
+// sticks out, so it scrolls only when something is outside. Pan / zoom: see
+// canvasView.ts.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Gamepad2, Pencil, Play, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Eye, Gamepad2, Maximize2, Pencil, Play, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
+import type { RemoteValue } from "../../device/protocol";
 import { usePalette, type Palette } from "../theme";
 import { buttonStyle } from "../Dialog";
 import { WidgetBody } from "./widgets";
+import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "./canvasView";
 import { KIND_HINT } from "./actions";
 import {
-  CONTROL_KINDS, GRID, INDICATOR_KINDS, KIND_LABEL, emptyLayout, isAttrName, joystickNames, makeWidget, nameProblem,
+  CONTROL_KINDS, GRID, INDICATOR_KINDS, KIND_LABEL, emptyLayout, initialValue, isAttrName, previewIndicatorValue, joystickNames, makeWidget, nameProblem,
   parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicts, widgetSymbols,
   type RemoteLayout, type RemoteSymbol, type ValueType, type Widget, type WidgetKind,
 } from "../../remote/layout";
@@ -22,7 +31,33 @@ const DND_TYPE = "application/x-b2op-remote-widget";
 const MIN_W = 64;
 const MIN_H = 48;
 
-type Drag = { uid: string; mode: "move" | "resize"; startX: number; startY: number; orig: Widget; cur: Widget };
+/** Widgets this close to the home view's right / bottom edge still count as inside (border, shadow, resize handle). */
+const MARGIN = GRID * 2;
+/** Room added past a widget that sticks out of the home view, so a second drag can take it further. */
+const EXTRA = GRID * 30;
+
+type Drag = {
+  uid: string; mode: "move" | "resize";
+  startX: number; startY: number;
+  /** Canvas scroll at drag start (a wheel scroll mid-drag moves the widget along). */
+  scrollX: number; scrollY: number;
+  orig: Widget; cur: Widget;
+};
+
+/** Canvas area in layout units: the home view (0,0 + visible size) grown by EXTRA past any widget that sticks out. */
+type Bounds = { left: number; top: number; right: number; bottom: number };
+
+function canvasBounds(widgets: Widget[], viewW: number, viewH: number): Bounds {
+  if (widgets.length === 0) return { left: 0, top: 0, right: viewW, bottom: viewH };
+  const minX = Math.min(...widgets.map((w) => w.x)), minY = Math.min(...widgets.map((w) => w.y));
+  const maxX = Math.max(...widgets.map((w) => w.x + w.w)), maxY = Math.max(...widgets.map((w) => w.y + w.h));
+  return {
+    left: minX < 0 ? minX - EXTRA : 0,
+    top: minY < 0 ? minY - EXTRA : 0,
+    right: maxX + MARGIN > viewW ? maxX + EXTRA : viewW,
+    bottom: maxY + MARGIN > viewH ? maxY + EXTRA : viewH,
+  };
+}
 
 export function RemoteView({ file }: { file: ProjectFile }) {
   const p = usePalette();
@@ -31,6 +66,11 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   const session = useRemoteSession();
   const live = session.fileId === file.id && session.phase !== "idle";
   const otherRunning = session.fileId !== null && session.fileId !== file.id;
+  // Preview: local control values, nothing sent. Run mode takes precedence.
+  const [previewValues, setPreviewValues] = useState<Record<string, RemoteValue> | null>(null);
+  const preview = previewValues !== null && !live;
+  /** Run or preview: the canvas shows the finished controller, not the editor. */
+  const showing = live || preview;
 
   const parsed = useMemo((): { layout: RemoteLayout | null; error: string | null } => {
     try { return { layout: parseLayout(file.content), error: null }; } catch (e) { return { layout: null, error: (e as Error).message }; }
@@ -39,6 +79,41 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const projectId = useApp((s) => s.mfp.id);
+  const cv = useCanvasView({
+    canvasRef,
+    storageKey: `b2op.remoteZoom.${projectId}.${file.id}`,
+    isControl: (t) => showing && !!t.closest("[data-widget-body]"),
+    onPanStart: () => setDrag(null),
+  });
+  const { zoom, zoomRef } = cv;
+
+  // Visible canvas size (layout units come from it: the home view is this size / zoom).
+  const [viewSize, setViewSize] = useState({ w: 0, h: 0 });
+  const hasLayout = parsed.layout !== null;
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setViewSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasLayout]);
+  // Committed widgets only: the area grows after a drop, not while dragging.
+  const bounds = useMemo(
+    () => canvasBounds(parsed.layout?.widgets ?? [], viewSize.w / zoom, viewSize.h / zoom),
+    [parsed.layout, viewSize, zoom],
+  );
+  // When the area grows / shrinks on the left or top, scroll by the same amount
+  // so nothing on screen moves.
+  const origin = useRef({ left: bounds.left, top: bounds.top });
+  useLayoutEffect(() => {
+    const el = canvasRef.current, o = origin.current;
+    origin.current = { left: bounds.left, top: bounds.top };
+    if (!el) return;
+    // Zoom is read, not a trigger: zoom changes keep their own anchor (canvasView).
+    el.scrollLeft += (o.left - bounds.left) * zoomRef.current;
+    el.scrollTop += (o.top - bounds.top) * zoomRef.current;
+  }, [bounds.left, bounds.top, zoomRef]);
 
   // Symbols of the whole project (names / ids must be unique across layouts).
   const allSymbols = useMemo(() => projectSymbols(files), [files]);
@@ -76,20 +151,26 @@ export function RemoteView({ file }: { file: ProjectFile }) {
 
   // ── Pointer drag (move / resize), committed on release ──────────────────────
   const beginDrag = (e: React.PointerEvent, w: Widget, mode: Drag["mode"]) => {
-    if (live || e.button !== 0) return;
+    if (showing || e.button !== 0) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setSelected(w.uid);
-    setDrag({ uid: w.uid, mode, startX: e.clientX, startY: e.clientY, orig: w, cur: w });
+    const el = canvasRef.current;
+    setDrag({ uid: w.uid, mode, startX: e.clientX, startY: e.clientY, scrollX: el?.scrollLeft ?? 0, scrollY: el?.scrollTop ?? 0, orig: w, cur: w });
   };
-  const onDragMove = (e: React.PointerEvent) => {
-    if (!drag) return;
-    const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
-    const o = drag.orig;
-    const cur = drag.mode === "move"
+  /** Where the dragged widget is for a pointer position (pointer travel + canvas scroll since the start). */
+  function dragged(d: Drag, clientX: number, clientY: number): Widget {
+    const el = canvasRef.current;
+    const dx = (clientX - d.startX + (el ? el.scrollLeft - d.scrollX : 0)) / zoom;
+    const dy = (clientY - d.startY + (el ? el.scrollTop - d.scrollY : 0)) / zoom;
+    const o = d.orig;
+    return d.mode === "move"
       ? { ...o, x: snap(o.x + dx), y: snap(o.y + dy) }
       : { ...o, w: Math.max(MIN_W, snap(o.w + dx)), h: Math.max(MIN_H, snap(o.h + dy)) };
-    setDrag({ ...drag, cur });
+  }
+  const onDragMove = (e: React.PointerEvent) => {
+    if (!drag) return;
+    setDrag({ ...drag, cur: dragged(drag, e.clientX, e.clientY) });
   };
   const endDrag = () => {
     if (!drag) return;
@@ -101,7 +182,8 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (live || !selected || (e.target as HTMLElement).closest("input,select,textarea")) return;
+    if (cv.onKeyDown(e)) return;
+    if (showing || !selected || (e.target as HTMLElement).closest("input,select,textarea")) return;
     const w = layout.widgets.find((x) => x.uid === selected);
     if (!w) return;
     if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); remove(w.uid); return; }
@@ -112,13 +194,38 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   };
 
   const shown = layout.widgets.map((w) => (drag?.uid === w.uid ? drag.cur : w));
-  const extentW = shown.reduce((m, w) => Math.max(m, w.x + w.w), 0) + 240;
-  const extentH = shown.reduce((m, w) => Math.max(m, w.y + w.h), 0) + 240;
-  const sel = live ? undefined : layout.widgets.find((w) => w.uid === selected);
+  /**
+   * Fit: trim the canvas to the smallest size — move every widget so the group
+   * starts MARGIN from the top-left (saved to the layout), then zoom so it all
+   * fits the visible area. Nothing sticks out afterwards, so no scrollbars.
+   */
+  const fitAll = () => {
+    if (layout.widgets.length === 0) { cv.zoomTo(1); return; }
+    const minX = Math.min(...layout.widgets.map((w) => w.x)), minY = Math.min(...layout.widgets.map((w) => w.y));
+    const maxX = Math.max(...layout.widgets.map((w) => w.x + w.w)), maxY = Math.max(...layout.widgets.map((w) => w.y + w.h));
+    const dx = MARGIN - minX, dy = MARGIN - minY;
+    if (dx || dy) {
+      // The area's origin returns to 0,0; fit sets the scroll itself, so skip the origin compensation.
+      origin.current = { left: 0, top: 0 };
+      commit(layout.widgets.map((w) => ({ ...w, x: w.x + dx, y: w.y + dy })));
+    }
+    cv.fit(0, 0, maxX + dx + MARGIN, maxY + dy + MARGIN);
+  };
+  const panCursor = cv.panning ? "grabbing" : cv.spaceHeld ? "grab" : undefined;
+  const sel = showing ? undefined : layout.widgets.find((w) => w.uid === selected);
 
   const status = live
     ? session.phase === "starting" ? "Starting…" : session.phase === "stopping" ? "Stopping…" : "Running main.py"
+    : preview ? "Preview · nothing is sent to the hub"
     : otherRunning ? "Another remote controller is running" : connected ? "Edit mode" : "Edit mode · connect a hub to run";
+
+  const startPreview = () => {
+    const values: Record<string, RemoteValue> = {};
+    for (const w of layout.widgets) for (const s of widgetSymbols(w, file.name)) if (s.role === "control") values[s.name] = initialValue(s, w);
+    setSelected(null);
+    setPreviewValues(values);
+  };
+  const busy = session.phase === "starting" || session.phase === "stopping";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
@@ -127,17 +234,36 @@ export function RemoteView({ file }: { file: ProjectFile }) {
         <Gamepad2 size={16} color={p.accent} />
         <span style={{ fontWeight: 600 }}>{file.name}</span>
         <div style={{ display: "inline-flex", border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden" }}>
-          <ModeButton p={p} active={!live} disabled={session.phase === "starting" || session.phase === "stopping"} onClick={() => void stopRemote()} icon={<Pencil size={13} />} label="Edit" title="Edit mode: stops the program" />
-          <ModeButton p={p} active={live} disabled={live || otherRunning || session.phase !== "idle"} onClick={() => void startRemote(file.id)} icon={<Play size={13} />} label="Run" title="Run mode: sends the controls, then runs main.py" />
+          <ModeButton p={p} active={!showing} disabled={busy}
+            onClick={() => { if (live) void stopRemote(); setPreviewValues(null); }}
+            icon={<Pencil size={13} />} label="Edit" title="Edit mode: stops the program" />
+          <ModeButton p={p} active={preview} disabled={live || busy} onClick={startPreview}
+            icon={<Eye size={13} />} label="Preview" title="Preview: try the controller without a hub; nothing is sent" />
+          <ModeButton p={p} active={live} disabled={live || otherRunning || session.phase !== "idle"}
+            onClick={() => { setPreviewValues(null); void startRemote(file.id); }}
+            icon={<Play size={13} />} label="Run" title="Run mode: sends the controls, then runs main.py" />
         </div>
         <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>
+        <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 2 }}>
+          <IconButton p={p} title="Zoom out (Ctrl −)" onClick={() => cv.zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= MIN_ZOOM}><ZoomOut size={14} /></IconButton>
+          <button type="button" title="Reset zoom to 100% (Ctrl 0)" onClick={() => cv.zoomTo(1)}
+            style={{ minWidth: 48, padding: "3px 4px", border: "none", background: "transparent", color: p.text, fontSize: 12, fontVariantNumeric: "tabular-nums", cursor: "pointer", borderRadius: 4 }}>
+            {Math.round(zoom * 100)}%
+          </button>
+          <IconButton p={p} title="Zoom in (Ctrl +)" onClick={() => cv.zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= MAX_ZOOM}><ZoomIn size={14} /></IconButton>
+          <IconButton p={p} title="Fit: move the widgets to the top-left and zoom to show them all" onClick={fitAll}><Maximize2 size={14} /></IconButton>
+        </div>
       </div>
 
-      {/* Palette (edit mode); same bar in run mode so the canvas doesn't jump */}
+      {/* Palette (edit mode); same bar in run / preview so the canvas doesn't jump */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", minHeight: 40, boxSizing: "border-box", borderBottom: `1px solid ${p.border}`, background: p.panelAltBg, flexWrap: "wrap" }}>
         {live ? (
           <span style={{ fontSize: 12, color: p.dimText }}>
             Controls are live. Other tabs keep it running; <b>Edit</b> stops the program.
+          </span>
+        ) : preview ? (
+          <span style={{ fontSize: 12, color: p.dimText }}>
+            Preview: the controls react, but nothing is sent. Indicators show sample values.
           </span>
         ) : (
           <>
@@ -154,23 +280,34 @@ export function RemoteView({ file }: { file: ProjectFile }) {
           ref={canvasRef}
           tabIndex={0}
           onKeyDown={onKeyDown}
+          {...cv.handlers}
           onPointerDown={() => setSelected(null)}
-          onDragOver={(e) => { if (!live && e.dataTransfer.types.includes(DND_TYPE)) e.preventDefault(); }}
+          onDragOver={(e) => { if (!showing && e.dataTransfer.types.includes(DND_TYPE)) e.preventDefault(); }}
           onDrop={(e) => {
             const kind = e.dataTransfer.getData(DND_TYPE) as WidgetKind;
-            if (live || !kind || !canvasRef.current) return;
+            if (showing || !kind || !canvasRef.current) return;
             e.preventDefault();
-            const r = canvasRef.current.getBoundingClientRect();
-            add(kind, e.clientX - r.left + canvasRef.current.scrollLeft - 16, e.clientY - r.top + canvasRef.current.scrollTop - 16);
+            const el = canvasRef.current, r = el.getBoundingClientRect();
+            add(kind, (e.clientX - r.left + el.scrollLeft) / zoom + bounds.left - 16, (e.clientY - r.top + el.scrollTop) / zoom + bounds.top - 16);
           }}
+          className="remote-canvas"
           style={{
             flex: 1, minWidth: 0, overflow: "auto", position: "relative", outline: "none",
-            background: p.panelAltBg,
-            backgroundImage: live ? undefined : `radial-gradient(${p.border} 1px, transparent 1px)`,
-            backgroundSize: `${GRID * 2}px ${GRID * 2}px`,
+            background: p.panelAltBg, touchAction: "none", cursor: panCursor,
+            ["--sb-track" as string]: p.panelAltBg,
+            ["--sb-thumb" as string]: `color-mix(in srgb, ${p.accent} 55%, transparent)`,
+            ["--sb-thumb-hover" as string]: p.accent,
           }}
         >
-          <div style={{ position: "relative", width: extentW, height: extentH, minWidth: "100%", minHeight: "100%" }}>
+          {/* Sized to the scaled area; the stage inside maps layout units (origin bounds.left / top) onto it. */}
+          <div style={{
+            position: "relative", overflow: "hidden", minWidth: "100%", minHeight: "100%",
+            width: (bounds.right - bounds.left) * zoom, height: (bounds.bottom - bounds.top) * zoom,
+            backgroundImage: showing ? undefined : `radial-gradient(${p.border} ${Math.max(0.6, zoom)}px, transparent ${Math.max(0.6, zoom)}px)`,
+            backgroundSize: `${GRID * 2 * zoom}px ${GRID * 2 * zoom}px`,
+            backgroundPosition: `${-bounds.left * zoom}px ${-bounds.top * zoom}px`,
+          }}>
+          <div style={{ position: "absolute", left: 0, top: 0, transformOrigin: "0 0", transform: `scale(${zoom}) translate(${-bounds.left}px, ${-bounds.top}px)` }}>
             {shown.length === 0 && (
               <div style={{ position: "absolute", left: 24, top: 24, color: p.dimText, maxWidth: 360, lineHeight: 1.5 }}>
                 Drag controls and indicators here from the bar above (or click one).
@@ -178,9 +315,10 @@ export function RemoteView({ file }: { file: ProjectFile }) {
               </div>
             )}
             {shown.map((w) => {
-              const isSel = !live && w.uid === selected;
-              const bad = !live && hasConflict(w);
-              const indicatorValue = roleOf(w.kind) === "indicator" ? messageByName(session.messages, w.name)?.value : undefined;
+              const isSel = !showing && w.uid === selected;
+              const bad = !showing && hasConflict(w);
+              const indicatorValue = roleOf(w.kind) !== "indicator" ? undefined
+                : preview ? previewIndicatorValue(w) : messageByName(session.messages, w.name)?.value;
               return (
                 <div
                   key={w.uid}
@@ -190,21 +328,34 @@ export function RemoteView({ file }: { file: ProjectFile }) {
                   onPointerCancel={endDrag}
                   style={{
                     position: "absolute", left: w.x, top: w.y, width: w.w, height: w.h, boxSizing: "border-box",
-                    display: "flex", flexDirection: "column", padding: "6px 10px 8px",
+                    display: "flex", flexDirection: "column", padding: showing ? "6px 12px 8px" : "6px 10px 8px",
                     background: p.surface, borderRadius: 8,
                     border: `${isSel || bad ? 2 : 1}px solid ${bad ? p.danger : isSel ? p.accent : p.border}`,
                     boxShadow: drag?.uid === w.uid ? p.shadow : "0 1px 2px rgba(0,0,0,.08)",
-                    cursor: live ? "default" : drag?.uid === w.uid ? "grabbing" : "grab",
-                    touchAction: live ? "auto" : "none", userSelect: "none",
+                    cursor: panCursor ?? (showing ? "default" : drag?.uid === w.uid ? "grabbing" : "grab"),
+                    touchAction: "none", userSelect: "none",
                   }}
                 >
-                  <div style={{ fontSize: 11, color: p.dimText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
-                    {w.kind === "button" ? KIND_LABEL[w.kind] : w.name}
-                    {!live && <span style={{ opacity: 0.7 }}> · {w.kind === "joystick" ? `#${w.id}/${w.idY ?? w.id + 1}` : `#${w.id}`}</span>}
-                  </div>
-                  <div style={{ flex: 1, minHeight: 0, pointerEvents: live ? "auto" : "none" }}>
-                    <WidgetBody w={w} p={p} live={live && session.phase === "running"} values={session.values} value={indicatorValue}
-                      onChange={(name, value, merge) => setControl(name, value, merge)} />
+                  {showing ? (
+                    // Finished look: just the name (a button carries its name itself).
+                    w.kind !== "button" && (
+                      <div style={{ fontSize: 14, lineHeight: 1.25, fontWeight: 600, color: p.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
+                        {w.name}
+                      </div>
+                    )
+                  ) : (
+                    <div style={{ fontSize: 11, color: p.dimText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
+                      {w.kind === "button" ? KIND_LABEL[w.kind] : w.name}
+                      <span style={{ opacity: 0.7 }}> · {w.kind === "joystick" ? `#${w.id}/${w.idY ?? w.id + 1}` : `#${w.id}`}</span>
+                    </div>
+                  )}
+                  <div data-widget-body style={{ flex: 1, minHeight: 0, pointerEvents: showing && !panCursor ? "auto" : "none" }}>
+                    <WidgetBody w={w} p={p} live={preview || (live && session.phase === "running")}
+                      values={preview ? (previewValues ?? {}) : session.values} value={indicatorValue}
+                      onChange={(name, value, merge) => {
+                        if (preview) setPreviewValues((v) => (v ? { ...v, [name]: value } : v));
+                        else setControl(name, value, merge);
+                      }} />
                   </div>
                   {isSel && (
                     <span
@@ -216,6 +367,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
                 </div>
               );
             })}
+          </div>
           </div>
         </div>
 
@@ -242,6 +394,16 @@ function ModeButton({ p, active, disabled, onClick, icon, label, title }: { p: P
         cursor: disabled || active ? "default" : "pointer", opacity: disabled && !active ? 0.5 : 1,
       }}>
       {icon}{label}
+    </button>
+  );
+}
+
+function IconButton({ p, title, onClick, disabled, children }: { p: Palette; title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled}
+      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 24, padding: 0, border: "none", borderRadius: 4,
+        background: "transparent", color: p.text, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.4 : 1 }}>
+      {children}
     </button>
   );
 }

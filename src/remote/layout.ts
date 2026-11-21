@@ -127,9 +127,9 @@ function newUid(): string {
 /** Kind-specific defaults (size + options). */
 export function defaultsFor(kind: WidgetKind): Partial<Widget> {
   switch (kind) {
-    case "slider": return { w: 240, h: 64, valueType: "int", min: -100, max: 100, step: 1, initial: 0, springBack: false };
-    case "switch": return { w: 128, h: 56 };
-    case "button": return { w: 128, h: 56 };
+    case "slider": return { w: 240, h: 72, valueType: "int", min: -100, max: 100, step: 1, initial: 0, springBack: false };
+    case "switch": return { w: 128, h: 64 };
+    case "button": return { w: 128, h: 64 };
     case "joystick": return { w: 168, h: 192, max: 100 };
     case "text_input": return { w: 240, h: 64 };
     case "display": return { w: 160, h: 64, valueType: "float" };
@@ -287,8 +287,9 @@ export function makeWidget(kind: WidgetKind, x: number, y: number, symbols: Remo
   return w;
 }
 
+/** Snap to the grid. Positions may be negative (widgets placed left of / above the home view). */
 export function snap(v: number): number {
-  return Math.max(0, Math.round(v / GRID) * GRID);
+  return Math.round(v / GRID) * GRID || 0;
 }
 
 /** Top-left spot below every widget (for widgets added from elsewhere). */
@@ -303,4 +304,27 @@ export function freeSpot(l: RemoteLayout): { x: number; y: number } {
 export function initialValue(s: RemoteSymbol, w?: Widget): RemoteValue {
   if (w?.kind === "slider") return w.initial ?? 0;
   return s.type === RemoteType.Bool ? false : s.type === RemoteType.Str ? "" : 0;
+}
+
+/**
+ * What an indicator shows in preview mode, where no program sends values:
+ * a plausible sample so the layout can be judged filled in.
+ */
+export function previewIndicatorValue(w: Widget): RemoteValue | undefined {
+  switch (w.kind) {
+    case "led": return true;
+    case "gauge": {
+      const min = w.min ?? 0, max = w.max ?? 100;
+      const v = min + (max - min) * 0.65;
+      return w.valueType === "int" ? Math.round(v) : Math.round(v * 10) / 10;
+    }
+    case "display":
+      switch (w.valueType) {
+        case "int": return 42;
+        case "bool": return true;
+        case "str": return "Hello";
+        default: return 12.5;
+      }
+    default: return undefined;
+  }
 }

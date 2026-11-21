@@ -1,12 +1,37 @@
-import type { Block } from "blockly";
+import { Names, type Block } from "blockly";
 import { Order, type PythonGenerator } from "blockly/python";
 import { needsLvgl } from "../setup";
 
-/** Unique-per-block symbol so multiple widgets can coexist. */
-function widgetVar(prefix: string, block: Block): string {
-  // Blockly IDs contain chars like `!`; sanitize to identifier-safe form.
-  const safe = block.id.replace(/[^A-Za-z0-9]/g, "_").slice(0, 10);
-  return `_${prefix}_${safe}`;
+// Per-generation-pass naming state: block id → variable, prefix → next index.
+const names = new Map<string, string>();
+const counters = new Map<string, number>();
+
+/** Reset widget naming. Call once at the start of every generation pass. */
+export function resetLvglGen(): void {
+  names.clear();
+  counters.clear();
+}
+
+/**
+ * Friendly, stable-within-a-pass widget variable: `label0`, `label1`, ...
+ * Skips names already used by workspace variables / procedures / reserved
+ * words (the generator's name DB knows them after `init()`).
+ */
+function widgetVar(gen: PythonGenerator, prefix: string, block: Block): string {
+  const cached = names.get(block.id);
+  if (cached) return cached;
+  const db = (gen as unknown as { nameDB_?: Names }).nameDB_;
+  let n = counters.get(prefix) ?? 0;
+  let name = `${prefix}${n}`;
+  // getDistinctName() returns the candidate unchanged when it is free (and
+  // reserves it); otherwise it appends a suffix — then try the next index.
+  while (db && db.getDistinctName(name, Names.NameType.VARIABLE) !== name) {
+    n++;
+    name = `${prefix}${n}`;
+  }
+  counters.set(prefix, n + 1);
+  names.set(block.id, name);
+  return name;
 }
 
 /** RGB fallbacks for lpf2 color enum. lpf2.color.* are 0..10 indices, not RGB. */
@@ -32,7 +57,7 @@ const LPF2_COLOR_RE = /^lpf2\.color\.([A-Z]+)$/;
  * the equivalent 24-bit hex — LVGL expects an RGB int, not a small enum.
  * Anything else (variable, arithmetic) passes through unchanged.
  */
-function coerceColor(expr: string, fallback: string): string {
+export function coerceColor(expr: string, fallback: string): string {
   const e = (expr || fallback).trim();
   const m = LPF2_COLOR_RE.exec(e);
   return m ? LPF2_TO_RGB[m[1]] ?? fallback : e;
@@ -57,7 +82,7 @@ export function registerLvglGenerators(gen: PythonGenerator): void {
 
   gen.forBlock["lvgl_label"] = (block: Block) => {
     needsLvgl(gen);
-    const v = widgetVar("lbl", block);
+    const v = widgetVar(gen, "label", block);
     return [
       `${v} = lv.label(_scr)`,
       `${v}.set_text(${val(block, "TEXT", '""')})`,
@@ -68,7 +93,7 @@ export function registerLvglGenerators(gen: PythonGenerator): void {
 
   gen.forBlock["lvgl_rect"] = (block: Block) => {
     needsLvgl(gen);
-    const v = widgetVar("rect", block);
+    const v = widgetVar(gen, "rect", block);
     return [
       `${v} = lv.obj(_scr)`,
       `${v}.set_pos(${val(block, "X", "0")}, ${val(block, "Y", "0")})`,
@@ -83,7 +108,7 @@ export function registerLvglGenerators(gen: PythonGenerator): void {
 
   gen.forBlock["lvgl_circle"] = (block: Block) => {
     needsLvgl(gen);
-    const v = widgetVar("circ", block);
+    const v = widgetVar(gen, "circle", block);
     const d = val(block, "D", "20");
     return [
       `${v} = lv.obj(_scr)`,
@@ -99,7 +124,7 @@ export function registerLvglGenerators(gen: PythonGenerator): void {
 
   gen.forBlock["lvgl_line"] = (block: Block) => {
     needsLvgl(gen);
-    const v = widgetVar("line", block);
+    const v = widgetVar(gen, "line", block);
     const pts = `${v}_pts`;
     return [
       `${v} = lv.line(_scr)`,

@@ -21,7 +21,6 @@ VISIBLE   = 6           # rows visible on screen at once
 
 # ── init LCD ────────────────────────────────────────────────────────────────
 
-hub.lcd.init()
 hub.lcd.on()
 scr = lv.screen_active()
 scr.set_style_bg_color(lv.color_hex(0x000000), 0)

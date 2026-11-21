@@ -2,11 +2,13 @@ import * as Blockly from "blockly/core";
 import { useEffect, useRef } from "react";
 import { registerAllBlocks } from "../blocks";
 import { workspaceToPython } from "../codegen/pythonGen";
-import { buildToolbox, remoteFlyout, REMOTE_CATEGORY, REMOTE_CREATE_BUTTON, variablesFlyout } from "../blocks/toolbox";
+import { buildToolbox, remoteFlyout, REMOTE_CATEGORY, REMOTE_CREATE_BUTTON, SCENE_CATEGORY, SCENE_CREATE_BUTTON, sceneFlyout, variablesFlyout } from "../blocks/toolbox";
 import { autoShadowListener, fillAllShadows } from "../blocks/autoShadow";
 import { migrateWorkspaceState } from "../blocks/migrate";
 import { FieldRemoteName } from "../blocks/defs/remote";
 import { createRemoteName, onRemoteSymbolsChange } from "../remote/registry";
+import { FieldSceneRef } from "../blocks/defs/scene";
+import { createScene, onScenesChange } from "../scene/registry";
 import { friendlyTheme } from "./blocklyTheme";
 import "./blockly-theme.css";
 
@@ -91,6 +93,16 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
         else workspace.refreshToolboxSelection();
       });
     });
+    workspace.registerToolboxCategoryCallback(SCENE_CATEGORY, () => sceneFlyout() as Blockly.utils.toolbox.FlyoutDefinition);
+    workspace.registerButtonCallback(SCENE_CREATE_BUTTON, () => {
+      void createScene().then((module) => {
+        if (!module) return;
+        const tb = workspace.getToolbox() as Blockly.Toolbox | null;
+        const item = tb?.getToolboxItems().find((i) => (i as Blockly.ToolboxCategory).getName?.() === "Scenes");
+        if (tb && item) tb.setSelectedItem(item);
+        else workspace.refreshToolboxSelection();
+      });
+    });
     if (initialState) {
       try {
         Blockly.serialization.workspaces.load(migrateWorkspaceState(initialState) as object, workspace);
@@ -130,6 +142,19 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       listener();
     });
 
+    // Scenes changed (scene edited / added / removed): relabel / re-warn scene
+    // blocks, refresh an open Scenes flyout and regenerate (widget kinds).
+    const offScenes = onScenesChange(() => {
+      for (const b of workspace.getAllBlocks(false)) {
+        const f = b.getField("SCENE") ?? b.getField("WIDGET");
+        if (!(f instanceof FieldSceneRef)) continue;
+        f.forceRerender();
+        (b as unknown as { onchange?: (e: unknown) => void }).onchange?.call(b, null);
+      }
+      workspace.refreshToolboxSelection();
+      listener();
+    });
+
     // Initial toolbox chip styling + flyout scale.
     const restyle = () => {
       styleToolboxCategories(host);
@@ -146,6 +171,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
 
     return () => {
       offRemote();
+      offScenes();
       observer?.disconnect();
       workspace.removeChangeListener(listener);
       workspace.removeChangeListener(shadowListener);

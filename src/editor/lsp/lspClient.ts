@@ -22,7 +22,16 @@ export interface LspService {
    * stub). The open-document text overrides the server's own copy.
    */
   setVirtualFile(uri: string, text: string): void;
+  /**
+   * Mirror the project's Python files (uri → text) so imports between them
+   * resolve. Files are created on the server's file system (pyright only
+   * resolves imports to files that exist there) and kept open with their
+   * text; a file the editor has open is left to the editor. Files missing
+   * from a later call are deleted.
+   */
+  setProjectFiles(files: ReadonlyMap<string, string>): void;
 }
+
 
 export function startLspService(
   monacoNs: typeof monaco,
@@ -272,6 +281,8 @@ export function startLspService(
   function openDocument(model: monaco.editor.ITextModel): void {
     const uri = model.uri.toString();
     if (openModels.has(uri)) return;
+    // A mirrored project file: the editor takes over the open document.
+    if (virtualFiles.delete(uri)) notify("textDocument/didClose", { textDocument: { uri } });
     notify("textDocument/didOpen", {
       textDocument: { uri, languageId: LANGUAGE_ID, version: model.getVersionId(), text: model.getValue() },
     });
@@ -310,6 +321,26 @@ export function startLspService(
     const monacoUri = monacoNs.Uri.parse(uri);
     const model = monacoNs.editor.getModel(monacoUri);
     if (model) monacoNs.editor.setModelMarkers(model, OWNER, []);
+    // Still a project file: hand it back to the mirror.
+    const text = projectFiles.get(uri);
+    if (text !== undefined) setVirtualFile(uri, text);
+  }
+
+  /** Mirrored project files: uri → latest text. */
+  const projectFiles = new Map<string, string>();
+  function setProjectFiles(files: ReadonlyMap<string, string>): void {
+    for (const uri of [...projectFiles.keys()]) {
+      if (files.has(uri)) continue;
+      projectFiles.delete(uri);
+      if (virtualFiles.delete(uri)) notify("textDocument/didClose", { textDocument: { uri } });
+      notify("pyright/deleteFile", { uri });
+    }
+    for (const [uri, text] of files) {
+      const isNew = !projectFiles.has(uri);
+      projectFiles.set(uri, text);
+      if (isNew) notify("pyright/createFile", { uri });
+      if (!openModels.has(uri)) setVirtualFile(uri, text);
+    }
   }
 
   function dispose(): void {
@@ -325,7 +356,7 @@ export function startLspService(
     pending.clear();
   }
 
-  return { dispose, openDocument, closeDocument, setVirtualFile };
+  return { dispose, openDocument, closeDocument, setVirtualFile, setProjectFiles };
 }
 
 // ── LSP wire types (subset used) ─────────────────────────────────────────────

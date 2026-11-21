@@ -17,12 +17,15 @@ import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
 import { startRemoteSync } from "./remote/sync";
 import "./ui/remote/actions"; // registers the block toolbox "Create remote name…" handler
+import { startSceneSync } from "./scene/sync";
+import "./ui/scene/actions"; // registers the block toolbox "Create scene…" handler
 
 const FirmwareUpdatePage = lazy(() => import("./ui/FirmwareUpdatePage").then((m) => ({ default: m.FirmwareUpdatePage })));
 
 const SUPPRESS_KEY = "b2op.suppressFwUpdates";
 
 startRemoteSync();
+startSceneSync();
 
 // Restore projects before the first render so nothing flashes the default project.
 (() => {

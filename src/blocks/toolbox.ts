@@ -10,6 +10,14 @@ import { REMOTE_COLOUR } from "./defs/remote";
 import { REMOTE_GET_BLOCK, remoteValueKind, type RemoteValueKind } from "./remoteKinds";
 import { controlSymbols, indicatorSymbols } from "../remote/registry";
 import { RemoteType } from "../device/protocol";
+import { SCENE_BLOCKS, SCENE_COLOUR, SCENE_FIELD_KINDS, type SceneFieldKinds } from "./defs/scene";
+import { sceneList } from "../scene/registry";
+import type { SceneKind } from "../scene/model";
+
+/** Dynamic toolbox category: blocks for the project's scenes. */
+export const SCENE_CATEGORY = "SCENES";
+/** Flyout button key for "Create scene…". */
+export const SCENE_CREATE_BUTTON = "CREATE_SCENE";
 
 /** Dynamic toolbox category: blocks for the project's remote controller names. */
 export const REMOTE_CATEGORY = "REMOTE_CONTROLLER";
@@ -46,6 +54,60 @@ export function remoteFlyout(): object[] {
   return out;
 }
 
+/** Flyout contents of the Scenes category (rebuilt every time it opens). */
+export function sceneFlyout(): object[] {
+  const out: object[] = [{ kind: "button", text: "Create scene…", callbackkey: SCENE_CREATE_BUTTON }];
+  const scenes = sceneList();
+  if (!scenes.length) {
+    out.push({ kind: "label", text: "Make a scene (a screen layout) to use it here." });
+    return out;
+  }
+  const first = scenes[0].module;
+  const widgets = scenes.flatMap((s) => s.widgets.map((w) => ({ ref: `${s.module}.${w.name}`, kind: w.kind })));
+  /** First widget the field accepts, or null (block left out). */
+  const pick = (kinds: SceneFieldKinds) => {
+    const allowed = SCENE_FIELD_KINDS[kinds] as readonly SceneKind[] | null;
+    return widgets.find((w) => !allowed || allowed.includes(w.kind))?.ref ?? null;
+  };
+  const block = (type: string) =>
+    blockWithShadows(([...SCENE_BLOCKS, ...LVGL_BLOCKS] as readonly ToolboxDef[]).find((d) => d.type === type) ?? { type }) as object;
+  const withWidget = (type: string, kinds: SceneFieldKinds, extra: Record<string, unknown> = {}) => {
+    const ref = pick(kinds);
+    if (ref) out.push({ ...block(type), ...extra, fields: { ...(extra.fields as object ?? {}), WIDGET: ref } });
+  };
+
+  out.push({ kind: "label", text: "Scenes" });
+  out.push({ ...block("scene_show"), fields: { SCENE: first } });
+  out.push({ ...block("scene_hide"), fields: { SCENE: first } });
+  out.push({ ...block("scene_is_shown"), fields: { SCENE: first } });
+  out.push(block("lvgl_update_screen"));
+  if (!widgets.length) {
+    out.push({ kind: "label", text: "Add widgets to a scene to change them from blocks." });
+    return out;
+  }
+  out.push({ kind: "label", text: "Widgets" });
+  withWidget("scene_set_text", "text");
+  withWidget("scene_set_value", "setValue");
+  withWidget("scene_get_value", "getValue");
+  withWidget("scene_selected_text", "choice");
+  withWidget("scene_set_items", "items", {
+    inputs: { ITEMS: { block: { type: "lists_create_with", extraState: { itemCount: 2 }, inputs: { ADD0: { shadow: { type: "text", fields: { TEXT: "A" } } }, ADD1: { shadow: { type: "text", fields: { TEXT: "B" } } } } } } },
+  });
+  withWidget("scene_set_checked", "check");
+  withWidget("scene_is_checked", "checked");
+  withWidget("scene_chart_add", "chart");
+  withWidget("scene_set_color", "any");
+  withWidget("scene_set_visible", "any");
+  withWidget("scene_move", "any");
+  withWidget("scene_focus", "focus");
+  if (pick("event")) {
+    out.push({ kind: "label", text: "Events (hub buttons)" });
+    withWidget("scene_on_event", "event");
+    out.push(block("scene_event_index"), block("scene_event_text"), block("scene_event_value"));
+  }
+  return out;
+}
+
 interface ToolboxDef {
   advanced?: boolean;
   type: string;
@@ -76,6 +138,13 @@ const INPUT_DEFAULTS: Record<string, Record<string, ShadowState>> = {
   hub_wait: { SECONDS: num(1) },
   hub_lcd_backlight_duty: { DUTY: num(255) },
   hub_lcd_fill: { COLOR: num(0) },
+  // Scenes
+  scene_set_text: { TEXT: str("Hello") },
+  scene_set_value: { VALUE: num(50) },
+  scene_set_checked: { STATE: bool() },
+  scene_set_color: { COLOR: color("RED") },
+  scene_move: { X: num(10), Y: num(10) },
+  scene_chart_add: { VALUE: num(50) },
   // Motor
   motor_start_speed: { SPEED: num(50) },
   motor_start_power: { POWER: num(50) },
@@ -268,6 +337,7 @@ export function buildToolbox(showAdvanced: boolean) {
       categoryOf(SENSOR_BLOCKS, "Sensor", "260", showAdvanced),
       ...screenCategory,
       ...neopixelCategory,
+      { kind: "category", name: "Scenes", colour: SCENE_COLOUR, custom: SCENE_CATEGORY },
       { kind: "category", name: "Remote", colour: REMOTE_COLOUR, custom: REMOTE_CATEGORY },
       { kind: "sep" },
       controlCategory,

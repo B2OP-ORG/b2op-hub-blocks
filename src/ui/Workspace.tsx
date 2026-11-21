@@ -6,12 +6,15 @@ import { Drawer, DRAWER_HANDLE } from "./Drawer";
 import { usePalette } from "./theme";
 import { newFileFlow } from "./actions";
 import { isRemoteFile } from "../remote/layout";
+import { isSceneFile } from "../scene/project";
+import { projectFileUri } from "../editor/lsp/projectFiles";
 
 // Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
 const BlocklyView = lazy(() => import("./BlocklyView").then((m) => ({ default: m.BlocklyView })));
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
 const ExtraTabView = lazy(() => import("./ExtraTabView").then((m) => ({ default: m.ExtraTabView })));
 const RemoteView = lazy(() => import("./remote/RemoteView").then((m) => ({ default: m.RemoteView })));
+const SceneView = lazy(() => import("./scene/SceneView").then((m) => ({ default: m.SceneView })));
 
 function NoFileOpen() {
   const p = usePalette();
@@ -62,8 +65,9 @@ export function Workspace() {
     return () => cancelAnimationFrame(id);
   }, [pySize, conSize, project.type]);
 
-  // LSP URI is stable per file (uses file ID, not filename).
-  const lspUri = `file:///workspace/${activeFileId}.py`;
+  // The file's real project path, so imports of other project files
+  // (`import menu`) resolve next to it (see attachProjectFiles).
+  const lspUri = activeFile ? projectFileUri(activeFile.name) : `file:///workspace/${activeFileId}.py`;
   const bottomRow = conSize + DRAWER_HANDLE;
 
   const consoleDrawer = (
@@ -80,6 +84,8 @@ export function Workspace() {
     editor = <NoFileOpen />;
   } else if (isRemoteFile(activeFile.name)) {
     editor = <Suspense fallback={null}><RemoteView file={activeFile} /></Suspense>;
+  } else if (isSceneFile(activeFile)) {
+    editor = <Suspense fallback={null}><SceneView file={activeFile} /></Suspense>;
   } else if (project.type === "blocks") {
     columns = `1fr ${pySize + DRAWER_HANDLE}px`;
     editor = (
@@ -105,7 +111,7 @@ export function Workspace() {
     );
   }
 
-  const isBlocks = !extraTab && !!activeFile && !isRemoteFile(activeFile.name) && project.type === "blocks";
+  const isBlocks = !extraTab && !!activeFile && !isRemoteFile(activeFile.name) && !isSceneFile(activeFile) && project.type === "blocks";
 
   return (
     <div

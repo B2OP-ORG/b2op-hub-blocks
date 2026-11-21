@@ -7,6 +7,7 @@ import { useApp } from "../../state/store";
 import { createWorkerTransport, createWsTransport } from "./transport";
 import { startLspService, type LspService } from "./lspClient";
 import { attachRemoteStub } from "../../remote/sync";
+import { attachProjectFiles } from "./projectFiles";
 
 // Module-level singleton so the pyright worker isn't re-spawned on remounts.
 let _singleton: { key: string; service: LspService; detach: () => void } | null = null;
@@ -55,7 +56,9 @@ export function useLspService(monacoNs: typeof monaco | null): LspService | null
         return;
       }
       const svc = startLspService(monacoNs, transport);
-      _singleton = { key, service: svc, detach: attachRemoteStub(svc) };
+      const detachRemote = attachRemoteStub(svc);
+      const detachFiles = attachProjectFiles(svc);
+      _singleton = { key, service: svc, detach: () => { detachRemote(); detachFiles(); } };
       setService(svc);
     })();
 

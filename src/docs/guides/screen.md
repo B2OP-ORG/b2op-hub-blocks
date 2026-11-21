@@ -14,6 +14,8 @@ hub.lcd.off()            # dark
 
 ::: api hub.lcd.backlight
 
+For whole screen layouts, the scene editor is easier: see [Scenes](doc:guide:scenes).
+
 ## Drawing with LVGL
 
 To show text, buttons and pictures, use the `lvgl` module. It's ready as soon as your program starts. While your program runs, give it a moment to redraw by calling `lv.timer_handler()` in your loop:

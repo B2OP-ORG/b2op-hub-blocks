@@ -16,6 +16,7 @@ import { openContextMenu, openMenuAt } from "./ContextMenu";
 import { switchActiveFileMode } from "./modeSwitch";
 import { applyRemoteEvent } from "../remote/session";
 import { openRemoteController } from "./remote/actions";
+import { isSceneFile } from "../scene/project";
 
 interface Props {
   onOpenSettings: () => void;
@@ -54,7 +55,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
   const badgeBtnRef = useRef<HTMLButtonElement>(null);
   const dark = useDark();
   const liveMode = project.settings.liveMode;
-  const canSwitchMode = !!activeFile && /\.py$/i.test(activeFile.name);
+  const canSwitchMode = !!activeFile && /\.py$/i.test(activeFile.name) && !isSceneFile(activeFile);
 
   useEffect(() => { compactLevelRef.current = compactLevel; }, [compactLevel]);
 

@@ -205,6 +205,44 @@ describe("startLspService — documents", () => {
     expect(srv.received.length).toBe(count);
   });
 
+  it("mirrors project files: create + open, hand over to the editor and back, delete", async () => {
+    const srv = fakeServer();
+    const MENU = "file:///workspace/menu.py";
+    const model = makeModel("import menu\n");
+    const { monacoNs } = makeMockMonaco([model]);
+    const svc = startLspService(monacoNs, srv.transport);
+    await tick();
+    const after = (n: number) => srv.received.slice(n).map((m) => [m.method, (m.params as any)?.uri ?? (m.params as any)?.textDocument?.uri]);
+
+    let n = srv.received.length;
+    svc.setProjectFiles(new Map([[URI, "import menu\n"], [MENU, "label0 = 1\n"]]));
+    expect(after(n)).toEqual([
+      ["pyright/createFile", URI], ["textDocument/didOpen", URI],
+      ["pyright/createFile", MENU], ["textDocument/didOpen", MENU],
+    ]);
+
+    // The editor opens main.py: the mirror's copy closes first.
+    n = srv.received.length;
+    svc.openDocument(model as any);
+    expect(after(n)).toEqual([["textDocument/didClose", URI], ["textDocument/didOpen", URI]]);
+
+    // While the editor has it, the mirror leaves it alone.
+    n = srv.received.length;
+    svc.setProjectFiles(new Map([[URI, "import menu\nx = 1\n"], [MENU, "label0 = 2\n"]]));
+    expect(after(n)).toEqual([["textDocument/didChange", MENU]]);
+
+    // Closed in the editor: the mirror takes it back with the latest text.
+    n = srv.received.length;
+    svc.closeDocument(URI);
+    expect(after(n)).toEqual([["textDocument/didClose", URI], ["textDocument/didOpen", URI]]);
+    expect((srv.received.at(-1)!.params as any).textDocument.text).toBe("import menu\nx = 1\n");
+
+    // Removed from the project.
+    n = srv.received.length;
+    svc.setProjectFiles(new Map([[URI, "import menu\nx = 1\n"]]));
+    expect(after(n)).toEqual([["textDocument/didClose", MENU], ["pyright/deleteFile", MENU]]);
+  });
+
   it("ignores duplicate openDocument for the same URI", async () => {
     const srv = fakeServer();
     const model = makeModel("");

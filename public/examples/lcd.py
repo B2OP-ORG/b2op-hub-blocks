@@ -1,6 +1,5 @@
 import hub, lvgl as lv, time
 
-hub.lcd.init()
 hub.lcd.on()
 scr = lv.screen_active()
 btn = lv.button(scr)

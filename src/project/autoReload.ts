@@ -57,8 +57,11 @@ async function reload(): Promise<void> {
   const s = useApp.getState();
   if (!s.running || !s.device) { clearAll(); return; }
   clearAll();
-  s.appendConsole("info", "[auto-reload]\n");
-  await reloadProgram();
+  // The reload uploads the files as they are now.
+  const uploaded = snapshot(s.mfp.files);
+  const names = changedNames(uploaded);
+  s.appendConsole("info", `[auto-reload${names.length ? ": " + names.join(", ") : ""}]\n`);
+  if (await reloadProgram()) baseline = uploaded;
 }
 
 function schedule(kind: ReloadKind, ms: number): void {
@@ -88,6 +91,37 @@ function outsideEditor(target: EventTarget | null): boolean {
   return !el?.closest(IGNORE_SELECTOR);
 }
 
+type Keys = Map<string, { kind: ReloadKind; key: string; name: string }>;
+
+/** Change keys of the project's files (file id → kind + key). */
+function snapshot(files: ProjectFile[]): Keys {
+  const next: Keys = new Map();
+  for (const f of files) {
+    const kind = kindOf(f);
+    if (kind) next.set(f.id, { kind, key: changeKey(f, kind), name: f.name });
+  }
+  return next;
+}
+
+/** Keys of the files the running program was started (or last reloaded) with. */
+let baseline: Keys = new Map();
+
+/** Kinds whose files differ from the running program's (edited, added or removed). */
+function kindsChanged(keys: Keys): Set<ReloadKind> {
+  const out = new Set<ReloadKind>();
+  for (const [id, k] of keys) if (baseline.get(id)?.key !== k.key) out.add(k.kind);
+  for (const [id, k] of baseline) if (!keys.has(id)) out.add(k.kind);
+  return out;
+}
+
+/** Names of the files that differ from the running program's (removed ones included). */
+function changedNames(keys: Keys): string[] {
+  const out: string[] = [];
+  for (const [id, k] of keys) if (baseline.get(id)?.key !== k.key) out.push(k.name);
+  for (const [id, k] of baseline) if (!keys.has(id)) out.push(`${k.name} (removed)`);
+  return out;
+}
+
 let started = false;
 
 /** Start watching edits and focus. Idempotent. */
@@ -97,19 +131,14 @@ export function startAutoReload(): void {
 
   let projectId = useApp.getState().mfp.id;
   let lastFiles = useApp.getState().mfp.files;
-  let keys = new Map<string, string>();
-  const snapshot = (files: ProjectFile[]) => {
-    const next = new Map<string, string>();
-    for (const f of files) {
-      const k = kindOf(f);
-      if (k) next.set(f.id, k + "\0" + changeKey(f, k));
-    }
-    return next;
-  };
-  keys = snapshot(lastFiles);
+  let keys = snapshot(lastFiles);
+  // Hot reload mid-run: take what's there as what's running.
+  if (useApp.getState().running) baseline = keys;
 
   const unsub = useApp.subscribe((s, prev) => {
     if (prev.running && !s.running && !isReloading()) clearAll();
+    // A program started by hand (a reload sets the baseline itself).
+    if (!prev.running && s.running && !isReloading()) baseline = snapshot(s.mfp.files);
     if (s.activeFileId !== prev.activeFileId || s.activeExtraTab !== prev.activeExtraTab) left();
 
     const files = s.mfp.files;
@@ -122,14 +151,24 @@ export function startAutoReload(): void {
     keys = next;
     if (!sameProject || !s.running || !s.device) return;
 
+    // Kinds edited just now (vs the previous state)…
+    const touched = new Set<ReloadKind>();
+    for (const [id, k] of next) if (old.get(id)?.key !== k.key) touched.add(k.kind);
+    for (const [id, k] of old) if (!next.has(id)) touched.add(k.kind);
+    if (!touched.size) return;
+    // …count only when they now differ from what's running: an edit that was
+    // undone (or a block dragged out and back) is no change.
+    const changed = kindsChanged(next);
     const r = s.editorSettings.autoReload;
-    for (const [id, key] of next) {
-      if (old.get(id) === key) continue;
-      const kind = key.slice(0, key.indexOf("\0")) as ReloadKind;
-      const rule = r[kind];
-      if (rule.mode === "off") continue;
+    for (const kind of touched) {
+      if (!changed.has(kind) || r[kind].mode === "off") {
+        dirty.delete(kind);
+        const t = timers.get(kind);
+        if (t) { clearTimeout(t); timers.delete(kind); }
+        continue;
+      }
       dirty.add(kind);
-      if (rule.mode === "delay") schedule(kind, Math.max(0, rule.delaySec) * 1000);
+      if (r[kind].mode === "delay") schedule(kind, Math.max(0, r[kind].delaySec) * 1000);
     }
   });
 

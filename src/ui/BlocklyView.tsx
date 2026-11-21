@@ -120,7 +120,12 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
     }
     const shadowListener = autoShadowListener(workspace);
     workspace.addChangeListener(shadowListener);
+    // Set on cleanup: the queued initial call (and Blockly's queued events)
+    // can run after dispose — StrictMode mounts twice in dev — and would save
+    // the disposed, empty workspace over the file.
+    let disposed = false;
     const listener = () => {
+      if (disposed) return;
       const state = Blockly.serialization.workspaces.save(workspace);
       const py = workspaceToPython(workspace);
       onChangeRef.current(state, py);
@@ -170,6 +175,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
     observer?.observe(toolboxDiv!, { attributes: true, attributeFilter: ["style"], subtree: true, childList: true });
 
     return () => {
+      disposed = true;
       offRemote();
       offScenes();
       observer?.disconnect();

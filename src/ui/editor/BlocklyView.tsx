@@ -130,7 +130,21 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       const py = workspaceToPython(workspace);
       onChangeRef.current(state, py);
     };
-    workspace.addChangeListener(listener);
+    // Workspace edits: UI events (selection, scrolling, zoom, drag in progress,
+    // toolbox clicks) don't change the program. Blockly fires queued events in
+    // one batch, so a burst (paste, delete a stack, load) is serialized and
+    // generated once, right after the batch — still in the same task, so the
+    // save can't land after the active file changed.
+    let saveQueued = false;
+    const changeListener = (e: Blockly.Events.Abstract) => {
+      if (disposed || e.isUiEvent || saveQueued) return;
+      saveQueued = true;
+      queueMicrotask(() => {
+        saveQueued = false;
+        listener();
+      });
+    };
+    workspace.addChangeListener(changeListener);
     // Fire once for initial preview.
     queueMicrotask(listener);
 
@@ -179,7 +193,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       offRemote();
       offScenes();
       observer?.disconnect();
-      workspace.removeChangeListener(listener);
+      workspace.removeChangeListener(changeListener);
       workspace.removeChangeListener(shadowListener);
       workspace.dispose();
       workspaceRef.current = null;

@@ -12,6 +12,7 @@ import { editorTheme, ensureShiki } from "../../highlight/shiki";
 import { useApp } from "../../state/store";
 import type { MonacoSettings } from "../../settings/editorSettings";
 import { registerPythonLanguageConfig } from "./pythonLanguage";
+import { installModelGc } from "./modelGc";
 
 (self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
@@ -23,6 +24,7 @@ const monacoInstance = monacoApi as unknown as typeof monaco;
 
 loader.config({ monaco: monacoInstance });
 registerPythonLanguageConfig(monacoInstance);
+installModelGc(monacoInstance);
 // Resolves to whether Shiki themes are available; falls back to vs/vs-dark.
 const themeReady: Promise<boolean> = ensureShiki(monacoInstance).then(
   () => true,

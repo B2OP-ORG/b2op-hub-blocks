@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
+import { pyrightAssets } from './scripts/vite-pyright.ts'
 
 /**
  * `virtual:examples` — sorted list of file paths under public/examples/
@@ -41,7 +42,7 @@ function examplesList(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), examplesList()],
+  plugins: [react(), examplesList(), pyrightAssets(__dirname)],
   worker: {
     format: 'es',
   },

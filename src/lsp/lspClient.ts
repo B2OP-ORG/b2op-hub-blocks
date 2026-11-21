@@ -364,6 +364,9 @@ export function startLspService(
     for (const [uri, listener] of openModels) {
       listener.dispose();
       try { notify("textDocument/didClose", { textDocument: { uri } }); } catch { /* ignore */ }
+      // A later service (restart, settings change) republishes its own.
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri));
+      if (model) monacoNs.editor.setModelMarkers(model, OWNER, []);
     }
     openModels.clear();
     for (const d of disposables) d.dispose();

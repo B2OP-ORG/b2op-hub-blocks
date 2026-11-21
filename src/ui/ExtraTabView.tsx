@@ -5,6 +5,7 @@ import { usePalette } from "./theme";
 import { EXAMPLES, fetchExample } from "../examples";
 import { addExampleToProject, openExampleAsProject } from "./actions";
 import { pageContent } from "../docs/pages";
+import { exampleFileUri, setExampleFiles } from "../editor/lsp/projectFiles";
 
 const DocPage = lazy(() => import("../docs/DocPage").then((m) => ({ default: m.DocPage })));
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
@@ -70,6 +71,17 @@ function ExampleTabView({ tab }: { tab: ExtraTab }) {
     return () => { alive = false; };
   }, [tab.ref]);
 
+  // Give the language server every file of the example, so a folder
+  // example's imports of its siblings resolve.
+  useEffect(() => {
+    if (!entry) return;
+    let alive = true;
+    Promise.all(entry.files.map(async (f) => [f, await fetchExample(f)] as const))
+      .then((files) => { if (alive) setExampleFiles(new Map(files)); })
+      .catch(() => { /* the shown file's error is reported above */ });
+    return () => { alive = false; setExampleFiles(new Map()); };
+  }, [entry]);
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", borderBottom: `1px solid ${p.border}`, background: p.panelBg, flexWrap: "wrap", flexShrink: 0 }}>
@@ -81,7 +93,7 @@ function ExampleTabView({ tab }: { tab: ExtraTab }) {
         {error ? <div style={{ padding: 16, color: p.danger }}>{error}</div>
           : code !== null && (
             <Suspense fallback={null}>
-              <MonacoView key={tab.ref} value={code} language="python" readOnly />
+              <MonacoView key={tab.ref} value={code} language="python" readOnly lspUri={exampleFileUri(tab.ref)} />
             </Suspense>
           )}
       </div>

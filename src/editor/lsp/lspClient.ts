@@ -30,6 +30,11 @@ export interface LspService {
    * from a later call are deleted.
    */
   setProjectFiles(files: ReadonlyMap<string, string>): void;
+  /**
+   * Same as setProjectFiles, for another independent set of files (e.g. the
+   * example being viewed): each group only replaces its own files.
+   */
+  setFileGroup(group: string, files: ReadonlyMap<string, string>): void;
 }
 
 
@@ -321,27 +326,37 @@ export function startLspService(
     const monacoUri = monacoNs.Uri.parse(uri);
     const model = monacoNs.editor.getModel(monacoUri);
     if (model) monacoNs.editor.setModelMarkers(model, OWNER, []);
-    // Still a project file: hand it back to the mirror.
-    const text = projectFiles.get(uri);
+    // Still a mirrored file: hand it back to the mirror.
+    const text = mirroredText(uri);
     if (text !== undefined) setVirtualFile(uri, text);
   }
 
-  /** Mirrored project files: uri → latest text. */
-  const projectFiles = new Map<string, string>();
-  function setProjectFiles(files: ReadonlyMap<string, string>): void {
-    for (const uri of [...projectFiles.keys()]) {
+  /** Mirrored files per group (project, examples): uri → latest text. */
+  const groups = new Map<string, Map<string, string>>();
+  function mirroredText(uri: string): string | undefined {
+    for (const g of groups.values()) {
+      const text = g.get(uri);
+      if (text !== undefined) return text;
+    }
+    return undefined;
+  }
+  function setFileGroup(group: string, files: ReadonlyMap<string, string>): void {
+    let mirrored = groups.get(group);
+    if (!mirrored) groups.set(group, (mirrored = new Map()));
+    for (const uri of [...mirrored.keys()]) {
       if (files.has(uri)) continue;
-      projectFiles.delete(uri);
+      mirrored.delete(uri);
       if (virtualFiles.delete(uri)) notify("textDocument/didClose", { textDocument: { uri } });
       notify("pyright/deleteFile", { uri });
     }
     for (const [uri, text] of files) {
-      const isNew = !projectFiles.has(uri);
-      projectFiles.set(uri, text);
+      const isNew = !mirrored.has(uri);
+      mirrored.set(uri, text);
       if (isNew) notify("pyright/createFile", { uri });
       if (!openModels.has(uri)) setVirtualFile(uri, text);
     }
   }
+  const setProjectFiles = (files: ReadonlyMap<string, string>) => setFileGroup("project", files);
 
   function dispose(): void {
     if (disposed) return;
@@ -356,7 +371,7 @@ export function startLspService(
     pending.clear();
   }
 
-  return { dispose, openDocument, closeDocument, setVirtualFile, setProjectFiles };
+  return { dispose, openDocument, closeDocument, setVirtualFile, setProjectFiles, setFileGroup };
 }
 
 // ── LSP wire types (subset used) ─────────────────────────────────────────────

@@ -257,7 +257,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", minHeight: 40, boxSizing: "border-box", borderBottom: `1px solid ${p.border}`, background: p.panelAltBg, flexWrap: "wrap" }}>
         {live ? (
           <span style={{ fontSize: 12, color: p.dimText }}>
-            Controls are live while the program runs, also from other tabs. <b>Stop</b> the program to edit.
+            Controls are live while the program runs. <b>Stop</b> the program to edit.
           </span>
         ) : preview ? (
           <span style={{ fontSize: 12, color: p.dimText }}>

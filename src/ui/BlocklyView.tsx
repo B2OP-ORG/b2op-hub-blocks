@@ -67,6 +67,10 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       toolbox: buildToolbox(showAdvanced),
       renderer: "zelos",
       theme: friendlyTheme,
+      // Serve Blockly's sprites / sounds / cursors locally (public/media, copied
+      // from node_modules/blockly/media). The default points at
+      // blockly-demo.appspot.com, which the browser blocks (CORB).
+      media: `${import.meta.env.BASE_URL}media/`,
       trashcan: true,
       grid: { spacing: 25, length: 3, colour: "#e2dcce", snap: false },
       zoom: { controls: true, wheel: true, startScale: 0.9, minScale: 0.4, maxScale: 2.0 },

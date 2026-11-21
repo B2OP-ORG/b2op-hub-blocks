@@ -3,7 +3,7 @@
 import type { DataListener, Transport, TransportInfo, Unsubscribe } from "../transport/types";
 import {
   KIND, FLAGS_NO_ACK, FLAGS_ECHO, FLAGS_ECHO_RX, ERR_BUSY, REMOTE_OP, RemoteType, makeFrame, remoteDefault,
-  FrameParser, decodeTwoPaths, enc, dec, type RemoteValue,
+  FrameParser, decodeTwoPaths, enc, dec, encodeRemoteDef, encodeRemoteSet, type RemoteValue,
 } from "../protocol";
 import { frameAck, frameData, frameErr, frameHello, frameOk, frameProgEnd, frameProgress, frameStdout, helloBoardPayload } from "./mockFrames";
 
@@ -38,8 +38,11 @@ export class MockTransport implements Transport {
   private readQueue: (() => void)[] = [];
   /** ECHO_BLE state (the mock behaves like a USB link). */
   public bleEcho = false;
-  /** REMOTE controls defined by the host: id → slot. */
-  public remoteControls = new Map<number, { type: RemoteType; name: string; value: RemoteValue }>();
+  /**
+   * REMOTE slots, one id space like the firmware (Hub::Remote): host
+   * controls (`owner: "host"`) and program messages (`owner: "program"`).
+   */
+  public remoteControls = new Map<number, { type: RemoteType; name: string; value: RemoteValue; owner: "host" | "program" }>();
   /** SEQ of the last applied REMOTE SET (stale SETs are skipped, like the firmware). */
   private remoteSeq: number | null = null;
 
@@ -156,6 +159,56 @@ export class MockTransport implements Transport {
     this.emit(makeFrame(KIND.REMOTE, 0xFF, 0, payload));
   }
 
+  /** Program slots dropped (host DEFINE / same-name create) → unsolicited CLEAR with their ids. */
+  private emitRemoteGone(ids: number[]): void {
+    if (ids.length) this.emitRemote(Uint8Array.of(REMOTE_OP.CLEAR, ...ids));
+  }
+
+  /** Create / replace slot `id`, dropping another slot with the same name; returns dropped program ids. */
+  private defineRemoteSlot(id: number, type: RemoteType, name: string, owner: "host" | "program"): number[] {
+    const gone: number[] = [];
+    for (const [other, slot] of this.remoteControls) {
+      if (slot.name === name && other !== id) {
+        if (slot.owner === "program") gone.push(other);
+        this.remoteControls.delete(other);
+      }
+    }
+    const prev = this.remoteControls.get(id);
+    if (prev?.owner === "program" && owner === "host") gone.push(id);
+    this.remoteControls.set(id, { type, name, value: remoteDefault(type), owner });
+    return gone;
+  }
+
+  /** Test hook: `remote.create_message(id, name, type)` (mirrors Hub::Remote::createMessage); returns an error or null. */
+  programCreate(id: number, name: string, type: RemoteType): string | null {
+    const cur = this.remoteControls.get(id);
+    if (cur?.owner === "host") return cur.name === name && cur.type === type ? null : "id taken";
+    for (const [other, slot] of this.remoteControls) {
+      if (other !== id && slot.owner === "host" && slot.name === name) return "name taken";
+    }
+    this.emitRemoteGone(this.defineRemoteSlot(id, type, name, "program"));
+    this.emitRemote(Uint8Array.of(REMOTE_OP.DEFINE, ...encodeRemoteDef({ id, type, name })));
+    return null;
+  }
+
+  /** Test hook: `remote.send(id, value)` on any slot (mirrors Hub::Remote::programSet); returns an error or null. */
+  programSend(id: number, value: RemoteValue): string | null {
+    const slot = this.remoteControls.get(id);
+    if (!slot) return "no slot";
+    slot.value = value;
+    this.emitRemote(Uint8Array.of(REMOTE_OP.SET, ...encodeRemoteSet({ id, type: slot.type, value })));
+    return null;
+  }
+
+  /** Test hook: program end (Hub::Remote::clearMessages). */
+  programEnd(): void {
+    let any = false;
+    for (const [id, slot] of this.remoteControls) {
+      if (slot.owner === "program") { this.remoteControls.delete(id); any = true; }
+    }
+    if (any) this.emitRemote(Uint8Array.of(REMOTE_OP.CLEAR));
+  }
+
   /** REMOTE handling (mirrors Protocol.cpp handleRemote); returns an error or null. */
   private handleRemote(seq: number, p: Uint8Array): string | null {
     if (p.length === 0) return "REMOTE: empty";
@@ -173,8 +226,7 @@ export class MockTransport implements Transport {
           if (nlen < 1 || nlen > 32) return "REMOTE: bad name";
           const name = dec.decode(p.subarray(i, i + nlen));
           i += nlen;
-          for (const [other, slot] of this.remoteControls) if (slot.name === name && other !== id) this.remoteControls.delete(other);
-          this.remoteControls.set(id, { type: type as RemoteType, name, value: remoteDefault(type as RemoteType) });
+          this.emitRemoteGone(this.defineRemoteSlot(id, type as RemoteType, name, "host"));
         }
         return null;
       case REMOTE_OP.SET:
@@ -195,8 +247,11 @@ export class MockTransport implements Transport {
         return null;
       case REMOTE_OP.CLEAR:
         this.remoteSeq = null;
-        if (p.length === 1) this.remoteControls.clear();
-        for (; i < p.length; i++) this.remoteControls.delete(p[i]);
+        // Host CLEAR only removes host slots (program messages stay).
+        if (p.length === 1) {
+          for (const [id, slot] of this.remoteControls) if (slot.owner === "host") this.remoteControls.delete(id);
+        }
+        for (; i < p.length; i++) if (this.remoteControls.get(p[i])?.owner === "host") this.remoteControls.delete(p[i]);
         return null;
       default:
         return "REMOTE: bad op";

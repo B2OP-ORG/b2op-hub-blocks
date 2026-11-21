@@ -1,5 +1,5 @@
 import * as Blockly from "blockly/core";
-import { controlSymbols, findSymbol, indicatorSymbols } from "../../remote/registry";
+import { controlSymbols, findSymbol, indicatorSymbols, remoteSymbols } from "../../remote/registry";
 import type { RemoteSymbol, Role } from "../../remote/layout";
 import { REMOTE_GET_BLOCK, remoteValueKind, type RemoteValueKind } from "../remoteKinds";
 
@@ -7,17 +7,20 @@ export const REMOTE_COLOUR = "330";
 
 const KIND_LABEL: Record<RemoteValueKind, string> = { number: "number", bool: "on/off", text: "text" };
 
+/** Names a remote field lists: controls, indicators, or both ("any": what a program can send to). */
+export type FieldRole = Role | "any";
+
 /**
- * Dropdown of the project's remote names (controls or indicators). Unlike a
+ * Dropdown of the project's remote names (controls and / or indicators). Unlike a
  * plain dropdown it keeps any value — a program may name a control that the
  * layout doesn't define (yet); such names show as "name (not defined)".
  */
 export class FieldRemoteName extends Blockly.FieldDropdown {
-  readonly role: Role;
+  readonly role: FieldRole;
   /** Controls only: the value kind this field lists (others count as not defined). */
   readonly valueKind?: RemoteValueKind;
 
-  constructor(role: Role, value?: string, valueKind?: RemoteValueKind) {
+  constructor(role: FieldRole, value?: string, valueKind?: RemoteValueKind) {
     // getOptions() is overridden, so the generator passed here is never used.
     // (The base constructor already calls getOptions(), before `role` is set.)
     super(() => [["(none)", ""]]);
@@ -28,13 +31,14 @@ export class FieldRemoteName extends Blockly.FieldDropdown {
   }
 
   static override fromJson(
-    options: Blockly.FieldDropdownFromJsonConfig & { role?: Role; value?: string; valueKind?: RemoteValueKind },
+    options: Blockly.FieldDropdownFromJsonConfig & { role?: FieldRole; value?: string; valueKind?: RemoteValueKind },
   ): FieldRemoteName {
-    return new FieldRemoteName(options.role === "indicator" ? "indicator" : "control", options.value, options.valueKind);
+    const role: FieldRole = options.role === "indicator" || options.role === "any" ? options.role : "control";
+    return new FieldRemoteName(role, options.value, options.valueKind);
   }
 
   private symbols(): RemoteSymbol[] {
-    const syms = this.role === "indicator" ? indicatorSymbols() : controlSymbols();
+    const syms = this.role === "any" ? [...remoteSymbols()] : this.role === "indicator" ? indicatorSymbols() : controlSymbols();
     return this.valueKind ? syms.filter((s) => remoteValueKind(s.type) === this.valueKind) : syms;
   }
 
@@ -90,7 +94,7 @@ export function registerRemoteField(): void {
       const f = this.getField("NAME");
       if (!(f instanceof FieldRemoteName)) return;
       const v = f.getValue();
-      const what = f.role === "indicator" ? "indicator" : f.valueKind ? `${KIND_LABEL[f.valueKind]} control` : "control";
+      const what = f.role === "any" ? "control or indicator" : f.role === "indicator" ? "indicator" : f.valueKind ? `${KIND_LABEL[f.valueKind]} control` : "control";
       const other = f.otherKindSymbol();
       this.setWarningText(!v
         ? `Pick a remote ${what}.`
@@ -112,10 +116,11 @@ export const REMOTE_BLOCKS = [
     tooltip: `Current value of a ${KIND_LABEL[kind]} control in the remote controller.`,
   })),
   {
+    // Type name kept from when it only set indicators (saved workspaces use it).
     type: "remote_set_indicator",
-    message0: "set indicator %1 to %2",
+    message0: "set remote %1 to %2",
     args0: [
-      { type: "field_remote_name", name: "NAME", role: "indicator" },
+      { type: "field_remote_name", name: "NAME", role: "any" },
       { type: "input_value", name: "VALUE" },
     ],
     inputsInline: true,
@@ -123,6 +128,6 @@ export const REMOTE_BLOCKS = [
     nextStatement: null,
     colour: REMOTE_COLOUR,
     extensions: ["remote_name_warning"],
-    tooltip: "Show a value on an indicator in the remote controller.",
+    tooltip: "Show a value on an indicator in the remote controller, or set a control (it moves in the remote controller too).",
   },
 ] as const;

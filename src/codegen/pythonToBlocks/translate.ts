@@ -4,6 +4,7 @@ import { chain } from "./helpers";
 import { type Group, type Line, groupAt } from "./lines";
 import { isNeopixelHelperGroup, isPreambleBoilerplate, matchLedColor, matchNeopixelStatement, matchStatement, tryConsumeNeopixelInit, valueInput } from "./statements";
 import type { BlockSpec, DeviceKind } from "./types";
+import { remoteSymbols } from "../../remote/registry";
 
 // ---------------------------------------------------------------------------
 // Compound-statement translation
@@ -33,11 +34,16 @@ export function scanRemoteDecls(lines: Line[]): Map<number, string> {
   return out;
 }
 
-/** `remote.send(id, value)` → set-indicator block (the int()/str() wrapper is regenerated). */
+/**
+ * `remote.send(id, value)` → set-remote block (the int()/str() wrapper is
+ * regenerated). The id names a declared message, else a layout control or
+ * indicator (one id space).
+ */
 function matchRemoteSend(line: string, ctx: Ctx): BlockSpec | null {
   const m = /^remote\.send\(\s*(\d+)\s*,\s*(.+)\)$/.exec(line);
   if (!m) return null;
-  const name = ctx.remoteMsgs.get(Number(m[1]));
+  const id = Number(m[1]);
+  const name = ctx.remoteMsgs.get(id) ?? remoteSymbols().find((s) => s.id === id)?.name;
   if (name === undefined) return null;
   let expr = m[2].trim();
   const wrap = /^(?:int|str)\((.*)\)$/.exec(expr);

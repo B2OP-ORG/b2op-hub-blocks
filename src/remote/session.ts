@@ -3,6 +3,11 @@
 // controllers go back to edit mode. Lives outside React so values keep
 // streaming while the user looks at other tabs.
 //
+// Controls and program messages share one id space on the hub. The program
+// may set a control (remote.send with the control's id): the hub sends that
+// SET up and the control here takes the value (the slider moves), which the
+// periodic refresh then keeps sending.
+//
 // Start (editor runs a program): before RUN, DEFINE every control of the
 // project's layouts + SET the start values (acknowledged), so the program sees
 // them from its first line. A program started some other way (hub menu, a
@@ -45,16 +50,29 @@ export function messageByName(messages: Record<number, ProgramMessage>, name: st
   return undefined;
 }
 
-// ── Program messages (hub → host) ────────────────────────────────────────────
+// ── Program messages + program-set controls (hub → host) ─────────────────────
 
-/** Sink for DeviceClient.setRemoteSink(): keep the message table in sync. */
+/** Live control (run mode) with protocol id `id`. */
+function controlById(id: number): RemoteSymbol | undefined {
+  if (useRemoteSession.getState().phase === "idle") return undefined;
+  for (const c of controls.values()) if (c.id === id) return c;
+  return undefined;
+}
+
+/** Sink for DeviceClient.setRemoteSink(): keep the message table (and program-set controls) in sync. */
 export function applyRemoteEvent(ev: RemoteEvent): void {
   useRemoteSession.setState((s) => {
     const messages = { ...s.messages };
     if (ev.op === "define") {
       for (const d of ev.defs) messages[d.id] = { name: d.name, type: d.type, value: remoteDefault(d.type) };
     } else if (ev.op === "set") {
-      for (const v of ev.values) if (messages[v.id]) messages[v.id] = { ...messages[v.id], value: v.value };
+      let values: Record<string, RemoteValue> | null = null;
+      for (const v of ev.values) {
+        const c = controlById(v.id);
+        if (c) (values ??= { ...s.values })[c.name] = v.value;
+        else if (messages[v.id]) messages[v.id] = { ...messages[v.id], value: v.value };
+      }
+      return values ? { messages, values } : { messages };
     } else if (ev.ids.length === 0) {
       return { messages: {} };
     } else {

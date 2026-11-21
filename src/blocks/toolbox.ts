@@ -9,6 +9,7 @@ import { NEOPIXEL_BLOCKS } from "./defs/neopixel";
 import { REMOTE_COLOUR } from "./defs/remote";
 import { REMOTE_GET_BLOCK, remoteValueKind, type RemoteValueKind } from "./remoteKinds";
 import { controlSymbols, indicatorSymbols } from "../remote/registry";
+import type { RemoteSymbol } from "../remote/layout";
 import { RemoteType } from "../device/protocol";
 import { SCENE_BLOCKS, SCENE_COLOUR, SCENE_FIELD_KINDS, type SceneFieldKinds } from "./defs/scene";
 import { sceneList } from "../scene/registry";
@@ -47,10 +48,13 @@ export function remoteFlyout(): object[] {
     out.push({ kind: "label", text: label });
     for (const s of syms) out.push({ kind: "block", type: REMOTE_GET_BLOCK[kind], fields: { NAME: s.name } });
   }
+  const setBlock = (s: RemoteSymbol) =>
+    ({ kind: "block", type: "remote_set_indicator", fields: { NAME: s.name }, inputs: { VALUE: { shadow: VALUE_SHADOW[s.type] } } });
   if (indicators.length) out.push({ kind: "label", text: "Indicators" });
-  for (const s of indicators) {
-    out.push({ kind: "block", type: "remote_set_indicator", fields: { NAME: s.name }, inputs: { VALUE: { shadow: VALUE_SHADOW[s.type] } } });
-  }
+  for (const s of indicators) out.push(setBlock(s));
+  // Controls share the id space with indicators: the program may set them too.
+  if (controls.length) out.push({ kind: "label", text: "Set controls" });
+  for (const s of controls) out.push(setBlock(s));
   return out;
 }
 

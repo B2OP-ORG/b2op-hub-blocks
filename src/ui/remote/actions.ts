@@ -2,7 +2,7 @@ import { useApp } from "../../state/store";
 import { showAlert, showList, showPrompt } from "../dialog";
 import {
   CONTROL_KINDS, DEFAULT_REMOTE_FILE, INDICATOR_KINDS, KIND_LABEL, emptyLayout, freeSpot, isRemoteFile, makeWidget,
-  nameProblem, parseLayout, projectSymbols, roleOf, serializeLayout, widgetSymbols, type RemoteSymbol, type WidgetKind,
+  nameProblem, parseLayout, projectSymbols, serializeLayout, widgetSymbols, type RemoteSymbol, type WidgetKind,
 } from "../../remote/layout";
 import { setCreateRemoteNameHandler } from "../../remote/registry";
 
@@ -44,12 +44,12 @@ export async function createRemoteNameFlow(): Promise<RemoteSymbol | null> {
     "Controls are values your program reads; indicators show values your program sends. The widget is added to the remote controller.",
   ) as WidgetKind | null;
   if (!kind) return null;
-  const role = roleOf(kind);
-  const taken = new Set(projectSymbols(useApp.getState().mfp.files).filter((s) => s.role === role).map((s) => s.name));
+  // Controls and indicators share one set of names.
+  const taken = new Set(projectSymbols(useApp.getState().mfp.files).map((s) => s.name));
   const name = await showPrompt(`New ${KIND_LABEL[kind].toLowerCase()}`, "", {
     placeholder: "name",
     confirmLabel: "Create",
-    validate: (v) => nameProblem(v.trim(), kind) ?? (taken.has(v.trim()) ? `There is already a ${role} called "${v.trim()}".` : null),
+    validate: (v) => nameProblem(v.trim(), kind) ?? (taken.has(v.trim()) ? `There is already a control or indicator called "${v.trim()}".` : null),
   });
   if (name === null) return null;
   const id = layoutFile(true);

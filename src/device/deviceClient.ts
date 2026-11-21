@@ -317,7 +317,7 @@ export class DeviceClient {
     return this.proto.remoteClear(ids);
   }
 
-  /** Program messages (remote.create_message / remote.send) from the hub. */
+  /** Program messages (remote.create_message / remote.send) and program-set control values from the hub. */
   setRemoteSink(sink: RemoteSink | null): void {
     this.proto.setRemoteSink(sink);
   }

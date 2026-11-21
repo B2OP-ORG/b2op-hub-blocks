@@ -56,6 +56,15 @@ export class HubProtocolV1 implements IHubProtocol {
   private onRemote: RemoteSink | null = null;
   /** Program message id → type, from device DEFINEs (needed to decode SET). */
   private remoteMsgTypes = new Map<number, RemoteType>();
+  /**
+   * Control id → type, from our own DEFINEs: the device also sends SETs for
+   * controls (a program changed one), in the same id space as messages.
+   */
+  private remoteHostTypes = new Map<number, RemoteType>();
+  /** Type lookup for device SETs: controls first (the device never redefines those itself), then messages. */
+  private remoteTypes = {
+    get: (id: number): RemoteType | undefined => this.remoteHostTypes.get(id) ?? this.remoteMsgTypes.get(id),
+  };
   private programRunning = false;
   private waiters = new Map<number, Waiter>();
   private parser = new FrameParser((seq, flags, kind, payload) => this.dispatch(seq, flags, kind, payload));
@@ -394,7 +403,10 @@ export class HubProtocolV1 implements IHubProtocol {
 
   async remoteDefine(defs: RemoteDef[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     this.assertKind(KIND.REMOTE);
-    for (const p of packRemote(REMOTE_OP.DEFINE, defs.map(encodeRemoteDef))) {
+    const payloads = packRemote(REMOTE_OP.DEFINE, defs.map(encodeRemoteDef));
+    // Known before the device applies them: a program may SET one right away.
+    for (const d of defs) this.remoteHostTypes.set(d.id, d.type);
+    for (const p of payloads) {
       await this.remoteRequest(p, timeoutMs);
     }
   }
@@ -425,6 +437,8 @@ export class HubProtocolV1 implements IHubProtocol {
   async remoteClear(ids: number[] = [], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     this.assertKind(KIND.REMOTE);
     ids.forEach(checkRemoteId);
+    if (ids.length === 0) this.remoteHostTypes.clear();
+    else for (const id of ids) this.remoteHostTypes.delete(id);
     // CLEAR entries are 1 byte each, so 255 ids always fit one frame.
     await this.remoteRequest(Uint8Array.of(REMOTE_OP.CLEAR, ...ids), timeoutMs);
   }
@@ -436,7 +450,8 @@ export class HubProtocolV1 implements IHubProtocol {
 
   /** Track message types (for SET decoding) and forward to the sink. */
   private emitRemote(ev: RemoteEvent): void {
-    if (ev.op === "define") for (const d of ev.defs) this.remoteMsgTypes.set(d.id, d.type);
+    // A device DEFINE is always a program slot, so that id is no control (any more).
+    if (ev.op === "define") for (const d of ev.defs) { this.remoteMsgTypes.set(d.id, d.type); this.remoteHostTypes.delete(d.id); }
     else if (ev.op === "clear") {
       if (ev.ids.length === 0) this.remoteMsgTypes.clear();
       else for (const id of ev.ids) this.remoteMsgTypes.delete(id);
@@ -696,8 +711,8 @@ export class HubProtocolV1 implements IHubProtocol {
       }
 
       case KIND.REMOTE: {
-        // Only ever unsolicited (program messages); replies to our REMOTE are OK / ERR.
-        const ev = decodeRemote(payload, this.remoteMsgTypes);
+        // Only ever unsolicited (program messages, program-set controls); replies to our REMOTE are OK / ERR.
+        const ev = decodeRemote(payload, this.remoteTypes);
         if (ev) this.emitRemote(ev);
         break;
       }

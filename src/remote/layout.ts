@@ -5,7 +5,8 @@
 // text input) are host → hub values the program reads as `remote.<name>`;
 // indicators (display, LED, gauge) show program messages sent with
 // `remote.create_message(id, name, type)` / `remote.send(id, value)`.
-// Controls and indicators have separate id spaces (like on the hub).
+// Controls and indicators share one id space and one set of names (like on
+// the hub); a program may also set a control with `remote.send(id, value)`.
 //
 // A project has one layout today (DEFAULT_REMOTE_FILE), but everything here
 // works on a list of files so more can be added later.
@@ -227,21 +228,27 @@ export function nameProblem(name: string, kind: WidgetKind): string | null {
   return null;
 }
 
-/** Problems across all symbols: duplicate names / ids per role. Keyed by symbol "role:name" and "role#id". */
-export function symbolConflicts(symbols: RemoteSymbol[]): { names: Set<string>; ids: Set<string> } {
+/**
+ * Problems across all symbols: duplicate names / ids. Controls and
+ * indicators share one id space and one set of names (like on the hub).
+ */
+export function symbolConflicts(symbols: RemoteSymbol[]): { names: Set<string>; ids: Set<number> } {
   const names = new Set<string>();
-  const ids = new Set<string>();
+  const ids = new Set<number>();
   const seenN = new Map<string, number>();
-  const seenI = new Map<string, number>();
+  const seenI = new Map<number, number>();
   for (const s of symbols) {
-    const n = `${s.role}:${s.name}`;
-    const i = `${s.role}#${s.id}`;
-    seenN.set(n, (seenN.get(n) ?? 0) + 1);
-    seenI.set(i, (seenI.get(i) ?? 0) + 1);
+    seenN.set(s.name, (seenN.get(s.name) ?? 0) + 1);
+    seenI.set(s.id, (seenI.get(s.id) ?? 0) + 1);
   }
   for (const [k, c] of seenN) if (c > 1) names.add(k);
   for (const [k, c] of seenI) if (c > 1) ids.add(k);
   return { names, ids };
+}
+
+/** True when `s` has a duplicate name or id in `conflicts`. */
+export function symbolConflicted(conflicts: ReturnType<typeof symbolConflicts>, s: RemoteSymbol): boolean {
+  return conflicts.names.has(s.name) || conflicts.ids.has(s.id);
 }
 
 /** Smallest id (0..255) not in `used`, or -1. */
@@ -264,13 +271,12 @@ const DEFAULT_NAME: Record<WidgetKind, string> = {
 
 /**
  * New widget at (x, y) with a unique name and free id(s). `symbols` = every
- * symbol of the project (so names / ids stay unique across layouts).
+ * symbol of the project (so names / ids stay unique across layouts and
+ * across controls / indicators).
  */
 export function makeWidget(kind: WidgetKind, x: number, y: number, symbols: RemoteSymbol[], name?: string): Widget {
-  const role = roleOf(kind);
-  const mine = symbols.filter((s) => s.role === role);
-  const takenNames = new Set(mine.map((s) => s.name));
-  const usedIds = mine.map((s) => s.id);
+  const takenNames = new Set(symbols.map((s) => s.name));
+  const usedIds = symbols.map((s) => s.id);
   const id = freeId(usedIds);
   const w: Widget = {
     uid: newUid(),

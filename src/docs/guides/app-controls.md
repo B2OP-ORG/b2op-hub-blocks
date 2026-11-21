@@ -13,7 +13,7 @@ Click **Remote** in the top bar (or *New remote controller* in the Explorer menu
 - Move around: drag with the middle mouse button, hold **Space** and drag, or use the scrollbars. On a touchscreen, drag with two fingers. The mouse wheel doesn't scroll the canvas; with **Ctrl** it zooms.
 - Zoom: **Ctrl** + mouse wheel (or pinch on a trackpad or touchscreen), **Ctrl +** / **Ctrl −** / **Ctrl 0**, or the buttons at the right of the tab's toolbar. **Fit** moves all widgets to the top-left corner and zooms so they fill the view, trimming the canvas to its smallest size. The zoom is remembered in this browser.
 
-**Controls** are values your program reads. **Indicators** show values your program sends. Names and ids must be unique among the controls, and among the indicators.
+**Controls** are values your program reads (and may also change). **Indicators** show values your program sends. Controls and indicators share names and ids: every widget needs a name and an id no other widget uses. Widgets that clash are marked in red.
 
 The controller is saved with the project and uploaded to the hub with the other files.
 
@@ -31,7 +31,7 @@ A program started some other way (from the SD card tab, or already running when 
 
 ## In blocks
 
-The **Remote** category has a block for every control (`remote speed`) and every indicator (`set indicator level to …`). Use **Create remote name…** to add a new control or indicator without leaving the blocks — it is added to the controller.
+The **Remote** category has a block for every control (`remote speed`) and a set block for every indicator and control (`set remote level to …`). Use **Create remote name…** to add a new control or indicator without leaving the blocks — it is added to the controller.
 
 A program may use a name that the controller doesn't have (for example after a widget was deleted). The block keeps it and shows a warning.
 
@@ -87,6 +87,24 @@ while True:
 
 When your program ends, its messages are removed and the app forgets them.
 
+Pick ids that no control uses: controls and indicators share one set of ids.
+
 ::: api remote.create_message
 
 ::: api remote.send
+
+## Change a control from the program
+
+`remote.send()` also works with a control's id. The control changes for your program, and the controller in the editor moves to the new value — for example, to put a slider back to 0 when a button on the hub is pressed:
+
+```python
+import hub, remote
+
+@hub.buttons.on("down")
+def brake():
+    remote.send(0, 0)          # "speed" has id 0 in the controller
+```
+
+The controller shows each control's id (and this line) when you select it. If you move the control again, your value is replaced — whoever changes it last wins.
+
+`remote.send()` raises `ValueError` while the app hasn't set the control up (for example when no app is connected). In blocks, `set remote speed to …` handles that for you.

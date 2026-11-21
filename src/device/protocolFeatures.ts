@@ -92,7 +92,8 @@ const PROTO_1_1: ProtoFeatures = {
 };
 
 /**
- * 1.2: REMOTE kind (controls for the `remote` module + program messages).
+ * 1.2: REMOTE kind (controls for the `remote` module + program messages, one
+ * id space; the program may also set controls).
  * The device also honours FLAGS NO_ACK from 1.2 on (older firmware replied
  * anyway); the host never waits for NO_ACK replies, so that needs no flag.
  */

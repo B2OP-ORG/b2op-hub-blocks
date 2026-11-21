@@ -42,7 +42,7 @@ describe("remote layout", () => {
     expect(() => parseLayout('{"format":"x"}')).toThrow(/Not a remote/);
   });
 
-  it("gives new widgets unique names and free ids per role", () => {
+  it("gives new widgets unique names and free ids across controls and indicators", () => {
     const l = layout("slider", "slider", "joystick", "display", "led");
     const syms = layoutSymbols(l, DEFAULT_REMOTE_FILE);
     expect(syms.map((s) => [s.role, s.name, s.id, s.type])).toEqual([
@@ -50,13 +50,13 @@ describe("remote layout", () => {
       ["control", "speed2", 1, RemoteType.Int],
       ["control", "stick_x", 2, RemoteType.Int],
       ["control", "stick_y", 3, RemoteType.Int],
-      ["indicator", "value", 0, RemoteType.Float],
-      ["indicator", "lamp", 1, RemoteType.Bool],
+      ["indicator", "value", 4, RemoteType.Float],
+      ["indicator", "lamp", 5, RemoteType.Bool],
     ]);
     expect(symbolConflicts(syms)).toEqual({ names: new Set(), ids: new Set() });
   });
 
-  it("reports duplicate names / ids within a role across files", () => {
+  it("reports duplicate names / ids across files", () => {
     const a = layout("slider");
     const files = [
       { name: "controller.remote", content: serializeLayout(a) },
@@ -67,8 +67,21 @@ describe("remote layout", () => {
     const syms = projectSymbols(files);
     expect(syms).toHaveLength(2);
     const c = symbolConflicts(syms);
-    expect(c.names.has("control:speed")).toBe(true);
-    expect(c.ids.has("control#0")).toBe(true);
+    expect(c.names.has("speed")).toBe(true);
+    expect(c.ids.has(0)).toBe(true);
+  });
+
+  it("reports a control and an indicator sharing an id or name (one id space)", () => {
+    const l = layout("slider", "display");
+    l.widgets[1].id = l.widgets[0].id;
+    let c = symbolConflicts(layoutSymbols(l, DEFAULT_REMOTE_FILE));
+    expect(c.ids.has(l.widgets[0].id)).toBe(true);
+    expect(c.names.size).toBe(0);
+    l.widgets[1].id = 9;
+    l.widgets[1].name = l.widgets[0].name;
+    c = symbolConflicts(layoutSymbols(l, DEFAULT_REMOTE_FILE));
+    expect(c.names.has(l.widgets[0].name)).toBe(true);
+    expect(c.ids.size).toBe(0);
   });
 
   it("validates names", () => {
@@ -122,9 +135,9 @@ describe("remote blocks", () => {
         inputs: { VALUE: { block: { type: "logic_boolean", fields: { BOOL: "TRUE" } } } },
       } },
     }));
-    expect(py).toContain("remote.create_message(0, 'value', remote.INT)\nremote.create_message(1, 'lamp', remote.BOOL)");
-    expect(py).toContain("remote.send(0, int(remote.speed))");
-    expect(py).toContain("remote.send(1, True)");
+    expect(py).toContain("remote.create_message(1, 'value', remote.INT)\nremote.create_message(2, 'lamp', remote.BOOL)");
+    expect(py).toContain("remote.send(1, int(remote.speed))");
+    expect(py).toContain("remote.send(2, True)");
   });
 
   it("keeps undefined names: free id, type from the value block", () => {
@@ -133,8 +146,8 @@ describe("remote blocks", () => {
       fields: { NAME: "status" },
       inputs: { VALUE: { block: { type: "text", fields: { TEXT: "ok" } } } },
     }));
-    expect(py).toContain("remote.create_message(2, 'status', remote.STR)");
-    expect(py).toContain("remote.send(2, 'ok')");
+    expect(py).toContain("remote.create_message(3, 'status', remote.STR)");
+    expect(py).toContain("remote.send(3, 'ok')");
     const ws = new Blockly.Workspace();
     Blockly.serialization.workspaces.load(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "ghost" } } } } }), ws);
     const f = ws.getAllBlocks(false).find((b) => b.type === "remote_get_number")!.getField("NAME") as FieldRemoteName;
@@ -160,10 +173,34 @@ describe("remote blocks", () => {
         } },
       },
     }));
-    expect(py).toContain("remote.send(0, int(remote.speed * 2))");
+    expect(py).toContain("remote.send(1, int(remote.speed * 2))");
     const t = await checkTranslation(py);
     expect(t.hasRaw).toBe(false);
     expect(t.roundTripOk).toBe(true);
+  });
+
+  it("sets a control by its layout id, declaring it too", async () => {
+    const py = run(prog({
+      type: "remote_set_indicator",
+      fields: { NAME: "speed" },
+      inputs: { VALUE: { block: { type: "math_number", fields: { NUM: 0 } } } },
+    }));
+    expect(py).toContain("remote.create_message(0, 'speed', remote.INT)");
+    expect(py).toContain("remote.send(0, 0)");
+    const t = await checkTranslation(py);
+    expect(t.hasRaw).toBe(false);
+    expect(t.roundTripOk).toBe(true);
+    // Without the declaration the id still names the layout control.
+    const ws = JSON.stringify(workspaceFromPython("# b2op-hub-blocks v2.0.0\n\nimport remote\n\nremote.send(0, 5)\n"));
+    expect(ws).toContain('"remote_set_indicator"');
+    expect(ws).toContain('"NAME":"speed"');
+  });
+
+  it("lists controls and indicators in the set block", () => {
+    const ws = new Blockly.Workspace();
+    const f = ws.newBlock("remote_set_indicator").getField("NAME") as FieldRemoteName;
+    expect(f.getOptions().map((o) => o[1])).toEqual(["speed", "value", "lamp"]);
+    ws.dispose();
   });
 
   it("translates remote.get(\"x\") reads", async () => {
@@ -207,6 +244,10 @@ describe("typed remote reporters", () => {
       .filter((i) => i.kind === "block" && i.type !== "remote_set_indicator")
       .map((i) => [i.type, i.fields!.NAME]);
     expect(blocks).toEqual([["remote_get_number", "speed"], ["remote_get_bool", "lamp"], ["remote_get_text", "msg"]]);
+    const sets = (remoteFlyout() as { kind: string; type?: string; fields?: { NAME: string } }[])
+      .filter((i) => i.kind === "block" && i.type === "remote_set_indicator")
+      .map((i) => i.fields!.NAME);
+    expect(sets).toEqual(["speed", "lamp", "msg"]);
   });
 
   it("does not str() a text control sent to a STR indicator", () => {
@@ -215,8 +256,8 @@ describe("typed remote reporters", () => {
       fields: { NAME: "out" },
       inputs: { VALUE: { block: { type: "remote_get_text", fields: { NAME: "msg" } } } },
     }));
-    expect(py).toContain("remote.create_message(0, 'out', remote.STR)");
-    expect(py).toContain("remote.send(0, remote.msg)");
+    expect(py).toContain("remote.create_message(3, 'out', remote.STR)");
+    expect(py).toContain("remote.send(3, remote.msg)");
   });
 
   it("types reporters when translating Python, and migrates old remote_get", async () => {
@@ -244,5 +285,36 @@ describe("remote session messages", () => {
     expect(messageByName(useRemoteSession.getState().messages, "lamp")?.value).toBe(false);
     applyRemoteEvent({ op: "clear", ids: [] });
     expect(useRemoteSession.getState().messages).toEqual({});
+  });
+
+  it("moves a control the program set (same id space as messages)", async () => {
+    const { useApp } = await import("../src/state/store");
+    const { applyRemoteEvent, startRemoteSession, useRemoteSession } = await import("../src/remote/session");
+    const l = layout("slider", "display");
+    const device = {
+      supportsRemote: true,
+      remoteClear: async () => {},
+      remoteDefine: async () => {},
+      remoteSet: async () => {},
+    };
+    const prev = useApp.getState();
+    useApp.setState({
+      device: device as never,
+      mfp: { ...prev.mfp, files: [{ id: "r", name: DEFAULT_REMOTE_FILE, content: serializeLayout(l) }] } as never,
+    });
+    try {
+      startRemoteSession();
+      useApp.setState({ running: true }); // program seen running → attach
+      for (let i = 0; i < 5 && useRemoteSession.getState().phase !== "running"; i++) await new Promise((r) => setTimeout(r, 0));
+      expect(useRemoteSession.getState().phase).toBe("running");
+      expect(useRemoteSession.getState().values.speed).toBe(0);
+      applyRemoteEvent({ op: "define", defs: [{ id: 1, type: RemoteType.Float, name: "value" }] });
+      applyRemoteEvent({ op: "set", values: [{ id: 0, value: 55 }, { id: 1, value: 2.5 }] });
+      expect(useRemoteSession.getState().values.speed).toBe(55);
+      expect(useRemoteSession.getState().messages[1]?.value).toBe(2.5);
+    } finally {
+      useApp.setState({ running: false, device: null, mfp: prev.mfp });
+    }
+    expect(useRemoteSession.getState().phase).toBe("idle");
   });
 });

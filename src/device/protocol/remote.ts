@@ -1,6 +1,11 @@
 import { dec, enc } from "./framing";
 
 // ── REMOTE (kind 0x1D) ────────────────────────────────────────────────────────
+//
+// One id space for both directions: the host DEFINEs controls, the program
+// creates messages, and either side SETs any of them (the device sends a SET
+// for a control when the program changed it). Host CLEAR removes controls
+// only; the device's CLEAR (empty = all) removes program messages only.
 
 export const REMOTE_OP = { DEFINE: 0x01, SET: 0x02, CLEAR: 0x03 } as const;
 
@@ -18,11 +23,12 @@ const REMOTE_FRAME_PAYLOAD = 480;
 export interface RemoteDef { id: number; type: RemoteType; name: string; }
 export interface RemoteSetEntry { id: number; type: RemoteType; value: RemoteValue; }
 
-/** Unsolicited REMOTE frame from the device (program messages), decoded. */
+/** Unsolicited REMOTE frame from the device (program messages / program-set controls), decoded. */
 export type RemoteEvent =
   | { op: "define"; defs: RemoteDef[] }
+  /** Ids of program messages or of the host's own controls. */
   | { op: "set"; values: { id: number; value: RemoteValue }[] }
-  /** `ids` empty = forget every message. */
+  /** Program messages gone; `ids` empty = forget every message. */
   | { op: "clear"; ids: number[] };
 export type RemoteSink = (event: RemoteEvent) => void;
 
@@ -117,11 +123,11 @@ export function packRemote(op: number, entries: Uint8Array[], max = REMOTE_FRAME
 }
 
 /**
- * Decode a device REMOTE frame. SET values are decoded with `types` (message
- * id → type, kept by the caller from earlier DEFINEs); a SET entry for an
- * unknown id ends the frame (its length is unknown). Null for a bad op.
+ * Decode a device REMOTE frame. SET values are decoded with `types` (id →
+ * type, kept by the caller from earlier DEFINEs, both directions); a SET
+ * entry for an unknown id ends the frame (its length is unknown). Null for a bad op.
  */
-export function decodeRemote(payload: Uint8Array, types: ReadonlyMap<number, RemoteType>): RemoteEvent | null {
+export function decodeRemote(payload: Uint8Array, types: { get(id: number): RemoteType | undefined }): RemoteEvent | null {
   if (payload.length < 1) return null;
   const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   let i = 1;

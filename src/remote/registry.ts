@@ -21,8 +21,9 @@ export function indicatorSymbols(): RemoteSymbol[] {
   return symbols.filter((s) => s.role === "indicator");
 }
 
-export function findSymbol(role: RemoteSymbol["role"], name: string): RemoteSymbol | undefined {
-  return symbols.find((s) => s.role === role && s.name === name);
+/** Symbol called `name` with role `role` ("any": control or indicator — they share names). */
+export function findSymbol(role: RemoteSymbol["role"] | "any", name: string): RemoteSymbol | undefined {
+  return symbols.find((s) => (role === "any" || s.role === role) && s.name === name);
 }
 
 /** Replace the symbol list; listeners run only when it actually changed. */

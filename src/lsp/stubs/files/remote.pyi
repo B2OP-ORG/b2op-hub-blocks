@@ -24,6 +24,13 @@ for example a sensor reading to show on a gauge::
 
 Messages belong to the program: when it ends they are removed and the
 app is told to forget them.
+
+Controls and messages share one set of ids, so pick message ids the app's
+controls don't use. :func:`send` also works with a control's id: the
+program changes the control, and the app's slider or switch moves to the
+new value::
+
+    remote.send(0, 0)      # control id 0 ("speed") back to 0
 """
 
 from typing import Any, Dict, Optional, Type, Union
@@ -40,8 +47,8 @@ STR: int
 """Message type: text up to 255 bytes. Same as passing ``str``."""
 
 def get(name: str, default: Any = 0) -> Any:
-    """The current value of control ``name``, or ``default`` (``0``) if the app
-    has not set up a control with that name."""
+    """The current value of control (or message) ``name``, or ``default``
+    (``0``) if there is nothing with that name."""
     ...
 
 def age_ms(name: str) -> Optional[int]:
@@ -54,7 +61,7 @@ def age_ms(name: str) -> Optional[int]:
     ...
 
 def items() -> Dict[str, Value]:
-    """All controls and their current values, as a new ``dict``."""
+    """All controls and messages and their current values, as a new ``dict``."""
     ...
 
 def create_message(id: int, name: str, type: Union[int, Type[int], Type[float], Type[bool], Type[str]]) -> None:
@@ -67,20 +74,31 @@ def create_message(id: int, name: str, type: Union[int, Type[int], Type[float], 
     with the same ``id`` replaces the message.
     An app that connects later still learns every message and its last value.
 
-    Raises ``ValueError`` for a bad id, name or type.
+    Controls and messages share ids. Using the id of one of the app's
+    controls with the same name and type does nothing (fine for declaring
+    the controls you :func:`send` to); with another name or type it raises
+    ``ValueError``.
+
+    Raises ``ValueError`` for a bad id, name or type, or an id / name the
+    app already uses for another control.
     """
     ...
 
 def send(id: int, value: Value) -> None:
     """Send a new value for message ``id`` to the app.
 
+    ``id`` may also be one of the app's controls: the control changes (for
+    your program too) and the app moves its slider / switch to match. The
+    app can change it again at any time.
+
     The value is converted to the message's type: an :data:`INT` message
     takes ``int`` (or ``bool``), :data:`FLOAT` takes ``int`` or ``float``,
     :data:`BOOL` takes anything (truthiness), :data:`STR` needs a ``str``.
     If no app is listening, the value is just remembered for later.
 
-    Raises ``ValueError`` if :func:`create_message` was not called for ``id``
-    or the text is longer than 255 bytes, ``TypeError`` for a wrong value type.
+    Raises ``ValueError`` if ``id`` is neither a control nor a message made
+    with :func:`create_message`, or the text is longer than 255 bytes,
+    ``TypeError`` for a wrong value type.
     """
     ...
 
@@ -100,7 +118,7 @@ def __getattr__(name: str) -> Any:
       and ``from remote import x`` gives ``0`` if ``x`` is not a control.
       To check whether a control exists, use ``remote.age_ms(name) is not None``
       or ``name in remote.items()``.
-    * Controls are read-only: ``remote.speed = 5`` raises an error. Only
-      the connected app changes them.
+    * Attributes are read-only: ``remote.speed = 5`` raises an error. To
+      change a control use :func:`send` with its id.
     """
     ...

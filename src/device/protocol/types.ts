@@ -99,6 +99,6 @@ export interface IHubProtocol {
   remoteSet(entries: RemoteSetEntry[], opts?: { ack?: boolean; timeoutMs?: number }): Promise<void>;
   /** REMOTE CLEAR: the given control ids, or all when omitted / empty. */
   remoteClear(ids?: number[], timeoutMs?: number): Promise<void>;
-  /** Receives program messages (unsolicited REMOTE frames). */
+  /** Receives program messages and program-set control values (unsolicited REMOTE frames). */
   setRemoteSink(sink: RemoteSink | null): void;
 }

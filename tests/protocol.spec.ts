@@ -1103,6 +1103,52 @@ describe("REMOTE", () => {
     proto.dispose();
   });
 
+  it("decodes device SETs for host controls (one id space with messages)", async () => {
+    const { transport, proto } = await connected();
+    const events: RemoteEvent[] = [];
+    proto.setRemoteSink((e) => events.push(e));
+    await proto.remoteDefine([{ id: 0, type: RemoteType.Int, name: "speed" }, { id: 1, type: RemoteType.Str, name: "msg" }]);
+    expect(transport.programCreate(5, "level", RemoteType.Float)).toBeNull();
+    expect(transport.programSend(0, 42)).toBeNull(); // program moves the host's slider
+    expect(transport.programSend(1, "hi")).toBeNull();
+    expect(transport.programSend(5, 1.5)).toBeNull();
+    expect(transport.remoteControls.get(0)!.value).toBe(42);
+    // Host CLEAR keeps program slots; program end keeps host controls (and their types).
+    await proto.remoteClear([1]);
+    expect(transport.remoteControls.has(5)).toBe(true);
+    transport.programEnd();
+    expect(transport.programSend(0, -3)).toBeNull();
+    expect(transport.remoteControls.has(5)).toBe(false);
+    expect(events).toEqual([
+      { op: "define", defs: [{ id: 5, type: RemoteType.Float, name: "level" }] },
+      { op: "set", values: [{ id: 0, value: 42 }] },
+      { op: "set", values: [{ id: 1, value: "hi" }] },
+      { op: "set", values: [{ id: 5, value: 1.5 }] },
+      { op: "clear", ids: [] },
+      { op: "set", values: [{ id: 0, value: -3 }] },
+    ]);
+    proto.dispose();
+  });
+
+  it("keeps controls and program messages apart in one id space", async () => {
+    const { transport, proto } = await connected();
+    const events: RemoteEvent[] = [];
+    proto.setRemoteSink((e) => events.push(e));
+    await proto.remoteDefine([{ id: 0, type: RemoteType.Int, name: "speed" }]);
+    // Declaring the control itself is a no-op; another name / type on its id or its name elsewhere is refused.
+    expect(transport.programCreate(0, "speed", RemoteType.Int)).toBeNull();
+    expect(transport.programCreate(0, "speed", RemoteType.Float)).toBe("id taken");
+    expect(transport.programCreate(3, "speed", RemoteType.Int)).toBe("name taken");
+    expect(events).toEqual([]);
+    // A host DEFINE over a program slot drops it: the device says so.
+    expect(transport.programCreate(4, "level", RemoteType.Float)).toBeNull();
+    await proto.remoteDefine([{ id: 4, type: RemoteType.Bool, name: "light" }]);
+    expect(events.at(-1)).toEqual({ op: "clear", ids: [4] });
+    expect(transport.programSend(4, true)).toBeNull();
+    expect(events.at(-1)).toEqual({ op: "set", values: [{ id: 4, value: true }] });
+    proto.dispose();
+  });
+
   it("requestHello clears program messages before the device resends them", async () => {
     const { proto } = await connected();
     const events: RemoteEvent[] = [];

@@ -32,7 +32,7 @@ import { RemoteWidgetCard } from "./RemoteWidgetCard";
 import { useCanvasBounds } from "./useCanvasBounds";
 import {
   CONTROL_KINDS, GRID, INDICATOR_KINDS, KIND_LABEL, emptyLayout, initialValue, previewIndicatorValue, makeWidget,
-  parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicts, widgetSymbols,
+  parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicted, symbolConflicts, widgetSymbols,
   type RemoteLayout, type Widget, type WidgetKind,
 } from "../../remote/layout";
 import { messageByName, setControl, useRemoteSession } from "../../remote/session";
@@ -96,7 +96,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   };
 
   const hasConflict = (w: Widget) =>
-    widgetSymbols(w, file.name).some((s) => conflicts.names.has(`${s.role}:${s.name}`) || conflicts.ids.has(`${s.role}#${s.id}`));
+    widgetSymbols(w, file.name).some((s) => symbolConflicted(conflicts, s));
 
   // ── Pointer drag (move / resize), committed on release ──────────────────────
   const { drag } = widgetDrag;
@@ -234,7 +234,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
         {sel && (
           <RemoteProperties
             key={sel.uid} w={sel} fileName={file.name}
-            others={allSymbols.filter((s) => s.role === roleOf(sel.kind) && !(s.uid === sel.uid && s.file === file.name))}
+            others={allSymbols.filter((s) => !(s.uid === sel.uid && s.file === file.name))}
             onChange={(patch) => update(sel.uid, patch)}
             onDelete={() => remove(sel.uid)}
           />

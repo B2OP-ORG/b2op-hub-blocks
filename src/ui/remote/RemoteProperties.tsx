@@ -20,13 +20,17 @@ export function RemoteProperties({ w, fileName, others, onChange, onDelete }: {
   const otherNames = new Set(others.map((s) => s.name));
   const otherIds = new Set(others.map((s) => s.id));
   const names = w.kind === "joystick" ? joystickNames(w.name) : [w.name];
-  const nameErr = nameProblem(w.name, w.kind) ?? (names.some((n) => otherNames.has(n)) ? `Another ${role} is called that.` : null);
+  // Controls and indicators share names and ids (one id space on the hub).
+  const nameErr = nameProblem(w.name, w.kind) ?? (names.some((n) => otherNames.has(n)) ? "Another control or indicator is called that." : null);
   const ids = w.kind === "joystick" ? [w.id, w.idY ?? w.id + 1] : [w.id];
-  const idErr = ids.some((i) => otherIds.has(i)) ? `Another ${role} uses this id.` : w.kind === "joystick" && ids[0] === ids[1] ? "X and Y need different ids." : null;
+  const idErr = ids.some((i) => otherIds.has(i)) ? "Another control or indicator uses this id." : w.kind === "joystick" && ids[0] === ids[1] ? "X and Y need different ids." : null;
   const sym = widgetSymbols(w, fileName)[0];
   const typeConst = sym ? ["remote.INT", "remote.FLOAT", "remote.BOOL", "remote.STR"][sym.type] : "";
   const usage = role === "control"
-    ? names.map((n) => (isAttrName(n) ? `remote.${n}` : `remote.get("${n}")`)).join("\n")
+    ? [
+        ...names.map((n) => (isAttrName(n) ? `remote.${n}` : `remote.get("${n}")`)),
+        ...ids.map((i) => `remote.send(${i}, value)  # set it`),
+      ].join("\n")
     : `remote.create_message(${w.id}, "${w.name}", ${typeConst})\nremote.send(${w.id}, value)`;
 
   return (

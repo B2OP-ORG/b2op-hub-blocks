@@ -1,7 +1,7 @@
 import type { Block } from "blockly";
 import { Order, pythonGenerator, type PythonGenerator } from "blockly/python";
 import { RemoteType } from "../../device/protocol";
-import { findSymbol, indicatorSymbols } from "../../remote/registry";
+import { findSymbol, remoteSymbols } from "../../remote/registry";
 import { isAttrName } from "../../remote/layout";
 import { REMOTE_GET_BLOCK, remoteGetKind, type RemoteValueKind } from "../remoteKinds";
 
@@ -14,7 +14,7 @@ const TYPE_CONST: Record<RemoteType, string> = {
   [RemoteType.Str]: "remote.STR",
 };
 
-/** Indicators declared in the current generation pass: name → { id, type }. */
+/** Names set in the current generation pass (indicators, or controls): name → { id, type }. */
 const declared = new Map<string, { id: number; type: RemoteType }>();
 
 /** Call at the start of every workspace → Python pass. */
@@ -55,18 +55,21 @@ function guessType(block: Block): RemoteType {
 }
 
 /**
- * Id + type for indicator `name`: from the layouts, else a free id (not used
- * by any layout indicator or earlier declaration) and a type guessed from the block.
+ * Id + type for indicator / control `name`: from the layouts, else a free id
+ * (not used by any layout widget — controls and indicators share ids — or an
+ * earlier declaration) and a type guessed from the block. Controls get a
+ * create_message too: a no-op while the editor has them defined, and the
+ * program still works without it.
  */
 function declare(name: string, block: Block): { id: number; type: RemoteType } {
   const known = declared.get(name);
   if (known) return known;
-  const sym = findSymbol("indicator", name);
+  const sym = findSymbol("any", name);
   let entry: { id: number; type: RemoteType };
   if (sym) {
     entry = { id: sym.id, type: sym.type };
   } else {
-    const used = new Set([...indicatorSymbols().map((s) => s.id), ...[...declared.values()].map((d) => d.id)]);
+    const used = new Set([...remoteSymbols().map((s) => s.id), ...[...declared.values()].map((d) => d.id)]);
     let id = 0;
     while (used.has(id) && id < 255) id++;
     entry = { id, type: guessType(block) };

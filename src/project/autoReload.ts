@@ -108,7 +108,7 @@ export function startAutoReload(): void {
   };
   keys = snapshot(lastFiles);
 
-  useApp.subscribe((s, prev) => {
+  const unsub = useApp.subscribe((s, prev) => {
     if (prev.running && !s.running && !isReloading()) clearAll();
     if (s.activeFileId !== prev.activeFileId || s.activeExtraTab !== prev.activeExtraTab) left();
 
@@ -133,7 +133,17 @@ export function startAutoReload(): void {
     }
   });
 
-  document.addEventListener("pointerdown", (e) => { if (outsideEditor(e.target)) left(); }, true);
-  document.addEventListener("focusin", (e) => { if (outsideEditor(e.target)) left(); }, true);
+  const onPointer = (e: Event) => { if (outsideEditor(e.target)) left(); };
+  document.addEventListener("pointerdown", onPointer, true);
+  document.addEventListener("focusin", onPointer, true);
   window.addEventListener("blur", left);
+
+  // Dev hot reload: the old copy must not reload the program as well.
+  import.meta.hot?.dispose(() => {
+    unsub();
+    clearAll();
+    document.removeEventListener("pointerdown", onPointer, true);
+    document.removeEventListener("focusin", onPointer, true);
+    window.removeEventListener("blur", left);
+  });
 }

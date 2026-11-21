@@ -257,7 +257,7 @@ export function startRemoteSession(): void {
   setReloadEndHook(() => {
     if (useRemoteSession.getState().phase !== "idle" && !useApp.getState().running) ended("program ended");
   });
-  useApp.subscribe((s, prev) => {
+  const unsub = useApp.subscribe((s, prev) => {
     if (!s.device && prev.device) { ended("hub disconnected"); return; }
     if (s.running === prev.running) return;
     if (!s.running) { prepared = false; ended("program ended"); return; }
@@ -267,4 +267,15 @@ export function startRemoteSession(): void {
     if (phase === "starting") stream();
     else if (phase === "idle" && !wasPrepared) void attachLate();
   });
+  // Dev hot reload replaces this module: the old copy must stop following the
+  // hub, or it keeps streaming its own (start) values next to the new one's.
+  import.meta.hot?.dispose(() => {
+    unsub();
+    stopTimers();
+    ++generation;
+    setBeforeRunHook(null);
+    setReloadEndHook(null);
+  });
+  // A program already running (hot reload mid-run): take it over.
+  if (useApp.getState().running) void attachLate();
 }

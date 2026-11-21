@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUpCircle, Circle } from "lucide-react";
 import { useApp } from "../../state/store";
+import { formatProtoVersion } from "../../device/protocol";
 import type { HeaderStyles, StatusKind } from "./headerStyles";
 
 /**
@@ -23,6 +24,9 @@ export function StatusBadge({ s, dark, compact, latestFw, onOpenFwUpdater }: {
   const boardName = useApp((st) => st.boardName);
   const boardVersion = useApp((st) => st.boardVersion);
   const fwVersion = useApp((st) => st.fwVersion);
+  // Set at HELLO, before board info lands in the store, so it is current
+  // whenever fwVersion is.
+  const protoVersion = useApp((st) => st.device?.protocolVersion);
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -98,6 +102,7 @@ export function StatusBadge({ s, dark, compact, latestFw, onOpenFwUpdater }: {
               ["Board", connected ? boardName : ""],
               ["Hardware", connected ? boardVersion : ""],
               ["Firmware", connected ? fwVersion : ""],
+              ["Protocol", connected && protoVersion ? `v${formatProtoVersion(protoVersion)}` : ""],
               ...(latestFw ? [["Latest firmware", latestFw] as [string, string]] : []),
             ] as [string, string][]).map(([k, v]) => (
               <Fragment key={k}>

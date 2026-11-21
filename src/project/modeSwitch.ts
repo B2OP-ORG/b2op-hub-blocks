@@ -3,6 +3,7 @@
 
 import { newBlocksProject, stripBlocksHeader } from "./format";
 import { hasRawBlock, normalizePython, pythonToBlocks } from "./pythonToBlocks";
+import { migrateWorkspaceState } from "../blocks/migrate";
 
 /** Blockly workspace JSON built from Python source (header ignored). */
 export function workspaceFromPython(source: string): unknown {
@@ -33,7 +34,7 @@ export async function pythonFromWorkspace(workspace: unknown): Promise<string> {
   ]);
   const ws = new Blockly.Workspace();
   try {
-    Blockly.serialization.workspaces.load(workspace as object, ws);
+    Blockly.serialization.workspaces.load(migrateWorkspaceState(workspace) as object, ws);
     return workspaceToPython(ws);
   } finally {
     ws.dispose();

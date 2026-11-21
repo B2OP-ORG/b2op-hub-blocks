@@ -1,8 +1,11 @@
 import * as Blockly from "blockly/core";
 import { controlSymbols, findSymbol, indicatorSymbols } from "../../remote/registry";
-import type { Role } from "../../remote/layout";
+import type { RemoteSymbol, Role } from "../../remote/layout";
+import { REMOTE_GET_BLOCK, remoteValueKind, type RemoteValueKind } from "../remoteKinds";
 
 export const REMOTE_COLOUR = "330";
+
+const KIND_LABEL: Record<RemoteValueKind, string> = { number: "number", bool: "on/off", text: "text" };
 
 /**
  * Dropdown of the project's remote names (controls or indicators). Unlike a
@@ -11,21 +14,40 @@ export const REMOTE_COLOUR = "330";
  */
 export class FieldRemoteName extends Blockly.FieldDropdown {
   readonly role: Role;
+  /** Controls only: the value kind this field lists (others count as not defined). */
+  readonly valueKind?: RemoteValueKind;
 
-  constructor(role: Role, value?: string) {
+  constructor(role: Role, value?: string, valueKind?: RemoteValueKind) {
     // getOptions() is overridden, so the generator passed here is never used.
     // (The base constructor already calls getOptions(), before `role` is set.)
     super(() => [["(none)", ""]]);
     this.role = role;
-    if (value !== undefined) this.setValue(value);
+    this.valueKind = valueKind;
+    // The base constructor picked its default before role / kind were set.
+    this.setValue(value ?? this.symbols()[0]?.name ?? "");
   }
 
-  static override fromJson(options: Blockly.FieldDropdownFromJsonConfig & { role?: Role; value?: string }): FieldRemoteName {
-    return new FieldRemoteName(options.role === "indicator" ? "indicator" : "control", options.value);
+  static override fromJson(
+    options: Blockly.FieldDropdownFromJsonConfig & { role?: Role; value?: string; valueKind?: RemoteValueKind },
+  ): FieldRemoteName {
+    return new FieldRemoteName(options.role === "indicator" ? "indicator" : "control", options.value, options.valueKind);
+  }
+
+  private symbols(): RemoteSymbol[] {
+    const syms = this.role === "indicator" ? indicatorSymbols() : controlSymbols();
+    return this.valueKind ? syms.filter((s) => remoteValueKind(s.type) === this.valueKind) : syms;
+  }
+
+  /** Control with this name but of another value kind (wrong reporter block). */
+  otherKindSymbol(): RemoteSymbol | undefined {
+    const v = this.getValue();
+    if (!v || !this.valueKind) return undefined;
+    const s = findSymbol(this.role, v);
+    return s && remoteValueKind(s.type) !== this.valueKind ? s : undefined;
   }
 
   private menuOptions(): Blockly.MenuOption[] {
-    const syms = this.role === "indicator" ? indicatorSymbols() : controlSymbols();
+    const syms = this.symbols();
     const opts: Blockly.MenuOption[] = syms.map((s) => [s.name, s.name]);
     const cur = this.getValue();
     if (cur && !syms.some((s) => s.name === cur)) opts.push([`${cur} (not defined)`, cur]);
@@ -52,7 +74,7 @@ export class FieldRemoteName extends Blockly.FieldDropdown {
   /** Whether the current name is defined in the project's layouts. */
   isDefined(): boolean {
     const v = this.getValue();
-    return !!v && !!findSymbol(this.role, v);
+    return !!v && this.symbols().some((s) => s.name === v);
   }
 }
 
@@ -68,24 +90,27 @@ export function registerRemoteField(): void {
       const f = this.getField("NAME");
       if (!(f instanceof FieldRemoteName)) return;
       const v = f.getValue();
-      const what = f.role === "indicator" ? "indicator" : "control";
+      const what = f.role === "indicator" ? "indicator" : f.valueKind ? `${KIND_LABEL[f.valueKind]} control` : "control";
+      const other = f.otherKindSymbol();
       this.setWarningText(!v
         ? `Pick a remote ${what}.`
-        : f.isDefined() ? null : `"${v}" is not a ${what} in the remote controller.`);
+        : f.isDefined() ? null
+        : other ? `"${v}" is a ${KIND_LABEL[remoteValueKind(other.type)]} control: use the matching remote block.`
+        : `"${v}" is not a ${what} in the remote controller.`);
     });
   });
 }
 
 export const REMOTE_BLOCKS = [
-  {
-    type: "remote_get",
+  ...(Object.entries(REMOTE_GET_BLOCK) as [RemoteValueKind, string][]).map(([kind, type]) => ({
+    type,
     message0: "remote %1",
-    args0: [{ type: "field_remote_name", name: "NAME", role: "control" }],
-    output: null,
+    args0: [{ type: "field_remote_name", name: "NAME", role: "control", valueKind: kind }],
+    output: kind === "bool" ? "Boolean" : kind === "text" ? "String" : "Number",
     colour: REMOTE_COLOUR,
     extensions: ["remote_name_warning"],
-    tooltip: "Current value of a control in the remote controller (0 until the app sends one).",
-  },
+    tooltip: `Current value of a ${KIND_LABEL[kind]} control in the remote controller.`,
+  })),
   {
     type: "remote_set_indicator",
     message0: "set indicator %1 to %2",

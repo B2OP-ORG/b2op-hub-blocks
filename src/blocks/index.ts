@@ -21,6 +21,7 @@ import { registerNeopixelGenerators } from "./generators/neopixel";
 import { registerRawGenerators } from "./generators/raw";
 import { registerRemoteGenerators } from "./generators/remote";
 import { registerLoopSleepOverrides } from "./generators/loops";
+import { registerTextGenerators, relaxTextInputs } from "./generators/text";
 
 let registered = false;
 
@@ -51,6 +52,7 @@ export function registerAllBlocks(): void {
     Blockly.Extensions.unregister("text_quotes");
   }
   Blockly.Extensions.register("text_quotes", function () { /* no quotes */ });
+  relaxTextInputs();
   registerHubGenerators(pythonGenerator);
   registerMotorGenerators(pythonGenerator);
   registerSensorGenerators(pythonGenerator);
@@ -61,6 +63,7 @@ export function registerAllBlocks(): void {
   registerRawGenerators(pythonGenerator);
   registerRemoteGenerators(pythonGenerator);
   registerLoopSleepOverrides(pythonGenerator);
+  registerTextGenerators(pythonGenerator);
 }
 
 export { pythonGenerator };

@@ -1,5 +1,7 @@
 import { stripBlocksHeader } from "./format";
 import { REMOTE_MODULE_NAMES } from "../remote/layout";
+import { findSymbol } from "../remote/registry";
+import { REMOTE_GET_BLOCK, remoteValueKind } from "../blocks/remoteKinds";
 /**
  * Best-effort Python → Blockly translator used when switching a Python project
  * back to Blocks mode. Handles:
@@ -150,6 +152,10 @@ class ExprParser {
 
   parseRemote(): BlockSpec | null {
     return parseRemoteRead(this);
+  }
+
+  parseLpf2Color(): BlockSpec | null {
+    return parseLpf2ColorRead(this);
   }
 
   parse(): BlockSpec | null {
@@ -322,6 +328,7 @@ class ExprParser {
       const name = t.value;
       this.pos++;
       if (name === "remote" && this.match("OP", ".")) return this.parseRemote();
+      if (name === "lpf2" && this.match("OP", ".")) return this.parseLpf2Color();
       if (this.match("OP", "(")) {
         this.pos++;
         const args: BlockSpec[] = [];
@@ -344,6 +351,19 @@ class ExprParser {
   }
 }
 
+/** `lpf2.color.<NAME>` after `lpf2` was consumed (at "."). */
+function parseLpf2ColorRead(p: ExprParser): BlockSpec | null {
+  if (!p.eat("OP", ".")) return null;
+  const mod = p.peek();
+  if (!mod || mod.kind !== "NAME" || mod.value !== "color") return null;
+  p.pos++;
+  if (!p.eat("OP", ".")) return null;
+  const c = p.peek();
+  if (!c || c.kind !== "NAME" || !COLOR_NAMES.has(c.value)) return null;
+  p.pos++;
+  return { type: "color_literal", fields: { COLOR: c.value } };
+}
+
 /** `remote.<name>` / `remote.get("name")` after `remote` was consumed (at "."). */
 function parseRemoteRead(p: ExprParser): BlockSpec | null {
   if (!p.eat("OP", ".")) return null;
@@ -356,10 +376,16 @@ function parseRemoteRead(p: ExprParser): BlockSpec | null {
     if (!arg || arg.kind !== "STR") return null;
     p.pos++;
     if (!p.eat("OP", ")")) return null; // a default value has no block form
-    return { type: "remote_get", fields: { NAME: arg.value } };
+    return remoteGetBlock(arg.value);
   }
   if (REMOTE_MODULE_NAMES.has(attr.value) || p.match("OP", "(")) return null;
-  return { type: "remote_get", fields: { NAME: attr.value } };
+  return remoteGetBlock(attr.value);
+}
+
+/** Reporter for control `name`, typed by the layout (number when undefined). */
+function remoteGetBlock(name: string): BlockSpec {
+  const sym = findSymbol("control", name);
+  return { type: REMOTE_GET_BLOCK[sym ? remoteValueKind(sym.type) : "number"], fields: { NAME: name } };
 }
 
 function callToBlock(name: string, args: BlockSpec[]): BlockSpec | null {
@@ -385,9 +411,6 @@ function numInput(name: string, expr: string) {
 
 function matchStatement(line: string): BlockSpec | null {
   let m: RegExpExecArray | null;
-  if ((m = /^hub\.led\.setColorIdx\(lpf2\.color\.([A-Z]+)\)$/.exec(line))) {
-    if (COLOR_NAMES.has(m[1])) return { type: "hub_led_color", fields: { COLOR: m[1] } };
-  }
   if ((m = /^hub\.led\.setColor\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/.exec(line))) {
     return { type: "hub_led_rgb", inputs: { ...numInput("R", m[1]), ...numInput("G", m[2]), ...numInput("B", m[3]) } };
   }
@@ -426,6 +449,16 @@ function valueInput(name: string, expr: string, vars: Set<string>): Record<strin
   const shadow: BlockSpec = { type: "math_number", fields: { NUM: "0" } };
   if (b.type === "math_number") return { [name]: { shadow: b } };
   return { [name]: { block: b, shadow } };
+}
+
+/** `hub.led.setColorIdx(<expr>)` → set-hub-LED block (colour-word shadow). */
+function matchLedColor(line: string, vars: Set<string>): BlockSpec | null {
+  const m = /^hub\.led\.setColorIdx\((.+)\)$/.exec(line);
+  if (!m) return null;
+  const b = parseExpr(m[1], vars);
+  if (!b) return null;
+  const shadow: BlockSpec = { type: "color_literal", fields: { COLOR: "BLUE" } };
+  return { type: "hub_led_color", inputs: { COLOR: b.type === "color_literal" ? { shadow: b } : { block: b, shadow } } };
 }
 
 /**
@@ -711,6 +744,8 @@ function translateGroup(g: Group, ctx: Ctx): BlockSpec | null {
   if (g.bodyLines.every((l) => l.text === "" || l.text.startsWith("#"))) {
     const block = matchStatement(t);
     if (block) return block;
+    const led = matchLedColor(t, ctx.vars);
+    if (led) return led;
     const np = matchNeopixelStatement(t, ctx.vars);
     if (np) return np;
     const rs = matchRemoteSend(t, ctx);

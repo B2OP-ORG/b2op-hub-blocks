@@ -1,4 +1,5 @@
 import * as Blockly from "blockly/core";
+import { CONTROL_COLOUR } from "../blocks/defs/hub";
 
 /**
  * Scratch-inspired theme. Workspace + flyout stay light (Scratch-like);
@@ -38,7 +39,10 @@ export const friendlyTheme = Blockly.Theme.defineTheme("lhbFriendly", {
     variable_category: { colour: "#FF8C1A" },
     procedure_category: { colour: "#FF6680" },
   },
-  blockStyles: {},
+  // Loop blocks live in the Control category: give them its colour.
+  blockStyles: {
+    loop_blocks: { colourPrimary: CONTROL_COLOUR },
+  },
   fontStyle: {
     family: 'system-ui, "Segoe UI", Roboto, sans-serif',
     weight: "600",

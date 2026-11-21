@@ -3,6 +3,7 @@ import { Order, pythonGenerator, type PythonGenerator } from "blockly/python";
 import { RemoteType } from "../../device/protocol";
 import { findSymbol, indicatorSymbols } from "../../remote/registry";
 import { isAttrName } from "../../remote/layout";
+import { REMOTE_GET_BLOCK, remoteGetKind, type RemoteValueKind } from "../remoteKinds";
 
 const KEY_IMPORT = "remote_import";
 const KEY_MESSAGES = "remote_messages";
@@ -43,7 +44,7 @@ export function remoteReadExpr(name: string): string {
 function guessType(block: Block): RemoteType {
   const target = block.getInputTargetBlock("VALUE");
   if (!target) return RemoteType.Float;
-  if (target.type === "remote_get") {
+  if (remoteGetKind(target.type)) {
     const s = findSymbol("control", target.getFieldValue("NAME"));
     if (s) return s.type;
   }
@@ -81,13 +82,21 @@ function writeDeclarations(gen: PythonGenerator): void {
   defs(gen)[KEY_MESSAGES] = lines.join("\n");
 }
 
+function outputsString(block: Block | null): boolean {
+  const check = block?.outputConnection?.getCheck();
+  return !!check && check.length > 0 && check.every((c) => c === "String");
+}
+
 export function registerRemoteGenerators(gen: PythonGenerator): void {
-  gen.forBlock["remote_get"] = (block: Block) => {
-    const name: string = block.getFieldValue("NAME") ?? "";
-    if (!name) return ["0", Order.ATOMIC];
-    needsRemote(gen);
-    return [remoteReadExpr(name), isAttrName(name) ? Order.MEMBER : Order.FUNCTION_CALL];
-  };
+  for (const [kind, type] of Object.entries(REMOTE_GET_BLOCK) as [RemoteValueKind, string][]) {
+    const empty = kind === "bool" ? "False" : kind === "text" ? "''" : "0";
+    gen.forBlock[type] = (block: Block) => {
+      const name: string = block.getFieldValue("NAME") ?? "";
+      if (!name) return [empty, Order.ATOMIC];
+      needsRemote(gen);
+      return [remoteReadExpr(name), isAttrName(name) ? Order.MEMBER : Order.FUNCTION_CALL];
+    };
+  }
 
   gen.forBlock["remote_set_indicator"] = (block: Block) => {
     const name: string = block.getFieldValue("NAME") ?? "";
@@ -100,7 +109,7 @@ export function registerRemoteGenerators(gen: PythonGenerator): void {
     if (!value) value = type === RemoteType.Str ? '""' : type === RemoteType.Bool ? "False" : "0";
     // The hub converts loosely, except INT needs an int and STR a str.
     else if (type === RemoteType.Int && !(target?.type === "math_number" && /^-?\d+$/.test(value))) value = `int(${value})`;
-    else if (type === RemoteType.Str && target?.type !== "text") value = `str(${value})`;
+    else if (type === RemoteType.Str && !outputsString(target)) value = `str(${value})`;
     return `remote.send(${id}, ${value})\n`;
   };
 }

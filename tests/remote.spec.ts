@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import { checkTranslation } from "../src/project/modeSwitch";
+import { checkTranslation, workspaceFromPython } from "../src/project/modeSwitch";
+import { remoteFlyout } from "../src/blocks/toolbox";
+import { migrateWorkspaceState } from "../src/blocks/migrate";
 import { RemoteType } from "../src/device/protocol";
 import {
   DEFAULT_REMOTE_FILE, emptyLayout, isAttrName, layoutSymbols, makeWidget, nameProblem, parseLayout,
@@ -102,10 +104,10 @@ describe("remote blocks", () => {
   });
 
   it("reads controls as remote.<name>, or remote.get() for odd names", () => {
-    const py = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get", fields: { NAME: "speed" } } } } }));
+    const py = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "speed" } } } } }));
     expect(py).toContain("import remote");
     expect(py).toContain("print(remote.speed)");
-    const odd = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get", fields: { NAME: "my speed" } } } } }));
+    const odd = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "my speed" } } } } }));
     expect(odd).toContain("print(remote.get('my speed'))");
   });
 
@@ -113,7 +115,7 @@ describe("remote blocks", () => {
     const py = run(prog({
       type: "remote_set_indicator",
       fields: { NAME: "value" },
-      inputs: { VALUE: { block: { type: "remote_get", fields: { NAME: "speed" } } } },
+      inputs: { VALUE: { block: { type: "remote_get_number", fields: { NAME: "speed" } } } },
       next: { block: {
         type: "remote_set_indicator",
         fields: { NAME: "lamp" },
@@ -134,8 +136,8 @@ describe("remote blocks", () => {
     expect(py).toContain("remote.create_message(2, 'status', remote.STR)");
     expect(py).toContain("remote.send(2, 'ok')");
     const ws = new Blockly.Workspace();
-    Blockly.serialization.workspaces.load(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get", fields: { NAME: "ghost" } } } } }), ws);
-    const f = ws.getAllBlocks(false).find((b) => b.type === "remote_get")!.getField("NAME") as FieldRemoteName;
+    Blockly.serialization.workspaces.load(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "ghost" } } } } }), ws);
+    const f = ws.getAllBlocks(false).find((b) => b.type === "remote_get_number")!.getField("NAME") as FieldRemoteName;
     expect(f.getValue()).toBe("ghost");
     expect(f.isDefined()).toBe(false);
     expect(f.getText()).toBe("ghost (not defined)");
@@ -152,7 +154,7 @@ describe("remote blocks", () => {
           type: "remote_set_indicator",
           fields: { NAME: "value" },
           inputs: { VALUE: { block: { type: "math_arithmetic", fields: { OP: "MULTIPLY" }, inputs: {
-            A: { block: { type: "remote_get", fields: { NAME: "speed" } } },
+            A: { block: { type: "remote_get_number", fields: { NAME: "speed" } } },
             B: { block: { type: "math_number", fields: { NUM: 2 } } },
           } } } },
         } },
@@ -169,6 +171,64 @@ describe("remote blocks", () => {
     const t = await checkTranslation(src);
     expect(t.hasRaw).toBe(false);
     expect(t.roundTripOk).toBe(true);
+  });
+});
+
+describe("typed remote reporters", () => {
+  const sym = (name: string, type: RemoteType, id: number) =>
+    ({ name, id, type, role: "control" as const, kind: "slider" as const, file: DEFAULT_REMOTE_FILE, uid: name });
+
+  beforeEach(() => {
+    registerAllBlocks();
+    setRemoteSymbols([sym("speed", RemoteType.Int, 0), sym("lamp", RemoteType.Bool, 1), sym("msg", RemoteType.Str, 2)]);
+  });
+
+  it("outputs Number / Boolean / String", () => {
+    const ws = new Blockly.Workspace();
+    expect(ws.newBlock("remote_get_number").outputConnection!.getCheck()).toEqual(["Number"]);
+    expect(ws.newBlock("remote_get_bool").outputConnection!.getCheck()).toEqual(["Boolean"]);
+    expect(ws.newBlock("remote_get_text").outputConnection!.getCheck()).toEqual(["String"]);
+    ws.dispose();
+  });
+
+  it("lists only controls of the block's kind; other kinds count as not defined", () => {
+    const ws = new Blockly.Workspace();
+    const b = ws.newBlock("remote_get_bool");
+    const f = b.getField("NAME") as FieldRemoteName;
+    expect(f.getOptions().map((o) => o[1])).toEqual(["lamp"]);
+    f.setValue("speed");
+    expect(f.isDefined()).toBe(false);
+    expect(f.otherKindSymbol()?.name).toBe("speed");
+    ws.dispose();
+  });
+
+  it("groups the flyout by kind", () => {
+    const blocks = (remoteFlyout() as { kind: string; type?: string; fields?: { NAME: string } }[])
+      .filter((i) => i.kind === "block" && i.type !== "remote_set_indicator")
+      .map((i) => [i.type, i.fields!.NAME]);
+    expect(blocks).toEqual([["remote_get_number", "speed"], ["remote_get_bool", "lamp"], ["remote_get_text", "msg"]]);
+  });
+
+  it("does not str() a text control sent to a STR indicator", () => {
+    const py = run(prog({
+      type: "remote_set_indicator",
+      fields: { NAME: "out" },
+      inputs: { VALUE: { block: { type: "remote_get_text", fields: { NAME: "msg" } } } },
+    }));
+    expect(py).toContain("remote.create_message(0, 'out', remote.STR)");
+    expect(py).toContain("remote.send(0, remote.msg)");
+  });
+
+  it("types reporters when translating Python, and migrates old remote_get", async () => {
+    const src = "# b2op-hub-blocks v2.0.0\n\nimport remote\n\nprint(remote.lamp)\nprint(remote.msg)\nprint(remote.speed)\n";
+    const t = await checkTranslation(src);
+    expect(t.hasRaw).toBe(false);
+    expect(t.roundTripOk).toBe(true);
+    const ws = workspaceFromPython(src) as { blocks: { blocks: { inputs: { DO: { block: object } } }[] } };
+    expect(JSON.stringify(ws)).toContain('"remote_get_bool"');
+    expect(JSON.stringify(ws)).toContain('"remote_get_text"');
+    const migrated = JSON.stringify(migrateWorkspaceState(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get", fields: { NAME: "lamp" } } } } })));
+    expect(migrated).toContain('"remote_get_bool"');
   });
 });
 

@@ -2,7 +2,9 @@ import * as Blockly from "blockly/core";
 import { useEffect, useRef } from "react";
 import { registerAllBlocks } from "../blocks";
 import { workspaceToPython } from "../codegen/pythonGen";
-import { buildToolbox, remoteFlyout, REMOTE_CATEGORY, REMOTE_CREATE_BUTTON } from "../blocks/toolbox";
+import { buildToolbox, remoteFlyout, REMOTE_CATEGORY, REMOTE_CREATE_BUTTON, variablesFlyout } from "../blocks/toolbox";
+import { autoShadowListener, fillAllShadows } from "../blocks/autoShadow";
+import { migrateWorkspaceState } from "../blocks/migrate";
 import { FieldRemoteName } from "../blocks/defs/remote";
 import { createRemoteName, onRemoteSymbolsChange } from "../remote/registry";
 import { friendlyTheme } from "./blocklyTheme";
@@ -77,6 +79,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       move: { scrollbars: true, drag: true, wheel: false },
     });
     workspaceRef.current = workspace;
+    workspace.registerToolboxCategoryCallback("VARIABLE", (ws) => variablesFlyout(ws));
     workspace.registerToolboxCategoryCallback(REMOTE_CATEGORY, () => remoteFlyout() as Blockly.utils.toolbox.FlyoutDefinition);
     workspace.registerButtonCallback(REMOTE_CREATE_BUTTON, () => {
       void createRemoteName().then((sym) => {
@@ -90,11 +93,21 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
     });
     if (initialState) {
       try {
-        Blockly.serialization.workspaces.load(initialState as object, workspace);
+        Blockly.serialization.workspaces.load(migrateWorkspaceState(initialState) as object, workspace);
       } catch (e) {
         console.warn("Failed to load workspace state", e);
       }
+      // Older projects / converted Python may have empty inputs: give them
+      // default shadows (not an undoable edit).
+      Blockly.Events.disable();
+      try {
+        fillAllShadows(workspace);
+      } finally {
+        Blockly.Events.enable();
+      }
     }
+    const shadowListener = autoShadowListener(workspace);
+    workspace.addChangeListener(shadowListener);
     const listener = () => {
       const state = Blockly.serialization.workspaces.save(workspace);
       const py = workspaceToPython(workspace);
@@ -135,6 +148,7 @@ export function BlocklyView({ initialState, showAdvanced, toolboxBlockScale = 1,
       offRemote();
       observer?.disconnect();
       workspace.removeChangeListener(listener);
+      workspace.removeChangeListener(shadowListener);
       workspace.dispose();
       workspaceRef.current = null;
     };

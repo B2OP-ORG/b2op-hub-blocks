@@ -1,6 +1,15 @@
 import * as Blockly from "blockly/core";
 import { CONTROL_COLOUR } from "../blocks/defs/hub";
 
+function controlBlockStyle() {
+  const primary = Blockly.utils.colour.hueToHex(Number(CONTROL_COLOUR));
+  return {
+    colourPrimary: primary,
+    colourSecondary: Blockly.utils.colour.blend("#000", primary, 0.15) ?? primary,
+    colourTertiary: Blockly.utils.colour.blend("#000", primary, 0.25) ?? primary,
+  };
+}
+
 /**
  * Scratch-inspired theme. Workspace + flyout stay light (Scratch-like);
  * accents shift to cyan. Category chips keep varied vivid colours.
@@ -39,9 +48,11 @@ export const friendlyTheme = Blockly.Theme.defineTheme("lhbFriendly", {
     variable_category: { colour: "#FF8C1A" },
     procedure_category: { colour: "#FF6680" },
   },
-  // Loop blocks live in the Control category: give them its colour.
+  // Loop blocks live in the Control category: give them its colour. Secondary
+  // and tertiary must be set too, or Zelos' green loop_blocks values leak
+  // through (tertiary is the block outline). Derived like the Zelos renderer.
   blockStyles: {
-    loop_blocks: { colourPrimary: CONTROL_COLOUR },
+    loop_blocks: controlBlockStyle(),
   },
   fontStyle: {
     family: 'system-ui, "Segoe UI", Roboto, sans-serif',

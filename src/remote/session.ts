@@ -1,28 +1,32 @@
-// Remote controller run mode. Lives outside React so the program keeps
-// running (and values keep streaming) while the user looks at other tabs.
+// Remote controller run mode. Follows the hub's program state: whenever a
+// program runs, every controller of the project is live; when it ends, the
+// controllers go back to edit mode. Lives outside React so values keep
+// streaming while the user looks at other tabs.
 //
-// Start: DEFINE every control of the layout + SET the start values
-// (acknowledged), then upload changed files and run main.py. While running,
-// changed controls are sent as NO_ACK SETs (sliders / joysticks merged per
-// animation frame) and every value is resent every REFRESH_MS: that repairs
-// SETs the hub dropped as reordered and keeps remote.age_ms() fresh.
-// Stop (back to edit mode): STOP the program and CLEAR the controls.
+// Start (editor runs a program): before RUN, DEFINE every control of the
+// project's layouts + SET the start values (acknowledged), so the program sees
+// them from its first line. A program started some other way (hub menu, a
+// program already running on connect) gets the same DEFINE + SET as soon as it
+// is seen running. While running, changed controls are sent as NO_ACK SETs
+// (sliders / joysticks merged per animation frame) and every value is resent
+// every REFRESH_MS: that repairs SETs the hub dropped as reordered and keeps
+// remote.age_ms() fresh. End (program ended / stopped / hub gone): CLEAR the
+// controls. A reload keeps the session (and the control values) across the
+// stop and restart instead of going back to edit mode in between.
 
 import { create } from "zustand";
 import { useApp } from "../state/store";
-import { runProject } from "../project/deviceSync";
-import { showAlert, showConfirm } from "../ui/Dialog";
+import { isReloading, setBeforeRunHook, setReloadEndHook } from "../project/deviceSync";
 import { remoteDefault, type RemoteEvent, type RemoteType, type RemoteValue } from "../device/protocol";
-import { initialValue, layoutSymbols, parseLayout, symbolConflicts, widgetSymbols, type RemoteSymbol } from "./layout";
+import { initialValue, isRemoteFile, symbolConflicts, tryParseLayout, widgetSymbols, type RemoteSymbol } from "./layout";
 
 export const REFRESH_MS = 250;
 
 export interface ProgramMessage { name: string; type: RemoteType; value: RemoteValue; }
 
 interface SessionState {
-  /** File id of the layout in run mode, or null (edit mode). */
-  fileId: string | null;
-  phase: "idle" | "starting" | "running" | "stopping";
+  /** idle = edit mode; otherwise a program runs and the controllers are live. */
+  phase: "idle" | "starting" | "running";
   /** Control name → current value. */
   values: Record<string, RemoteValue>;
   /** Program messages from the hub by message id (shown by indicators, matched by name). */
@@ -30,7 +34,6 @@ interface SessionState {
 }
 
 export const useRemoteSession = create<SessionState>(() => ({
-  fileId: null,
   phase: "idle",
   values: {},
   messages: {},
@@ -67,7 +70,8 @@ let controls = new Map<string, RemoteSymbol>();
 const pending = new Set<string>();
 let frame: number | null = null;
 let refresh: ReturnType<typeof setInterval> | null = null;
-let unsubApp: (() => void) | null = null;
+/** Bumped by every start / end, so a slow start that was overtaken drops its result. */
+let generation = 0;
 
 function entriesFor(names: Iterable<string>) {
   const values = useRemoteSession.getState().values;
@@ -101,7 +105,7 @@ function flush(): void {
  */
 export function setControl(name: string, value: RemoteValue, merge = false): void {
   const s = useRemoteSession.getState();
-  if (s.phase !== "running" && s.phase !== "starting") return;
+  if (s.phase === "idle") return;
   if (s.values[name] === value) return;
   useRemoteSession.setState({ values: { ...s.values, [name]: value } });
   if (s.phase !== "running") return; // start values go out with the DEFINE
@@ -116,109 +120,151 @@ function stopTimers(): void {
   pending.clear();
   if (refresh !== null) clearInterval(refresh);
   refresh = null;
-  unsubApp?.();
-  unsubApp = null;
 }
 
-/** Back to edit mode after the program ended on its own or the hub went away. */
+/** The project's controls and their start values. Throws with a user-facing message on duplicate names / ids. */
+function projectControls(): { syms: RemoteSymbol[]; values: Record<string, RemoteValue> } {
+  const syms: RemoteSymbol[] = [];
+  const values: Record<string, RemoteValue> = {};
+  for (const f of useApp.getState().mfp.files) {
+    if (!isRemoteFile(f.name)) continue;
+    const layout = tryParseLayout(f.content);
+    if (!layout) continue;
+    for (const w of layout.widgets) {
+      for (const s of widgetSymbols(w, f.name)) {
+        syms.push(s);
+        if (s.role === "control") values[s.name] = initialValue(s, w);
+      }
+    }
+  }
+  const conflicts = symbolConflicts(syms);
+  if (conflicts.names.size || conflicts.ids.size) {
+    throw new Error("Two remote controller widgets use the same name or id. Open the controller, select the widgets marked in red and change them.");
+  }
+  return { syms: syms.filter((s) => s.role === "control"), values };
+}
+
+/** Whether the project has a remote controller layout (otherwise nothing is set up). */
+function hasLayouts(): boolean {
+  return useApp.getState().mfp.files.some((f) => isRemoteFile(f.name));
+}
+
+/**
+ * DEFINE the project's controls and SET their start values (phase "starting").
+ * Resolves to false when there is nothing to set up or this start was overtaken.
+ */
+async function define(): Promise<boolean> {
+  const device = useApp.getState().device;
+  if (!device || !hasLayouts()) { toIdle(); return false; }
+  if (!device.supportsRemote) {
+    toIdle();
+    useApp.getState().appendConsole("info", "[remote controller: needs hub firmware with protocol 1.2 or newer]\n");
+    return false;
+  }
+  let syms: RemoteSymbol[], values: Record<string, RemoteValue>;
+  try {
+    ({ syms, values } = projectControls());
+  } catch (e) {
+    toIdle();
+    throw e;
+  }
+  // Reload: controls that still exist with the same kind of value keep it.
+  if (isReloading()) {
+    const prev = useRemoteSession.getState().values;
+    for (const name of Object.keys(values)) {
+      if (name in prev && typeof prev[name] === typeof values[name]) values[name] = prev[name];
+    }
+  }
+  const gen = ++generation;
+  stopTimers();
+  controls = new Map(syms.map((s) => [s.name, s]));
+  useRemoteSession.setState({ phase: "starting", values });
+  try {
+    await device.remoteClear();
+    if (syms.length) {
+      await device.remoteDefine(syms.map((s) => ({ id: s.id, type: s.type, name: s.name })));
+      await device.remoteSet(entriesFor(controls.keys()), { ack: true });
+    }
+  } catch (e) {
+    if (gen === generation) {
+      ++generation;
+      useRemoteSession.setState({ phase: "idle" });
+    }
+    throw e;
+  }
+  return gen === generation;
+}
+
+/** The program is running: send everything changed while starting, then refresh periodically. */
+function stream(): void {
+  if (useRemoteSession.getState().phase !== "starting") return;
+  useRemoteSession.setState({ phase: "running" });
+  send(controls.keys());
+  refresh = setInterval(() => send(controls.keys()), REFRESH_MS);
+}
+
+/** Drop a session that never got going (nothing to set up, or a reload whose restart failed). */
+function toIdle(): void {
+  if (useRemoteSession.getState().phase === "idle") return;
+  ++generation;
+  stopTimers();
+  useRemoteSession.setState({ phase: "idle" });
+}
+
+/**
+ * The program ended or the hub went away: back to edit mode. During a reload
+ * the session waits in "starting" for the restart instead (values kept,
+ * control changes go out with the next DEFINE).
+ */
 function ended(reason: string): void {
+  ++generation;
   if (useRemoteSession.getState().phase === "idle") return;
   stopTimers();
   const device = useApp.getState().device;
   if (device) device.remoteClear().catch(() => { /* hub gone or busy: values reset on disconnect anyway */ });
-  useRemoteSession.setState({ fileId: null, phase: "idle" });
+  if (device && isReloading()) {
+    useRemoteSession.setState({ phase: "starting" });
+    return;
+  }
+  useRemoteSession.setState({ phase: "idle" });
   useApp.getState().appendConsole("info", `[remote controller: ${reason}]\n`);
 }
 
-/** Enter run mode for layout file `fileId`. Resolves to whether the program started. */
-export async function startRemote(fileId: string): Promise<boolean> {
-  const st = useApp.getState();
-  if (useRemoteSession.getState().phase !== "idle") return false;
-  const file = st.mfp.files.find((f) => f.id === fileId);
-  if (!file) return false;
-  const device = st.device;
-  if (!device) {
-    await showAlert("No hub connected", "Connect a hub to run the remote controller.");
-    return false;
-  }
-  if (!device.supportsRemote) {
-    await showAlert("Firmware too old", "The remote controller needs hub firmware with protocol 1.2 or newer. Please update the hub firmware.");
-    return false;
-  }
-  let syms: RemoteSymbol[];
-  let layout;
+/** A program was seen running that the editor didn't set up (hub menu, running on connect). */
+async function attachLate(): Promise<void> {
   try {
-    layout = parseLayout(file.content);
-    syms = layoutSymbols(layout, file.name);
+    if (await define() && useApp.getState().running) stream();
   } catch (e) {
-    await showAlert("Broken layout", (e as Error).message);
-    return false;
+    useApp.getState().appendConsole("err", `[remote controller: ${(e as Error).message}]\n`);
   }
-  const conflicts = symbolConflicts(syms);
-  if (conflicts.names.size || conflicts.ids.size) {
-    await showAlert("Fix the layout first", "Two widgets use the same name or id. Select the widgets marked in red and change them.");
-    return false;
-  }
-  if (st.running) {
-    if (!await showConfirm("Program running", "A program is running on the hub. Stop it and start main.py?", { confirmLabel: "Stop and run" })) return false;
-    try { await device.stop(); } catch { /* ignore: RUN reports "busy" if it is still running */ }
-  }
-
-  const ctrl = syms.filter((s) => s.role === "control");
-  controls = new Map(ctrl.map((s) => [s.name, s]));
-  const values: Record<string, RemoteValue> = {};
-  for (const w of layout.widgets) {
-    for (const s of widgetSymbols(w, file.name)) if (s.role === "control") values[s.name] = initialValue(s, w);
-  }
-  useRemoteSession.setState({ fileId, phase: "starting", values });
-
-  try {
-    await device.remoteClear();
-    if (ctrl.length) {
-      await device.remoteDefine(ctrl.map((s) => ({ id: s.id, type: s.type, name: s.name })));
-      await device.remoteSet(entriesFor(controls.keys()), { ack: true });
-    }
-  } catch (e) {
-    useRemoteSession.setState({ fileId: null, phase: "idle" });
-    await showAlert("Remote controller failed", (e as Error).message);
-    return false;
-  }
-
-  const started = await runProject();
-  if (!started || useRemoteSession.getState().phase !== "starting") {
-    ended("not started");
-    return false;
-  }
-  // Values changed while starting go out now; then the periodic refresh.
-  useRemoteSession.setState({ phase: "running" });
-  send(controls.keys());
-  refresh = setInterval(() => send(controls.keys()), REFRESH_MS);
-  unsubApp = useApp.subscribe((s, prev) => {
-    if (!s.device) ended("hub disconnected");
-    else if (prev.running && !s.running) ended("program ended");
-  });
-  if (!useApp.getState().running) ended("program ended");
-  return true;
 }
 
-/** Leave run mode (edit mode): stop the program and clear the controls. */
-export async function stopRemote(): Promise<void> {
-  const s = useRemoteSession.getState();
-  if (s.phase === "idle" || s.phase === "stopping") return;
-  useRemoteSession.setState({ phase: "stopping" });
-  stopTimers();
-  const { device, running, setRunning, appendConsole } = useApp.getState();
-  if (device) {
-    if (running) {
-      try {
-        await device.stop();
-        setRunning(false);
-        appendConsole("info", "[stop]\n");
-      } catch (e) {
-        appendConsole("err", `[stop failed: ${(e as Error).message}]\n`);
-      }
-    }
-    try { await device.remoteClear(); } catch { /* ignore */ }
-  }
-  useRemoteSession.setState({ fileId: null, phase: "idle" });
+let started = false;
+/** The before-run hook already set up (or skipped) this run: don't attach late. */
+let prepared = false;
+
+/** Follow the hub's program state. Idempotent. */
+export function startRemoteSession(): void {
+  if (started) return;
+  started = true;
+  // Before the editor runs a program: set up the controls (errors abort the run).
+  setBeforeRunHook(async () => {
+    prepared = false;
+    await define();
+    prepared = true;
+  });
+  // A reload that didn't start the program again: now it's really over.
+  setReloadEndHook(() => {
+    if (useRemoteSession.getState().phase !== "idle" && !useApp.getState().running) ended("program ended");
+  });
+  useApp.subscribe((s, prev) => {
+    if (!s.device && prev.device) { ended("hub disconnected"); return; }
+    if (s.running === prev.running) return;
+    if (!s.running) { prepared = false; ended("program ended"); return; }
+    const wasPrepared = prepared;
+    prepared = false;
+    const phase = useRemoteSession.getState().phase;
+    if (phase === "starting") stream();
+    else if (phase === "idle" && !wasPrepared) void attachLate();
+  });
 }

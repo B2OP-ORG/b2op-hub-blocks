@@ -8,6 +8,7 @@ import { newFileFlow } from "./actions";
 import { isRemoteFile } from "../remote/layout";
 import { isSceneFile } from "../scene/project";
 import { projectFileUri } from "../editor/lsp/projectFiles";
+import { setEditorArea } from "../project/autoReload";
 
 // Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
 const BlocklyView = lazy(() => import("./BlocklyView").then((m) => ({ default: m.BlocklyView })));
@@ -123,7 +124,7 @@ export function Workspace() {
         background: p.panelAltBg,
       }}
     >
-      <div style={{ background: isBlocks ? "#ffffff" : p.surface, overflow: "hidden", minWidth: 0, minHeight: 0 }}>
+      <div ref={setEditorArea} style={{ background: isBlocks ? "#ffffff" : p.surface, overflow: "hidden", minWidth: 0, minHeight: 0 }}>
         {editor}
       </div>
       {isBlocks && (

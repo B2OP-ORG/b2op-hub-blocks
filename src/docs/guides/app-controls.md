@@ -23,9 +23,11 @@ Press **Preview** to see the controller the way it looks when it runs. The contr
 
 ## Run it
 
-Press **Run** in the controller tab. The editor tells the hub about every control, uploads changed files and starts `main.py`. Now move the controls — your program sees the new values right away.
+Press **Run** in the top bar. Before the program starts, the editor tells the hub about every control of the project's controllers, so your program sees their start values from its first line. While a program runs, the controller tab switches to run mode by itself: move the controls — your program sees the new values right away.
 
-You can switch to other tabs while it runs. Press **Edit** to stop the program and change the layout. When the program ends by itself, the controller goes back to edit mode too.
+You can switch to other tabs while it runs. To change the layout, press **Stop**: when the program ends (also when it ends by itself), the controller goes back to edit mode. **Reload** in the top bar stops the program and runs it again; the controls keep their current values (a control whose kind of value changed starts over).
+
+A program started some other way (from the SD card tab, or already running when you connect) gets the controls as soon as the editor sees it running.
 
 ## In blocks
 

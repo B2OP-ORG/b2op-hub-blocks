@@ -1,9 +1,10 @@
 // Remote controller tab: edit mode (drag widgets onto a canvas, set names /
 // ids / options), preview mode (looks and reacts like run mode, but nothing is
-// sent and indicators show sample values) and run mode (main.py runs, controls
-// stream to the hub, indicators show program messages). Run mode lives in
-// remote/session.ts, so it survives switching tabs; only going back to edit
-// mode stops the program. Preview is local to the view.
+// sent and indicators show sample values) and run mode (a program runs,
+// controls stream to the hub, indicators show program messages). Run mode is
+// automatic: it follows the hub's program state (remote/session.ts), so the
+// view switches to it whenever a program runs and back to edit mode when it
+// ends. Preview is local to the view.
 //
 // Canvas: widgets may sit anywhere, also at negative positions. The scroll
 // area is the home view (0,0 + visible size) and grows past any widget that
@@ -11,7 +12,7 @@
 // canvasView.ts.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Eye, Gamepad2, Maximize2, Pencil, Play, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { Eye, Gamepad2, Maximize2, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { RemoteValue } from "../../device/protocol";
@@ -25,7 +26,7 @@ import {
   parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicts, widgetSymbols,
   type RemoteLayout, type RemoteSymbol, type ValueType, type Widget, type WidgetKind,
 } from "../../remote/layout";
-import { messageByName, setControl, startRemote, stopRemote, useRemoteSession } from "../../remote/session";
+import { messageByName, setControl, useRemoteSession } from "../../remote/session";
 
 const DND_TYPE = "application/x-b2op-remote-widget";
 const MIN_W = 64;
@@ -64,11 +65,12 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   const files = useApp((s) => s.mfp.files);
   const connected = useApp((s) => s.connection === "connected");
   const session = useRemoteSession();
-  const live = session.fileId === file.id && session.phase !== "idle";
-  const otherRunning = session.fileId !== null && session.fileId !== file.id;
+  const live = session.phase !== "idle";
   // Preview: local control values, nothing sent. Run mode takes precedence.
   const [previewValues, setPreviewValues] = useState<Record<string, RemoteValue> | null>(null);
   const preview = previewValues !== null && !live;
+  // A program started: leave preview, so the view returns to edit mode when it ends.
+  useEffect(() => { if (live) setPreviewValues(null); }, [live]);
   /** Run or preview: the canvas shows the finished controller, not the editor. */
   const showing = live || preview;
 
@@ -215,9 +217,9 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   const sel = showing ? undefined : layout.widgets.find((w) => w.uid === selected);
 
   const status = live
-    ? session.phase === "starting" ? "Starting…" : session.phase === "stopping" ? "Stopping…" : "Running main.py"
+    ? session.phase === "starting" ? "Starting…" : "Running · stop the program to edit"
     : preview ? "Preview · nothing is sent to the hub"
-    : otherRunning ? "Another remote controller is running" : connected ? "Edit mode" : "Edit mode · connect a hub to run";
+    : connected ? "Edit mode · run a program to use the controller" : "Edit mode · connect a hub to run";
 
   const startPreview = () => {
     const values: Record<string, RemoteValue> = {};
@@ -225,7 +227,6 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     setSelected(null);
     setPreviewValues(values);
   };
-  const busy = session.phase === "starting" || session.phase === "stopping";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
@@ -234,14 +235,11 @@ export function RemoteView({ file }: { file: ProjectFile }) {
         <Gamepad2 size={16} color={p.accent} />
         <span style={{ fontWeight: 600 }}>{file.name}</span>
         <div style={{ display: "inline-flex", border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden" }}>
-          <ModeButton p={p} active={!showing} disabled={busy}
-            onClick={() => { if (live) void stopRemote(); setPreviewValues(null); }}
-            icon={<Pencil size={13} />} label="Edit" title="Edit mode: stops the program" />
-          <ModeButton p={p} active={preview} disabled={live || busy} onClick={startPreview}
+          <ModeButton p={p} active={!showing} disabled={live}
+            onClick={() => setPreviewValues(null)}
+            icon={<Pencil size={13} />} label="Edit" title={live ? "A program is running: stop it to edit" : "Edit mode"} />
+          <ModeButton p={p} active={preview} disabled={live} onClick={startPreview}
             icon={<Eye size={13} />} label="Preview" title="Preview: try the controller without a hub; nothing is sent" />
-          <ModeButton p={p} active={live} disabled={live || otherRunning || session.phase !== "idle"}
-            onClick={() => { setPreviewValues(null); void startRemote(file.id); }}
-            icon={<Play size={13} />} label="Run" title="Run mode: sends the controls, then runs main.py" />
         </div>
         <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>
         <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 2 }}>
@@ -259,7 +257,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", minHeight: 40, boxSizing: "border-box", borderBottom: `1px solid ${p.border}`, background: p.panelAltBg, flexWrap: "wrap" }}>
         {live ? (
           <span style={{ fontSize: 12, color: p.dimText }}>
-            Controls are live. Other tabs keep it running; <b>Edit</b> stops the program.
+            Controls are live while the program runs, also from other tabs. <b>Stop</b> the program to edit.
           </span>
         ) : preview ? (
           <span style={{ fontSize: 12, color: p.dimText }}>

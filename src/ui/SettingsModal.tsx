@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useApp } from "../state/store";
 import {
-  DEFAULT_EDITOR_SETTINGS, DEFAULT_MONACO_SETTINGS, DEFAULT_SIDEBAR_SETTINGS, SIDEBAR_TAB_IDS,
-  type LspMode, type MonacoSettings,
+  DEFAULT_AUTO_RELOAD, DEFAULT_EDITOR_SETTINGS, DEFAULT_MONACO_SETTINGS, DEFAULT_SIDEBAR_SETTINGS, SIDEBAR_TAB_IDS,
+  type AutoReloadMode, type AutoReloadRule, type AutoReloadSettings, type LspMode, type MonacoSettings,
 } from "../project/format";
 import { DEFAULT_SIDEBAR_WIDTH } from "../project/storage";
 import { usePalette, type Palette } from "./theme";
@@ -12,7 +12,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Section = "general" | "sidebar" | "blocks" | "code" | "lsp" | "device";
+type Section = "general" | "sidebar" | "blocks" | "code" | "lsp" | "device" | "run";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
@@ -21,6 +21,19 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "code", label: "Code editor" },
   { id: "lsp", label: "Python language server" },
   { id: "device", label: "Device & uploads" },
+  { id: "run", label: "Run & reload" },
+];
+
+const RELOAD_MODES: { value: AutoReloadMode; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "delay", label: "After a delay" },
+  { value: "focus", label: "When leaving the editor" },
+];
+
+const RELOAD_KINDS: { kind: keyof AutoReloadSettings; label: string; help: string }[] = [
+  { kind: "blocks", label: "Blocks files", help: "Moving blocks around doesn't count, only changes to the generated code." },
+  { kind: "scenes", label: "Scene files", help: "Screens built in the scene editor." },
+  { kind: "python", label: "Python files", help: "Every other .py file of the project." },
 ];
 
 const TAB_LABELS: Record<string, string> = { explorer: "Explorer", projects: "Projects", sdcard: "SD card", device: "Device" };
@@ -132,6 +145,9 @@ export function SettingsModal({ onClose }: Props) {
   const setM = (patch: Partial<MonacoSettings>) => update({ monaco: { ...m, ...patch } });
   const sb = settings.sidebar;
   const presetMatch = FONT_PRESETS.find((f) => f.value === m.fontFamily);
+  const ar = settings.autoReload;
+  const setRule = (kind: keyof AutoReloadSettings, patch: Partial<AutoReloadRule>) =>
+    update({ autoReload: { ...ar, [kind]: { ...ar[kind], ...patch } } });
 
   const body = (() => {
     switch (section) {
@@ -325,6 +341,28 @@ export function SettingsModal({ onClose }: Props) {
                 }}
               />
             </Row>
+          </>
+        );
+      case "run":
+        return (
+          <>
+            <div style={{ fontSize: 12, color: p.dimText, lineHeight: 1.5, padding: "6px 0" }}>
+              <b>Reload</b> in the top bar stops the running program, uploads changed files and runs the last program again.
+              While a program runs, the remote controller is live; it goes back to edit mode when the program ends.
+            </div>
+            <GroupTitle p={p} onReset={() => update({ autoReload: DEFAULT_AUTO_RELOAD })}>Auto-reload on change</GroupTitle>
+            <div style={{ fontSize: 12, color: p.dimText, lineHeight: 1.5, padding: "2px 0 4px" }}>
+              Reload the running program when you change a project file. <i>When leaving the editor</i> reloads once you click outside the
+              editor, switch to another file tab or switch to another window.
+            </div>
+            {RELOAD_KINDS.map(({ kind, label, help }) => (
+              <Row key={kind} p={p} label={label} help={help}>
+                <Select p={p} value={ar[kind].mode} options={RELOAD_MODES} onChange={(v) => setRule(kind, { mode: v })} />
+                {ar[kind].mode === "delay" && (
+                  <NumberInput p={p} value={ar[kind].delaySec} min={0} max={60} step={0.5} onChange={(v) => setRule(kind, { delaySec: v })} suffix="s" />
+                )}
+              </Row>
+            ))}
           </>
         );
     }

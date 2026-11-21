@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUpCircle, Bluetooth, Circle, Code2, Gamepad2, Layers,
-  Play, Plug, Power, Settings, Square, Upload, Usb, Zap,
+  Play, Plug, Power, RotateCw, Settings, Square, Upload, Usb, Zap,
 } from "lucide-react";
 import { BleTransport, bleUnavailable } from "../transport/ble";
 import { SerialTransport, serialSupported } from "../transport/serial";
@@ -11,7 +11,7 @@ import { DeviceClient } from "../device/deviceClient";
 import { formatEchoFrame } from "../device/protocol";
 import { useApp, useDark } from "../state/store";
 import { saveLastDeviceName } from "../project/storage";
-import { runProject, runProjectFile, uploadFile, uploadProject } from "../project/deviceSync";
+import { reloadProgram, runProject, runProjectFile, uploadFile, uploadProject } from "../project/deviceSync";
 import { openContextMenu, openMenuAt } from "./ContextMenu";
 import { switchActiveFileMode } from "./modeSwitch";
 import { applyRemoteEvent } from "../remote/session";
@@ -305,6 +305,7 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
   return (
     <header
       ref={headerRef}
+      data-autoreload-ignore
       style={{
         display: "flex",
         alignItems: "center",
@@ -364,6 +365,13 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
             title={running ? "Stop the running program first" : "Upload changed files and run main.py · right-click for more"}>
             <Play size={13} />{showLabel(3) && " Run"}
           </button>
+          {running && (
+            <button type="button" style={{ ...dis(btn, busy), ...iconPad(2) }} disabled={busy}
+              onClick={() => void reloadProgram()}
+              title="Reload: stop the program, upload changed files and run it again">
+              <RotateCw size={13} />{showLabel(2) && " Reload"}
+            </button>
+          )}
           <button type="button" style={{ ...dis(dangerBtn, busy || !running), ...iconPad(3) }} disabled={busy || !running}
             onClick={stop} title={!running ? "No program running" : "Stop program"}>
             <Square size={13} />{showLabel(3) && " Stop"}

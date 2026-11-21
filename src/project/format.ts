@@ -93,6 +93,28 @@ export const DEFAULT_SIDEBAR_SETTINGS: SidebarSettings = {
   hiddenTabs: [],
 };
 
+/** When a running program is reloaded after its files change. */
+export type AutoReloadMode = "off" | "delay" | "focus";
+
+export interface AutoReloadRule {
+  /** off = never; delay = `delaySec` after the last change; focus = when leaving the editor. */
+  mode: AutoReloadMode;
+  delaySec: number;
+}
+
+/** Auto-reload per kind of file: blocks files, scene files, other Python files. */
+export interface AutoReloadSettings {
+  blocks: AutoReloadRule;
+  scenes: AutoReloadRule;
+  python: AutoReloadRule;
+}
+
+export const DEFAULT_AUTO_RELOAD: AutoReloadSettings = {
+  blocks: { mode: "off", delaySec: 1 },
+  scenes: { mode: "off", delaySec: 1 },
+  python: { mode: "off", delaySec: 2 },
+};
+
 export interface EditorSettings {
   darkMode: boolean;
   showAdvanced: boolean;
@@ -104,6 +126,8 @@ export interface EditorSettings {
   bleEchoOverUsb: boolean;
   sidebar: SidebarSettings;
   monaco: MonacoSettings;
+  /** Reload the running program when its files change. */
+  autoReload: AutoReloadSettings;
 }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -116,6 +140,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   bleEchoOverUsb: false,
   sidebar: DEFAULT_SIDEBAR_SETTINGS,
   monaco: DEFAULT_MONACO_SETTINGS,
+  autoReload: DEFAULT_AUTO_RELOAD,
 };
 
 /** Merge stored (possibly partial / older) settings over the defaults. */
@@ -132,6 +157,11 @@ export function mergeEditorSettings(raw: unknown): EditorSettings {
     ...r,
     sidebar,
     monaco: { ...DEFAULT_MONACO_SETTINGS, ...(r.monaco ?? {}) },
+    autoReload: {
+      blocks: { ...DEFAULT_AUTO_RELOAD.blocks, ...(r.autoReload?.blocks ?? {}) },
+      scenes: { ...DEFAULT_AUTO_RELOAD.scenes, ...(r.autoReload?.scenes ?? {}) },
+      python: { ...DEFAULT_AUTO_RELOAD.python, ...(r.autoReload?.python ?? {}) },
+    },
   };
 }
 

@@ -203,9 +203,31 @@ export async function uploadFile(fileId: string): Promise<boolean> {
   }
 }
 
+// ── Running ──────────────────────────────────────────────────────────────────
+
+let beforeRun: (() => Promise<void>) | null = null;
+
+/**
+ * Called right before every RUN the editor sends (after uploading). Throwing
+ * aborts the run with that message. Used by the remote controller to define
+ * its controls before the program starts.
+ */
+export function setBeforeRunHook(hook: (() => Promise<void>) | null): void {
+  beforeRun = hook;
+}
+
+/** What Reload runs again. */
+type RunTarget =
+  | { kind: "main"; projectId: string }
+  | { kind: "file"; projectId: string; fileId: string }
+  | { kind: "path"; path: string };
+
+let lastRun: RunTarget | null = null;
+
 async function startProgram(path: string): Promise<void> {
   const { device, appendConsole, setRunning } = useApp.getState();
   if (!device) throw new Error("No hub connected.");
+  if (beforeRun) await beforeRun();
   appendConsole("info", `[run → ${path}]\n`);
   // Mark running before RUN: a short program's PROG_END can arrive before the
   // RUN reply resolves, and must not be overwritten afterwards.
@@ -230,6 +252,7 @@ export async function runProject(): Promise<boolean> {
     );
     return false;
   }
+  lastRun = { kind: "main", projectId: p.id };
   try {
     await syncProject(p.id, { mode: "changed" });
     await startProgram(devicePathFor(p.title, main.name));
@@ -240,28 +263,80 @@ export async function runProject(): Promise<boolean> {
   }
 }
 
-/** Run a specific project file (default: the active one). */
-export async function runProjectFile(fileId?: string): Promise<void> {
+/** Run a specific project file (default: the active one). Resolves to whether it started. */
+export async function runProjectFile(fileId?: string): Promise<boolean> {
   const s = useApp.getState();
   const id = fileId ?? s.activeFileId;
   const file = s.mfp.files.find((f) => f.id === id);
   if (!file) {
     await showAlert("No file open", "Open a file to run it.");
-    return;
+    return false;
   }
+  lastRun = { kind: "file", projectId: s.mfp.id, fileId: file.id };
   try {
     await syncProject(s.mfp.id, { mode: "changed" });
     await startProgram(devicePathFor(s.mfp.title, file.name));
+    return true;
   } catch (e) {
     await report("run", e);
+    return false;
   }
 }
 
 /** Run a file that already exists on the hub. */
 export async function runDevicePath(path: string): Promise<void> {
+  lastRun = { kind: "path", path };
   try {
     await startProgram(path);
   } catch (e) {
     await report("run", e);
+  }
+}
+
+let reloading = false;
+let reloadEnd: (() => void) | null = null;
+
+/** Called when a reload has finished (started again or not). */
+export function setReloadEndHook(hook: (() => void) | null): void {
+  reloadEnd = hook;
+}
+
+/** Whether a reload is stopping / restarting the program right now. */
+export function isReloading(): boolean {
+  return reloading;
+}
+
+/**
+ * Reload: stop the running program (if any), upload changed files and run the
+ * last run target again (main.py when nothing was run in this project yet).
+ * Resolves to whether the program started.
+ */
+export async function reloadProgram(): Promise<boolean> {
+  const { device, running, setRunning, appendConsole, mfp } = useApp.getState();
+  if (!device || reloading || syncing) return false;
+  reloading = true;
+  try {
+    if (running) {
+      try {
+        await device.stop();
+        setRunning(false);
+        appendConsole("info", "[reload]\n");
+      } catch (e) {
+        appendConsole("err", `[reload: stop failed: ${(e as Error).message}]\n`);
+        return false;
+      }
+    }
+    const t = lastRun;
+    if (t?.kind === "path") {
+      await runDevicePath(t.path);
+      return useApp.getState().running;
+    }
+    if (t?.kind === "file" && t.projectId === mfp.id && mfp.files.some((f) => f.id === t.fileId)) {
+      return await runProjectFile(t.fileId);
+    }
+    return await runProject();
+  } finally {
+    reloading = false;
+    reloadEnd?.();
   }
 }

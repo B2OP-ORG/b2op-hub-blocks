@@ -23,7 +23,8 @@ import {
 import { sceneToPython } from "../../scene/codegen";
 import { SceneWidgetBody } from "./widgets";
 
-const DND_TYPE = "application/x-b2op-scene-widget";
+/** A widget being dragged in from the palette (client coordinates). */
+type NewDrag = { kind: SceneKind; startX: number; startY: number; x: number; y: number; moved: boolean };
 /** CSS px per LCD px at 100% zoom. */
 const BASE = 3;
 /** LCD px of canvas around the screen. */
@@ -79,6 +80,50 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const canvasRef = useRef<HTMLDivElement>(null);
   /** The LCD screen element: drop positions are measured from it. */
   const screenRef = useRef<HTMLDivElement>(null);
+  const trashRef = useRef<HTMLDivElement>(null);
+  const [overTrash, setOverTrash] = useState(false);
+  const overTrashRef = useRef(false);
+  const setTrash = (v: boolean) => { overTrashRef.current = v; setOverTrash(v); };
+  const hitTrash = (x: number, y: number) => {
+    const r = trashRef.current?.getBoundingClientRect();
+    return !!r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+  // Palette drag: pointer events on the window (the chip stays put), the
+  // widget itself follows the pointer. The drop handler is refreshed every
+  // render (it needs the current scene), the listeners only per drag.
+  const [newDrag, setNewDragState] = useState<NewDrag | null>(null);
+  const newDragRef = useRef<NewDrag | null>(null);
+  const setNewDrag = (d: NewDrag | null) => { newDragRef.current = d; setNewDragState(d); };
+  const dropNewRef = useRef<(d: NewDrag) => void>(() => {});
+  const dragging = newDrag !== null;
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e: PointerEvent) => {
+      const d = newDragRef.current;
+      if (!d) return;
+      const moved = d.moved || Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 4;
+      setNewDrag({ ...d, x: e.clientX, y: e.clientY, moved });
+      setTrash(moved && hitTrash(e.clientX, e.clientY));
+    };
+    const up = () => {
+      const d = newDragRef.current;
+      setNewDrag(null);
+      if (d) dropNewRef.current(d);
+      setTrash(false);
+    };
+    const cancel = () => { setNewDrag(null); setTrash(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key);
+    };
+  }, [dragging]);
   const projectId = useApp((s) => s.mfp.id);
   const cv = useCanvasView({
     canvasRef,
@@ -149,9 +194,10 @@ export function SceneView({ file }: { file: ProjectFile }) {
     }
     return best;
   };
-  const addAt = (kind: SceneKind, sx: number, sy: number) => {
-    const c = containerAt(sx, sy);
-    add(kind, Math.max(0, c.x), Math.max(0, c.y), c.parent, c.tab);
+  /** Add a widget whose top-left is (offX, offY) up-left of screen point (px, py), in the container under that point. */
+  const addAt = (kind: SceneKind, px: number, py: number, offX = 0, offY = 0) => {
+    const c = containerAt(px, py);
+    add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab);
   };
   const addDefault = (kind: SceneKind) => {
     const sel = doc.widgets.find((w) => w.uid === selected);
@@ -178,6 +224,19 @@ export function SceneView({ file }: { file: ProjectFile }) {
     commit(list);
   };
 
+  // ── Palette drag (new widget) ───────────────────────────────────────────────
+  /** The widget a palette drag would add (for the ghost and the drop maths). */
+  const template = newDrag ? makeWidget(newDrag.kind, 0, 0, doc) : null;
+  dropNewRef.current = (d) => {
+    if (!d.moved) { addDefault(d.kind); return; } // a click
+    if (overTrashRef.current) return;
+    const canvas = canvasRef.current?.getBoundingClientRect(), scr = screenRef.current?.getBoundingClientRect();
+    if (!canvas || !scr || d.x < canvas.left || d.x > canvas.right || d.y < canvas.top || d.y > canvas.bottom) return;
+    const size = drawnSize(makeWidget(d.kind, 0, 0, doc));
+    // The ghost is centred on the pointer: keep that spot under the pointer.
+    addAt(d.kind, (d.x - scr.left) / scale, (d.y - scr.top) / scale, size.w / 2, size.h / 2);
+  };
+
   // ── Drag ────────────────────────────────────────────────────────────────────
   const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: Drag["mode"]) => {
     if (preview || e.button !== 0) return;
@@ -195,6 +254,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const dx = (e.clientX - drag.startX + (el ? el.scrollLeft - drag.scrollX : 0)) / scale;
     const dy = (e.clientY - drag.startY + (el ? el.scrollTop - drag.scrollY : 0)) / scale;
     const o = drag.orig;
+    if (drag.mode === "move") setTrash(hitTrash(e.clientX, e.clientY));
     const cur = drag.mode === "move"
       ? { ...o, x: sn(o.x + dx), y: sn(o.y + dy) }
       : o.kind === "qrcode"
@@ -206,6 +266,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
     if (!drag) return;
     const { cur, orig } = drag;
     setDrag(null);
+    if (drag.mode === "move" && overTrashRef.current) { setTrash(false); remove(orig.uid); return; }
     if (cur.x !== orig.x || cur.y !== orig.y || cur.w !== orig.w || cur.h !== orig.h) update(cur.uid, { x: cur.x, y: cur.y, w: cur.w, h: cur.h });
   };
 
@@ -307,7 +368,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
           style={{
             position: "absolute", left: w.x, top: w.y, width: size.w, height: size.h,
             outline: isSel ? `${1 / scale * 2}px solid ${p.accent}` : undefined, outlineOffset: 1 / scale,
-            opacity: outside ? 0.4 : !preview && w.hidden ? 0.45 : 1,
+            opacity: drag?.uid === w.uid && overTrash ? 0.3 : outside ? 0.4 : !preview && w.hidden ? 0.45 : 1,
             ...(outside && !isSel ? { outline: `${2 / scale}px dashed ${p.danger}` } : {}),
             cursor: panCursor ?? (preview ? "default" : drag?.uid === w.uid ? "grabbing" : "grab"),
             touchAction: "none", userSelect: "none",
@@ -356,9 +417,9 @@ export function SceneView({ file }: { file: ProjectFile }) {
           <span style={{ fontSize: 12, color: p.dimText }}>{preview.log}</span>
         ) : (
           <>
-            <PaletteGroup p={p} title="Display" kinds={DISPLAY_KINDS} onAdd={addDefault} />
+            <PaletteGroup p={p} title="Display" kinds={DISPLAY_KINDS} onAdd={addDefault} onStart={(kind, x, y) => setNewDrag({ kind, startX: x, startY: y, x, y, moved: false })} />
             <span style={{ width: 1, alignSelf: "stretch", background: p.border, margin: "0 4px" }} />
-            <PaletteGroup p={p} title="Buttons" kinds={INPUT_KINDS} onAdd={addDefault} />
+            <PaletteGroup p={p} title="Buttons" kinds={INPUT_KINDS} onAdd={addDefault} onStart={(kind, x, y) => setNewDrag({ kind, startX: x, startY: y, x, y, moved: false })} />
           </>
         )}
       </div>
@@ -368,6 +429,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
         <Outline p={p} doc={doc} selected={preview ? null : selected} onSelect={(u) => { setPreview(null); setSelected(u); }} onMove={moveZ} />
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
           {/* Canvas */}
           <div
             ref={canvasRef}
@@ -375,21 +437,9 @@ export function SceneView({ file }: { file: ProjectFile }) {
             onKeyDown={onKeyDown}
             {...cv.handlers}
             onPointerDown={() => { if (!preview) setSelected(null); }}
-            onDragOver={(e) => { if (!preview && e.dataTransfer.types.includes(DND_TYPE)) e.preventDefault(); }}
-            onDrop={(e) => {
-              const kind = e.dataTransfer.getData(DND_TYPE) as SceneKind;
-              if (preview || !kind || !canvasRef.current) return;
-              e.preventDefault();
-              const scr = screenRef.current;
-              if (!scr) return;
-              // Measured from the screen element itself: the stage is centred
-              // and scrolled, so canvas-relative maths would be off.
-              const r = scr.getBoundingClientRect();
-              addAt(kind, Math.round((e.clientX - r.left) / scale), Math.round((e.clientY - r.top) / scale));
-            }}
             className="remote-canvas"
             style={{
-              flex: 1, minHeight: 0, overflow: "auto", position: "relative", outline: "none",
+              flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", position: "relative", outline: "none",
               background: p.panelAltBg, touchAction: "none", cursor: panCursor,
               ["--sb-track" as string]: p.panelAltBg,
               ["--sb-thumb" as string]: `color-mix(in srgb, ${p.accent} 55%, transparent)`,
@@ -404,13 +454,29 @@ export function SceneView({ file }: { file: ProjectFile }) {
                 <div ref={screenRef} style={{ position: "absolute", left: MARGIN, top: MARGIN, width: SCREEN_W, height: SCREEN_H, background: shownDoc.bg, overflow: preview ? "hidden" : "visible" }}>
                   {renderLevel(undefined)}
                 </div>
-                {!preview && doc.widgets.length === 0 && (
+                {!preview && doc.widgets.length === 0 && !newDrag?.moved && (
                   <div style={{ position: "absolute", left: MARGIN + 8, top: MARGIN + 40, width: SCREEN_W - 16, color: "#9ca3af", fontSize: 7, lineHeight: 1.4, textAlign: "center", pointerEvents: "none" }}>
-                    Drag widgets here from the bar above (or click one).
+                    Drag widgets here from the bar above (or click one). Drop one on the bin to delete it.
                   </div>
                 )}
               </div>
             </div>
+          </div>
+          {/* Trash: drop a widget here to delete it (or to cancel a palette drag). */}
+          {!preview && (
+            <div ref={trashRef} title="Drag a widget here to delete it"
+              style={{
+                position: "absolute", right: 14, bottom: 14, width: 52, height: 52, borderRadius: 12, pointerEvents: "none",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                border: `2px ${overTrash ? "solid" : "dashed"} ${overTrash ? p.danger : p.border}`,
+                background: overTrash ? p.dangerBg : "transparent",
+                color: overTrash ? p.danger : p.dimText,
+                opacity: overTrash ? 1 : drag?.mode === "move" || newDrag?.moved ? 0.9 : 0.45,
+                transform: overTrash ? "scale(1.15)" : "none", transition: "transform .12s, opacity .12s",
+              }}>
+              <Trash2 size={24} />
+            </div>
+          )}
           </div>
           {showCode && (
             <pre style={{ margin: 0, height: "40%", flexShrink: 0, overflow: "auto", padding: 10, borderTop: `1px solid ${p.border}`, background: p.inputBg, fontSize: 11, lineHeight: 1.4 }}>
@@ -418,6 +484,20 @@ export function SceneView({ file }: { file: ProjectFile }) {
             </pre>
           )}
         </div>
+
+        {/* Palette drag: the real widget follows the pointer, at the canvas scale. */}
+        {newDrag?.moved && template && (() => {
+          const s = drawnSize(template);
+          return (
+            <div style={{
+              position: "fixed", left: newDrag.x - (s.w * scale) / 2, top: newDrag.y - (s.h * scale) / 2, width: s.w, height: s.h,
+              transformOrigin: "0 0", transform: `scale(${scale})`, pointerEvents: "none", zIndex: 1000,
+              opacity: overTrash ? 0.3 : 0.85, filter: "drop-shadow(0 2px 4px rgba(0,0,0,.4))",
+            }}>
+              <SceneWidgetBody w={template} />
+            </div>
+          );
+        })()}
 
         {/* Properties */}
         {!preview && (sel
@@ -455,15 +535,20 @@ function IconButton({ p, title, onClick, disabled, children }: { p: Palette; tit
   );
 }
 
-function PaletteGroup({ p, title, kinds, onAdd }: { p: Palette; title: string; kinds: SceneKind[]; onAdd: (k: SceneKind) => void }) {
+function PaletteGroup({ p, title, kinds, onAdd, onStart }: {
+  p: Palette; title: string; kinds: SceneKind[]; onAdd: (k: SceneKind) => void;
+  /** Pointer pressed on a chip: start a drag (a release without moving counts as a click). */
+  onStart: (k: SceneKind, clientX: number, clientY: number) => void;
+}) {
   return (
     <>
       <span style={{ fontSize: 11, color: p.dimText, textTransform: "uppercase", letterSpacing: 0.5 }}>{title}</span>
       {kinds.map((k) => (
-        <button key={k} type="button" draggable title={`${KIND_HINT[k]} — drag onto the screen or click to add`}
-          onDragStart={(e) => { e.dataTransfer.setData(DND_TYPE, k); e.dataTransfer.effectAllowed = "copy"; }}
-          onClick={() => onAdd(k)}
-          style={{ padding: "3px 10px", borderRadius: 12, border: `1px solid ${p.border}`, background: p.surface, color: p.text, fontSize: 12, cursor: "grab" }}>
+        <button key={k} type="button" title={`${KIND_HINT[k]} — drag onto the screen or click to add`}
+          onPointerDown={(e) => { if (e.button !== 0) return; e.preventDefault(); onStart(k, e.clientX, e.clientY); }}
+          // Keyboard activation only (detail 0): pointer clicks are handled by the drag.
+          onClick={(e) => { if (e.detail === 0) onAdd(k); }}
+          style={{ touchAction: "none", userSelect: "none", padding: "3px 10px", borderRadius: 12, border: `1px solid ${p.border}`, background: p.surface, color: p.text, fontSize: 12, cursor: "grab" }}>
           {KIND_LABEL[k]}
         </button>
       ))}

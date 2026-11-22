@@ -1,5 +1,5 @@
 import {
-  ArrowUp, Copy, Download, File, FileInput, Folder, FolderInput, FolderPlus, Move, Pencil, Play, RefreshCw, Trash2, Upload,
+  ArrowUp, Copy, Download, FileInput, Folder, FolderInput, FolderPlus, Move, Pencil, Play, RefreshCw, Trash2, Upload,
 } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { DirEntry } from "../../device/protocol";
@@ -15,10 +15,12 @@ import {
 import { EmptyNote } from "../components/EmptyNote";
 import { IconButton } from "../components/IconButton";
 import { InlineInput } from "../components/InlineInput";
-import { ListRow, RowIcon, RowLabel } from "../components/ListRow";
+import { ListRow, RowLabel } from "../components/ListRow";
 import { PanelHeader } from "../components/PanelHeader";
 import { useInlineRename } from "../hooks/useInlineRename";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { DeviceFileIcon } from "./FileIcon";
+import { fileKindByName } from "./fileKind";
 import { useDeviceFiles } from "./useDeviceFiles";
 
 export function DeviceFilesTab({ active }: { active: boolean }) {
@@ -160,13 +162,13 @@ export function DeviceFilesTab({ active }: { active: boolean }) {
           return (
             <ListRow
               key={e.name}
-              title={devJoin(cwd, e.name)}
+              title={e.isDir ? devJoin(cwd, e.name) : `${devJoin(cwd, e.name)} · ${fileKindByName(e.name).label}`}
               padX={10} gap={6}
               onClick={() => { if (e.isDir) setCwd(devJoin(cwd, e.name)); }}
               onDoubleClick={() => { if (!e.isDir && !disabled) void op("load file", () => loadDeviceFileIntoProject(devJoin(cwd, e.name), projectId), false); }}
               onContextMenu={(ev) => entryMenu(ev, e)}
             >
-              <RowIcon color={e.isDir ? "#d97706" : undefined}>{e.isDir ? <Folder size={13} /> : <File size={13} />}</RowIcon>
+              <DeviceFileIcon name={e.name} isDir={e.isDir} />
               {isRenaming && rename.inputProps
                 ? <InlineInput {...rename.inputProps} />
                 : <RowLabel style={{ fontWeight: e.isDir ? 600 : 400 }}>{e.name}</RowLabel>}

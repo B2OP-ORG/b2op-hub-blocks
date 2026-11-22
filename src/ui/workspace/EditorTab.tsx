@@ -1,7 +1,7 @@
 import { usePalette } from "../theme";
 
 /** One tab in the editor tab bar (file or doc / example), with a close button. */
-export function EditorTab({ active, title, italic, padLeft = 11, gap = 4, dirty, onClick, onClose, onDoubleClick, onContextMenu, drag, dropSide, children }: {
+export function EditorTab({ active, title, italic, padLeft = 9, gap = 5, dirty, onClick, onClose, onDoubleClick, onContextMenu, drag, dropSide, children }: {
   active: boolean;
   title: string;
   /** Non-file tabs (docs, example previews). */

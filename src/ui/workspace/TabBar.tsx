@@ -16,6 +16,7 @@ import { useInlineRename } from "../hooks/useInlineRename";
 import { fileModeMenuItem } from "../editor/modeSwitch";
 import { fileHasPythonPanel } from "./pythonPanel";
 import { EditorTab, TabLabel } from "./EditorTab";
+import { FileIcon } from "../sidebar/FileIcon";
 
 const TAB_DND_TYPE = "application/x-b2op-editor-tab";
 type TabGroup = "file" | "extra";
@@ -153,6 +154,7 @@ export function TabBar() {
             drag={isRenaming ? undefined : reorder.handlers("file", fileId)}
             dropSide={reorder.dropSide("file", fileId)}
           >
+            <FileIcon file={file} size={12} />
             {isRenaming && rename.inputProps ? <InlineInput {...rename.inputProps} /> : <TabLabel>{baseName(file.name)}</TabLabel>}
           </EditorTab>
         );
@@ -164,7 +166,7 @@ export function TabBar() {
             key={t.id}
             active={t.id === activeExtraTab}
             title={t.kind === "example" ? `Example preview (read-only): ${t.ref}` : `Docs: ${t.title}`}
-            italic padLeft={9} gap={5}
+            italic
             onClick={() => useApp.getState().openExtraTab(t)}
             onClose={close}
             drag={reorder.handlers("extra", t.id)}

@@ -129,10 +129,13 @@ function dedupe(pts: [number, number][]): [number, number][] {
   return pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
 }
 
-/** Clockwise sweep from a0 to a1 in degrees (0..360; equal angles = full circle). */
+/**
+ * Clockwise sweep from a0 to a1 in degrees, as lv_draw_arc sees it: equal
+ * angles draw nothing, an end exactly 360° after the start is a full circle.
+ */
 export function sweepOf(a0: number, a1: number): number {
-  const s = (((a1 - a0) % 360) + 360) % 360;
-  return s === 0 ? 360 : s;
+  if (a1 - a0 === 360) return 360;
+  return (((a1 - a0) % 360) + 360) % 360;
 }
 
 /**
@@ -149,25 +152,53 @@ export function lvArcCircle(w: Pick<SceneWidget, "w" | "h">): { cx: number; cy: 
 export const LV_ARC_WIDTH = 12;
 
 /**
- * Arc stroke: an elliptical arc filling the box (stroke inside it), drawn on
- * the hub as an lv.line through these whole-pixel points.
+ * Arcs stretched to their box (arc strokes always, gauges optionally): LVGL
+ * draws a square arc of the smaller side and scales it with
+ * transform_scale_x / _y (256 = 1×, pivot = top-left corner).
  */
-export function ellipseArcPoints(w: Pick<SceneWidget, "w" | "h" | "width" | "startAngle" | "endAngle" | "rotation">): [number, number][] {
-  const lw = w.width ?? 3;
-  const rx = Math.max(0, (w.w - lw) / 2), ry = Math.max(0, (w.h - lw) / 2);
-  const cx = w.w / 2, cy = w.h / 2;
-  const a0 = (w.startAngle ?? 180) + (w.rotation ?? 0);
-  const span = sweepOf(w.startAngle ?? 180, w.endAngle ?? 0);
-  // Segments of about 3 px along the ellipse.
-  const perimeter = Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));
-  const steps = Math.max(2, Math.min(180, Math.ceil((perimeter * span) / 360 / 3)));
-  const out: [number, number][] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = ((a0 + (span * i) / steps) * Math.PI) / 180;
-    const p: [number, number] = [Math.round(cx + rx * Math.cos(t)), Math.round(cy + ry * Math.sin(t))];
-    const last = out[out.length - 1];
-    if (!last || last[0] !== p[0] || last[1] !== p[1]) out.push(p);
+export function arcStretch(w: Pick<SceneWidget, "kind" | "w" | "h" | "stretch">): { s: number; sx: number; sy: number } | null {
+  if (w.kind !== "arcline" && !(w.kind === "arc" && w.stretch)) return null;
+  const s = Math.max(1, Math.min(w.w, w.h));
+  return { s, sx: Math.round((w.w * 256) / s), sy: Math.round((w.h * 256) / s) };
+}
+
+/** Points of a line widget as drawn (a closed line ends back at its first point). */
+export function linePoints(w: Pick<SceneWidget, "points" | "closed">): [number, number][] {
+  const pts = w.points ?? [];
+  return w.closed && pts.length > 2 ? [...pts, pts[0]] : pts;
+}
+
+/**
+ * Triangles filling a closed polygon (ear clipping; self-crossing shapes fall
+ * back to a fan for what is left). Flat [x1, y1, x2, y2, x3, y3, …].
+ */
+export function triangulate(points: [number, number][]): number[] {
+  const pts = points.filter((p, i) => i === 0 || p[0] !== points[i - 1][0] || p[1] !== points[i - 1][1]);
+  if (pts.length > 1 && pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1]) pts.pop();
+  if (pts.length < 3) return [];
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; area += a[0] * b[1] - b[0] * a[1]; }
+  const idx = pts.map((_, i) => i);
+  if (area < 0) idx.reverse();
+  const cross = (a: number[], b: number[], c: number[]) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const inside = (p: number[], a: number[], b: number[], c: number[]) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
+  const out: number[] = [];
+  let guard = idx.length * idx.length;
+  while (idx.length > 3 && guard-- > 0) {
+    let cut = false;
+    for (let i = 0; i < idx.length; i++) {
+      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
+      const a = pts[ia], b = pts[ib], c = pts[ic];
+      if (cross(a, b, c) <= 0) continue; // reflex or flat corner
+      if (idx.some((j) => j !== ia && j !== ib && j !== ic && inside(pts[j], a, b, c))) continue;
+      out.push(...a, ...b, ...c);
+      idx.splice(i, 1);
+      cut = true;
+      break;
+    }
+    if (!cut) break;
   }
+  for (let i = 1; i + 1 < idx.length; i++) out.push(...pts[idx[0]], ...pts[idx[i]], ...pts[idx[i + 1]]);
   return out;
 }
 

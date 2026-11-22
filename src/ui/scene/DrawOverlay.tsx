@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { SCREEN_H, SCREEN_W, defaultsFor } from "../../scene/model";
 import { simplifyPoints } from "../../scene/geometry";
 import { usePalette } from "../theme";
+import { openContextMenu } from "../components/menuStore";
 import { MARGIN, type DrawTool } from "./constants";
 import { arcPath } from "./lvStyle";
 
@@ -13,7 +14,7 @@ type Pt = [number, number];
 
 /** A finished drawing, in screen coordinates. */
 export type DrawResult =
-  | { kind: "line"; points: Pt[] }
+  | { kind: "line"; points: Pt[]; closed?: boolean }
   | { kind: "rect" | "ellipse" | "arcline"; x: number; y: number; w: number; h: number };
 
 /** Drags shorter than this (LCD px) count as a click: a default-size shape. */
@@ -55,10 +56,11 @@ export function DrawOverlay({ tool, scale, onCommit, onCancel }: {
   const live = useRef({ pts, onCommit, onCancel });
   live.current = { pts, onCommit, onCancel };
 
-  const finishPolyline = (list: Pt[]) => {
+  /** End the polyline (closed: joined back to the first point; needs 3 points). */
+  const finishPolyline = (list: Pt[], closed = false) => {
     const clean = list.filter((q, i) => i === 0 || !sameAsLast(list.slice(0, i), q));
     setPts([]);
-    if (clean.length >= 2) onCommit({ kind: "line", points: clean });
+    if (clean.length >= 2) live.current.onCommit({ kind: "line", points: clean, ...(closed && clean.length >= 3 ? { closed: true } : {}) });
   };
 
   useEffect(() => {
@@ -102,6 +104,8 @@ export function DrawOverlay({ tool, scale, onCommit, onCancel }: {
     setShift(e.shiftKey);
     const q = at(e);
     if (tool === "polyline") {
+      // Clicking the first point again closes the loop.
+      if (pts.length >= 3 && Math.hypot(q[0] - pts[0][0], q[1] - pts[0][1]) <= 3 / scale * 3) { finishPolyline(pts, true); return; }
       const last = pts[pts.length - 1];
       const next = last && e.shiftKey ? snap45(last, q) : q;
       if (!sameAsLast(pts, next)) setPts([...pts, next]);
@@ -184,7 +188,19 @@ export function DrawOverlay({ tool, scale, onCommit, onCancel }: {
       onPointerCancel={() => { setStart(null); setPenDown(false); if (tool === "pen") setPts([]); }}
       onDoubleClick={(e) => { e.stopPropagation(); if (tool === "polyline") finishPolyline(pts); }}
       // Right-click ends a polyline (no context menu while drawing).
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (tool === "polyline" && pts.length) finishPolyline(pts); }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (tool !== "polyline" || !pts.length) return;
+        const list = pts;
+        openContextMenu(e, [
+          { label: "Finish", hint: "Enter", onSelect: () => finishPolyline(list) },
+          list.length >= 3 && { label: "Close loop", hint: "click start", onSelect: () => finishPolyline(list, true) },
+          "separator",
+          { label: "Undo last point", hint: "Backspace", onSelect: () => setPts(list.slice(0, -1)) },
+          { label: "Cancel", hint: "Esc", onSelect: () => setPts([]) },
+        ]);
+      }}
       style={{ position: "absolute", left: -MARGIN, top: -MARGIN, width: W, height: H, cursor: "crosshair", touchAction: "none", zIndex: 10 }}>
       <svg width={W} height={H} viewBox={`${-MARGIN} ${-MARGIN} ${W} ${H}`} style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }}>
         {shape}

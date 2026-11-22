@@ -40,7 +40,7 @@ export type DrawTool = "line" | "polyline" | "pen" | "rect" | "ellipse" | "arcli
 
 export const DRAW_TOOLS: { tool: DrawTool; label: string; icon: LucideIcon; hint: string }[] = [
   { tool: "line", label: "Line", icon: Slash, hint: "Drag to draw a straight line (Shift: 45° steps)" },
-  { tool: "polyline", label: "Polyline", icon: Spline, hint: "Click each point; right-click, double-click or Enter finishes (Backspace: undo point, Esc: cancel)" },
+  { tool: "polyline", label: "Polyline", icon: Spline, hint: "Click each point; double-click or Enter finishes, click the first point to close the loop, right-click for more" },
   { tool: "pen", label: "Pen", icon: PenLine, hint: "Draw freehand" },
   { tool: "rect", label: "Rectangle", icon: Square, hint: "Drag to draw a box (Shift: square)" },
   { tool: "ellipse", label: "Circle / oval", icon: Circle, hint: "Drag to draw a circle (Shift: round; LVGL draws ovals as pills)" },
@@ -58,3 +58,17 @@ export const PALETTE_CATEGORIES: { id: string; title: string; kinds: SceneKind[]
 
 /** Property groups folded until opened (remembered per user, see useFoldState). */
 export const PROP_FOLDED_BY_DEFAULT = ["points"];
+
+/** Arc shape presets (start → end, clockwise, 0° = right). */
+export const ARC_PRESETS: { id: string; label: string; start: number; end: number }[] = [
+  { id: "full", label: "Full circle", start: 0, end: 360 },
+  { id: "gauge", label: "Gauge (¾ ring, open at the bottom)", start: 135, end: 45 },
+  { id: "top", label: "Top half", start: 180, end: 0 },
+  { id: "bottom", label: "Bottom half", start: 0, end: 180 },
+  { id: "left", label: "Left half", start: 90, end: 270 },
+  { id: "right", label: "Right half", start: 270, end: 90 },
+  { id: "tr", label: "Quarter: top right", start: 270, end: 0 },
+  { id: "tl", label: "Quarter: top left", start: 180, end: 270 },
+  { id: "br", label: "Quarter: bottom right", start: 0, end: 90 },
+  { id: "bl", label: "Quarter: bottom left", start: 90, end: 180 },
+];

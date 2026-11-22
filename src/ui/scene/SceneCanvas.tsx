@@ -20,6 +20,8 @@ export interface SceneNodeContext {
   scale: number;
   panCursor: string | undefined;
   overTrash: boolean;
+  /** 0..1 while the dragged widget nears the toolbox bin (tints it red). */
+  dragHeat: number;
   /** Start a drag; mode "point" drags point `point` of a line (`w` may already hold a newly inserted point). */
   onBeginDrag: (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => void;
   /** Remove point `i` of a line. */
@@ -54,6 +56,7 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
         const isSel = !preview && w.uid === ctx.selected;
         const focused = !!stop && stop.uid === w.uid;
         const off = contentOffset(w);
+        const lineOff = w.kind === "line" ? (w.width ?? 2) / 2 : 0;
         const outside = !preview && isOutside(ctx.shownDoc, w);
         return (
           <div key={w.uid}
@@ -62,7 +65,8 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
             onPointerUp={ctx.onDragEnd}
             onPointerCancel={ctx.onDragEnd}
             style={{
-              position: "absolute", left: w.x, top: w.y, width: size.w, height: size.h,
+              // Lines: the box starts half a stroke up-left so the stroke (centred on the points, as in LVGL) is inside it.
+              position: "absolute", left: w.x - lineOff, top: w.y - lineOff, width: size.w, height: size.h,
               outline: isSel ? `${1 / scale * 2}px solid ${p.accent}` : undefined, outlineOffset: 1 / scale,
               opacity: (w.opacity ?? 100) / 100 * (drag?.uid === w.uid && ctx.overTrash ? 0.3 : outside ? 0.4 : !preview && w.hidden ? 0.45 : 1),
               ...(outside && !isSel ? { outline: `${2 / scale}px dashed ${p.danger}` } : {}),
@@ -79,6 +83,9 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
               <div style={{ position: "absolute", left: off.x, top: off.y, width: w.w - off.x, height: w.h - off.y, overflow: "hidden" }}>
                 <SceneLevel ctx={ctx} parent={w.uid} tab={w.kind === "tabview" ? tabShown(ctx, w) : undefined} />
               </div>
+            )}
+            {drag?.uid === w.uid && drag.mode === "move" && ctx.dragHeat > 0 && (
+              <div style={{ position: "absolute", inset: 0, background: "#ef4444", opacity: ctx.dragHeat * 0.65, pointerEvents: "none" }} />
             )}
             {isSel && w.kind === "line" && <LineHandles ctx={ctx} w={w} w0={w0} />}
             {isSel && w.crop && (w.kind === "arc" || w.kind === "arcline") && <CropHandles ctx={ctx} w={w} w0={w0} />}

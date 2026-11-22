@@ -47,8 +47,8 @@ export function PaletteGroup<K extends string>({ title, kinds, label, hint, chip
 }
 
 /** Scrolling column of palette groups (or a hint) inside an editor's side panel. */
-export function PalettePanel({ children }: { children: React.ReactNode }) {
-  return <div className={styles.panel}>{children}</div>;
+export function PalettePanel({ children, ref }: { children: React.ReactNode; ref?: React.Ref<HTMLDivElement> }) {
+  return <div ref={ref} className={styles.panel}>{children}</div>;
 }
 
 /** Muted message shown in the palette panel instead of the palette. */

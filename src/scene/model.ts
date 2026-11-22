@@ -87,6 +87,10 @@ export interface SceneWidget {
   icons?: string[];
   /** line: points relative to the widget position. */
   points?: [number, number][];
+  /** line: joined back to its first point (and filled with `bg` when set). */
+  closed?: boolean;
+  /** arc: stretch the circle to fill a non-square box (LVGL transform; arc strokes always do). */
+  stretch?: boolean;
   /** line width / arc width. */
   width?: number;
   /** line / arc / arc stroke: round line ends (absent = line: true, arcs: theme default). */
@@ -252,7 +256,19 @@ export function parseScene(json: string): SceneDoc {
   const widgets = r.widgets
     .filter((w): w is SceneWidget =>
       !!w && typeof w === "object" && typeof w.kind === "string" && w.kind in KIND_LABEL && typeof w.name === "string")
-    .map((w) => ({ ...defaultsFor(w.kind), ...w, uid: typeof w.uid === "string" && w.uid ? w.uid : newUid() }));
+    .map((w) => {
+      // Only a missing position / size falls back to a default: every other field
+      // absent means "LVGL default" (e.g. a cleared fill), so it must stay absent.
+      const d = defaultsFor(w.kind);
+      return {
+        ...w,
+        x: typeof w.x === "number" ? w.x : 0,
+        y: typeof w.y === "number" ? w.y : 0,
+        w: typeof w.w === "number" ? w.w : d.w ?? 10,
+        h: typeof w.h === "number" ? w.h : d.h ?? 10,
+        uid: typeof w.uid === "string" && w.uid ? w.uid : newUid(),
+      };
+    });
   // Drop dangling parents (container deleted by hand-editing).
   const uids = new Set(widgets.map((w) => w.uid));
   for (const w of widgets) if (w.parent && !uids.has(w.parent)) delete w.parent;
@@ -320,8 +336,8 @@ export function helperGlobals(w: Pick<SceneWidget, "kind" | "name">): string[] {
     case "chart": return [`${w.name}_series`];
     case "image": return [`${w.name}_dsc`];
     case "tabview": return [`${w.name}_tabs`];
-    case "line": return [`${w.name}_points`];
-    case "arcline": return [`${w.name}_points`, `${w.name}_clip`];
+    case "line": return [`${w.name}_points`, `${w.name}_tris`];
+    case "arcline": return [`${w.name}_clip`];
     case "arc": return [`${w.name}_clip`];
     case "list": return [`${w.name}_buttons`];
     default: return [];

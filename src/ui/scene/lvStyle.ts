@@ -66,6 +66,7 @@ export function arcPath(cx: number, cy: number, r: number, a0: number, a1: numbe
   let sweep = a1 - a0;
   while (sweep < 0) sweep += 360;
   while (sweep > 360) sweep -= 360;
+  if (sweep === 0) return "";
   if (sweep >= 359.9) sweep = 359.9;
   const x0 = cx + r * Math.cos(rad(a0)), y0 = cy + r * Math.sin(rad(a0));
   const x1 = cx + r * Math.cos(rad(a0 + sweep)), y1 = cy + r * Math.sin(rad(a0 + sweep));
@@ -76,7 +77,7 @@ export function arcPath(cx: number, cy: number, r: number, a0: number, a1: numbe
  * Background and indicator angles of an LVGL arc (rotation applied), like
  * lv_arc does for its modes. Indicator is null when it would be empty.
  */
-export function arcAngles(w: SceneWidget): { bg: [number, number]; ind: [number, number] | null } {
+export function arcAngles(w: SceneWidget): { bg: [number, number] | null; ind: [number, number] | null } {
   const rot = w.rotation ?? 0;
   const a0 = (w.startAngle ?? 135) + rot;
   const span = sweepOf(w.startAngle ?? 135, w.endAngle ?? 45);
@@ -95,5 +96,5 @@ export function arcAngles(w: SceneWidget): { bg: [number, number]; ind: [number,
     default:
       ind = f <= 0 ? null : [a0, a0 + f * span];
   }
-  return { bg: [a0, a0 + span], ind };
+  return { bg: span ? [a0, a0 + span] : null, ind: span ? ind : null };
 }

@@ -37,8 +37,10 @@ import { PREVIEW_KEYS, applyPreviewKey, focusStops, startPreviewState, type Prev
 import { SceneCanvas, type SceneNodeContext } from "./SceneCanvas";
 import { sceneOps } from "./sceneOps";
 import { SceneProperties } from "./SceneProperties";
-import { TrashTarget } from "./TrashTarget";
+import { ToolboxBin, TrashTarget } from "./TrashTarget";
 import { usePaletteDrag, useTrash, type NewDrag } from "./usePaletteDrag";
+
+type DOMRectLike = { left: number; top: number; right: number; bottom: number };
 import { WidgetProperties } from "./WidgetProperties";
 import { SceneAssetContext } from "./sceneAssets";
 
@@ -68,7 +70,22 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const widgetDrag = useWidgetDrag<SceneWidget>(canvasRef);
   // Refreshed every render below (needs the current scene).
   const dropNew = useRef<(d: NewDrag) => void>(() => {});
-  const paletteDrag = usePaletteDrag(trash, (d) => dropNew.current(d));
+  const paletteRef = useRef<HTMLDivElement>(null);
+  /** Moving a widget: 0..1 as the pointer nears the toolbox (1 = over it: drop deletes). */
+  const [toolboxHeat, setToolboxHeat] = useState(0);
+  /** Moving a widget: its client rect follows the pointer from where it was at the start. */
+  const dragRect = useRef<{ rect: DOMRect; x: number; y: number } | null>(null);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const ghostRectFn = useRef<(d: NewDrag, x: number, y: number) => DOMRectLike | null>(() => null);
+  const paletteDrag = usePaletteDrag(trash, (d) => dropNew.current(d), (d, x, y) => ghostRectFn.current(d, x, y),
+    () => paletteRef.current?.getBoundingClientRect());
+  /** 0..1 as client point (x, y) nears the toolbox (1 = over it). */
+  const heatAt = (x: number, y: number) => {
+    const pr = paletteRef.current?.getBoundingClientRect();
+    if (!pr) return 0;
+    const dist = Math.hypot(Math.max(pr.left - x, 0, x - pr.right), Math.max(pr.top - y, 0, y - pr.bottom));
+    return Math.max(0, Math.min(1, 1 - dist / 120));
+  };
   const { newDrag } = paletteDrag;
   const projectId = useApp((s) => s.mfp.id);
   const cv = useCanvasView({
@@ -123,14 +140,24 @@ export function SceneView({ file }: { file: ProjectFile }) {
   // ── Palette drag (new widget) ───────────────────────────────────────────────
   /** The widget a palette drag would add (for the ghost and the drop maths). */
   const template = newDrag ? makeWidget(newDrag.kind, 0, 0, doc) : null;
+  // A new widget taken back to the toolbox is put back (shown like the bin).
+  const newHeat = newDrag?.moved && newDrag.away ? heatAt(newDrag.x, newDrag.y) : 0;
   dropNew.current = (d) => {
     if (!d.moved) { ops.addDefault(d.kind); return; } // a click
     if (trash.overRef.current) return;
     const canvas = canvasRef.current?.getBoundingClientRect(), scr = screenRef.current?.getBoundingClientRect();
     if (!canvas || !scr || d.x < canvas.left || d.x > canvas.right || d.y < canvas.top || d.y > canvas.bottom) return;
+    const w = makeWidget(d.kind, 0, 0, doc);
+    const size = drawnSize(w);
+    // The ghost is centred on the pointer: keep that spot under the pointer
+    // (a line's box starts half a stroke before its position, see SceneCanvas).
+    const lineOff = w.kind === "line" ? (w.width ?? 2) / 2 : 0;
+    ops.addAt(d.kind, (d.x - scr.left) / scale, (d.y - scr.top) / scale, size.w / 2 - lineOff, size.h / 2 - lineOff);
+  };
+  ghostRectFn.current = (d, x, y) => {
     const size = drawnSize(makeWidget(d.kind, 0, 0, doc));
-    // The ghost is centred on the pointer: keep that spot under the pointer.
-    ops.addAt(d.kind, (d.x - scr.left) / scale, (d.y - scr.top) / scale, size.w / 2, size.h / 2);
+    const w = size.w * scale, h = size.h * scale;
+    return { left: x - w / 2, top: y - h / 2, right: x + w / 2, bottom: y + h / 2 };
   };
 
   // ── Widget drag (move / resize) ─────────────────────────────────────────────
@@ -138,6 +165,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => {
     if (preview || tool || e.button !== 0) return;
     setSelected(w.uid);
+    dragRect.current = mode === "move" ? { rect: (e.currentTarget as HTMLElement).getBoundingClientRect(), x: e.clientX, y: e.clientY } : null;
     widgetDrag.begin(e, w, mode, point);
   };
   const removePoint = (w: SceneWidget, i: number) => {
@@ -146,7 +174,14 @@ export function SceneView({ file }: { file: ProjectFile }) {
   };
   const onDragMove = (e: React.PointerEvent) => {
     if (!drag) return;
-    if (drag.mode === "move") trash.set(trash.hit(e.clientX, e.clientY));
+    if (drag.mode === "move") {
+      const st = dragRect.current;
+      const rect = st && { left: st.rect.left + e.clientX - st.x, top: st.rect.top + e.clientY - st.y, right: st.rect.right + e.clientX - st.x, bottom: st.rect.bottom + e.clientY - st.y };
+      trash.set(trash.hit(e.clientX, e.clientY, rect));
+      // Toolbox as a bin: red-hot as the pointer comes within 120 px of it.
+      setToolboxHeat(heatAt(e.clientX, e.clientY));
+      setPointer({ x: e.clientX, y: e.clientY });
+    }
     const step = e.shiftKey ? 4 : 1;
     const sn = (v: number) => Math.round(v / step) * step;
     widgetDrag.move(e, scale, (o, mode, dx, dy, point) => mode === "crop"
@@ -167,7 +202,10 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const endDrag = () => {
     const d = widgetDrag.end();
     if (!d) return;
-    if (d.mode === "move" && trash.overRef.current) { trash.set(false); ops.remove(d.orig.uid); return; }
+    const heat = toolboxHeat;
+    setToolboxHeat(0);
+    setPointer(null);
+    if (d.mode === "move" && (trash.overRef.current || heat >= 1)) { trash.set(false); ops.remove(d.orig.uid); return; }
     const { cur } = d;
     if (d.mode === "crop") {
       if (JSON.stringify(d.orig.crop) !== JSON.stringify(cur.crop)) ops.update(cur.uid, { crop: cur.crop });
@@ -212,7 +250,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const sel = preview ? undefined : doc.widgets.find((w) => w.uid === selected);
 
   const nodeCtx: SceneNodeContext = {
-    doc, shownDoc, preview, selected, stop, drag, scale, panCursor, overTrash: trash.over,
+    doc, shownDoc, preview, selected, stop, drag, scale, panCursor, overTrash: trash.over || toolboxHeat >= 1, dragHeat: toolboxHeat,
     onBeginDrag: beginDrag, onDragMove, onDragEnd: endDrag, onRemovePoint: removePoint,
   };
   /** Image widget src → its project image (resolved next to the scene file). */
@@ -247,7 +285,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
           onChange={(patch) => ops.update(sel.uid, patch)} onDelete={() => ops.remove(sel.uid)} />
       : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch })} />,
     palette: (
-      <PalettePanel>
+      <PalettePanel ref={paletteRef}>
         {preview ? (
           <PaletteHint>{preview.log}</PaletteHint>
         ) : (
@@ -311,7 +349,15 @@ export function SceneView({ file }: { file: ProjectFile }) {
           </div>
         </div>
 
-        {newDrag?.moved && template && <PaletteDragGhost widget={template} x={newDrag.x} y={newDrag.y} scale={scale} overTrash={trash.over} />}
+        {newDrag?.moved && template && <PaletteDragGhost widget={template} x={newDrag.x} y={newDrag.y} scale={scale} overTrash={trash.over} heat={newHeat} />}
+        {/* A widget dragged out of the canvas (towards the toolbox) keeps following the pointer. */}
+        {drag?.mode === "move" && pointer && dragRect.current && (() => {
+          const c = canvasRef.current?.getBoundingClientRect();
+          if (!c || (pointer.x >= c.left && pointer.x <= c.right && pointer.y >= c.top && pointer.y <= c.bottom)) return null;
+          const st = dragRect.current, r = st.rect;
+          return <PaletteDragGhost widget={drag.cur} x={r.left + r.width / 2 + pointer.x - st.x} y={r.top + r.height / 2 + pointer.y - st.y} scale={scale} overTrash={trash.over} heat={toolboxHeat} />;
+        })()}
+        {Math.max(toolboxHeat, newHeat) > 0 && <ToolboxBin rect={paletteRef.current?.getBoundingClientRect()} heat={Math.max(toolboxHeat, newHeat)} putBack={newHeat > 0} />}
 
         <ToolColumns tp={tp} side="right" nodes={tools} emptyHint="Properties can be edited in edit mode." />
       </div>

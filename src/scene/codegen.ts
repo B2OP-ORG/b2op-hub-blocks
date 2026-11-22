@@ -6,7 +6,7 @@
 // Only `lvgl` is imported, so the module also works from plain Python files.
 
 import { ARC_MODES, BAR_MODES, LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
-import { contentOffset, effectiveCrop, ellipseArcPoints, QR_CAPACITY_M } from "./geometry";
+import { arcStretch, contentOffset, effectiveCrop, linePoints, QR_CAPACITY_M, triangulate } from "./geometry";
 
 const I = "    ";
 const py = (s: string) => JSON.stringify(s); // JSON string literals are valid Python literals
@@ -63,6 +63,14 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
     if (w.letterSpace) style("text_letter_space", num(w.letterSpace, 0));
     if (w.lineSpace) style("text_line_space", num(w.lineSpace, 0));
   };
+  // Stretched arcs: a square arc of the smaller side, scaled to the box.
+  const stretch = arcStretch(w);
+  const arcSize = () => {
+    if (!stretch) { size(); return; }
+    L(`${v}.set_size(${stretch.s}, ${stretch.s})`);
+    if (stretch.sx !== 256) style("transform_scale_x", String(stretch.sx));
+    if (stretch.sy !== 256) style("transform_scale_y", String(stretch.sy));
+  };
   const arcShape = () => {
     if (w.startAngle !== undefined || w.endAngle !== undefined) L(`${v}.set_bg_angles(${num(w.startAngle, 135)}, ${num(w.endAngle, 45)})`);
     if (w.rotation) L(`${v}.set_rotation(${num(w.rotation, 0)})`);
@@ -101,7 +109,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       bg(); box(); textColor(); text();
       break;
     case "line": {
-      const pts = (w.points ?? []).map(([x, y]) => `{"x": ${num(x, 0)}, "y": ${num(y, 0)}}`);
+      const pts = linePoints(w).map(([x, y]) => `{"x": ${num(x, 0)}, "y": ${num(y, 0)}}`);
       L(`${v}_points = [${pts.join(", ")}]`);
       L(`${v} = lv.line(${parent})`);
       pos();
@@ -110,6 +118,11 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       if (w.color) style("line_color", color(w.color));
       style("line_rounded", w.rounded === false ? "False" : "True");
       if (w.dashWidth && w.dashGap) { style("line_dash_width", num(w.dashWidth, 0)); style("line_dash_gap", num(w.dashGap, 0)); }
+      if (w.closed && w.bg) {
+        // Fill: triangles drawn under the line (lv.line has no fill).
+        L(`${v}_tris = (${triangulate(linePoints(w)).join(", ")})`);
+        L(`${v}.add_event_cb(lambda e: _fill_tris(e, ${v}_tris, ${color(w.bg)}), lv.EVENT.DRAW_MAIN_BEGIN, None)`);
+      }
       break;
     }
     case "bar":
@@ -121,7 +134,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       break;
     case "arc":
       L(`${v} = lv.arc(${parent})`);
-      pos(); size();
+      pos(); arcSize();
       arcShape();
       if (w.arcMode && w.arcMode !== "normal") L(`${v}.set_mode(${ARC_MODES.indexOf(w.arcMode)})  # ${w.arcMode}`);
       range();
@@ -132,18 +145,16 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       if (w.color) style("arc_color", color(w.color), "lv.PART.INDICATOR");
       textColor(); text();
       break;
-    case "arcline": {
-      // An elliptical arc as a polyline (lv.arc can only draw circles).
-      const pts = ellipseArcPoints(w).map(([x, y]) => `{"x": ${x}, "y": ${y}}`);
-      L(`${v}_points = [${pts.join(", ")}]`);
-      L(`${v} = lv.line(${parent})`);
-      pos(); size();
-      L(`${v}.set_points(${v}_points, ${pts.length})`);
-      style("line_width", num(w.width, 3));
-      style("line_color", color(w.color, "0xFFFFFF"));
-      style("line_rounded", w.rounded === false ? "False" : "True");
+    case "arcline":
+      // A background-only lv.arc, stretched into an ellipse with a transform.
+      L(`${v} = lv.arc(${parent})`);
+      pos(); arcSize();
+      arcShape();
+      style("arc_opa", "lv.OPA.TRANSP", "lv.PART.INDICATOR");
+      style("arc_width", num(w.width, 3));
+      style("arc_rounded", w.rounded === false ? "False" : "True");
+      style("arc_color", color(w.color, "0xFFFFFF"));
       break;
-    }
     case "rect":
     case "ellipse":
       L(`${v} = lv.obj(${parent})`);
@@ -369,6 +380,25 @@ export function sceneToPython(doc: SceneDoc, moduleName: string): string {
     `${I}if cb:`,
     `${I}${I}cb(*args)`,
   ].join("\n"));
+
+  if (widgets.some((w) => w.kind === "line" && w.closed && w.bg)) {
+    parts.push([
+      `def _fill_tris(e, tris, color):`,
+      `${I}"""Fill a closed line: draw its triangles (x1, y1, x2, y2, x3, y3, …) inside the object."""`,
+      `${I}a = lv.area_t()`,
+      `${I}e.get_target_obj().get_coords(a)`,
+      `${I}d = lv.draw_triangle_dsc_t()`,
+      `${I}d.init()`,
+      `${I}d.color = color`,
+      `${I}d.opa = lv.OPA.COVER`,
+      `${I}layer = e.get_layer()`,
+      `${I}for i in range(0, len(tris), 6):`,
+      `${I}${I}d.p[0] = {"x": a.x1 + tris[i], "y": a.y1 + tris[i + 1]}`,
+      `${I}${I}d.p[1] = {"x": a.x1 + tris[i + 2], "y": a.y1 + tris[i + 3]}`,
+      `${I}${I}d.p[2] = {"x": a.x1 + tris[i + 4], "y": a.y1 + tris[i + 5]}`,
+      `${I}${I}lv.draw_triangle(layer, d)`,
+    ].join("\n"));
+  }
 
   if (widgets.some((w) => w.kind === "qrcode")) {
     parts.push([

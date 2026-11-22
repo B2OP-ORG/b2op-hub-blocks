@@ -3,7 +3,7 @@ import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
 import { DISPLAY_KINDS, INPUT_KINDS, SCENE_HEADER_PREFIX, emptyScene, makeWidget, nameProblem, parseScene, splitSceneHeader, uniqueName, withSceneHeader, moduleNameProblem, type SceneDoc, type SceneKind, type SceneWidget } from "../src/scene/model";
-import { absolutePos, isOutside, clampedPos, qrLayout, drawnSize, normalizeLine, simplifyPoints, ellipseArcPoints, lvArcCircle, effectiveCrop, dragCropEdge } from "../src/scene/geometry";
+import { absolutePos, isOutside, clampedPos, qrLayout, drawnSize, normalizeLine, simplifyPoints, arcStretch, sweepOf, triangulate, lvArcCircle, effectiveCrop, dragCropEdge } from "../src/scene/geometry";
 import { sceneToPython } from "../src/scene/codegen";
 import { isSceneFile, projectScenes, resolveSceneSrc, sceneSrcFor } from "../src/scene/project";
 import { setScenes } from "../src/scene/registry";
@@ -34,7 +34,9 @@ describe("scene model", () => {
     }));
     expect(doc.widgets).toHaveLength(1);
     expect(doc.widgets[0].parent).toBeUndefined();
-    expect(doc.widgets[0].text).toBe("Text");
+    // Absent options stay absent (= LVGL default), they aren't refilled from the kind defaults.
+    expect(doc.widgets[0].text).toBeUndefined();
+    expect(doc.widgets[0].w).toBe(3);
   });
 
   it("names widgets label0, label1, … and validates names", () => {
@@ -162,6 +164,20 @@ describe("scene codegen", () => {
 });
 
 describe("scene shapes and styles", () => {
+  it("keeps cleared defaults cleared across a reload (e.g. no fill)", () => {
+    const doc = docWith("rect", "label");
+    delete doc.widgets[0].bg;
+    delete doc.widgets[1].color;
+    const back = splitSceneHeader(withSceneHeader(doc, "")).doc!;
+    expect(back.widgets[0].bg).toBeUndefined();
+    expect(back.widgets[1].color).toBeUndefined();
+    expect(sceneToPython(back, "s")).toContain("rect0.set_style_bg_opa(lv.OPA.TRANSP, 0)");
+    // A missing size still gets the kind's default.
+    const raw = JSON.parse(JSON.stringify(doc));
+    delete raw.widgets[0].w;
+    expect(parseScene(JSON.stringify(raw)).widgets[0].w).toBe(40);
+  });
+
   const one = (patch: Partial<SceneWidget>, kind: SceneKind) => {
     const doc = docWith(kind);
     Object.assign(doc.widgets[0], patch);
@@ -176,11 +192,17 @@ describe("scene shapes and styles", () => {
     expect(one({ bg: undefined }, "rect")).toContain("rect0.set_style_bg_opa(lv.OPA.TRANSP, 0)");
     expect(one({}, "ellipse")).toContain("ellipse0.set_style_radius(lv.RADIUS_CIRCLE, 0)");
     const arc = one({ w: 60, h: 20 }, "arcline");
-    expect(arc).toContain("arcline0 = lv.line(root)");
-    expect(arc).toMatch(/^arcline0_points = \[\{"x": \d+, "y": \d+\}/m);
-    expect(arc).toContain("arcline0.set_size(60, 20)");
-    expect(arc).toContain("arcline0.set_style_line_color(lv.color_hex(0xFFFFFF), 0)");
-    expect(arc).not.toContain("lv.arc(");
+    expect(arc).toContain("arcline0 = lv.arc(root)");
+    // A 20 px square arc stretched 3× wide (256 = 1×).
+    expect(arc).toContain("arcline0.set_size(20, 20)");
+    expect(arc).toContain("arcline0.set_style_transform_scale_x(768, 0)");
+    expect(arc).not.toContain("transform_scale_y");
+    expect(arc).toContain("arcline0.set_bg_angles(180, 0)");
+    expect(arc).toContain("arcline0.set_style_arc_opa(lv.OPA.TRANSP, lv.PART.INDICATOR)");
+    expect(arc).toContain("arcline0.set_style_arc_color(lv.color_hex(0xFFFFFF), 0)");
+    // Gauges stretch only when asked to.
+    expect(one({ w: 60, h: 30 }, "arc")).toContain("arc0.set_size(60, 30)");
+    expect(one({ w: 60, h: 30, stretch: true }, "arc")).toContain("arc0.set_style_transform_scale_x(512, 0)");
   });
 
   it("sets arc angles, mode, track colour and rounding", () => {
@@ -207,13 +229,30 @@ describe("scene shapes and styles", () => {
     expect(one({ opacity: 100 }, "label")).not.toContain("set_style_opa");
   });
 
-  it("draws arc strokes as elliptical arcs inside their box", () => {
-    const pts = ellipseArcPoints({ w: 100, h: 40, width: 4, startAngle: 180, endAngle: 0 });
-    expect(pts[0]).toEqual([2, 20]);
-    expect(pts[pts.length - 1]).toEqual([98, 20]);
-    // Top half: everything at or above the centre line, touching the top inside the stroke.
-    expect(Math.max(...pts.map((q) => q[1]))).toBe(20);
-    expect(Math.min(...pts.map((q) => q[1]))).toBe(2);
+  it("follows lv_draw_arc's angle rules and stretches with transforms", () => {
+    expect(sweepOf(180, 0)).toBe(180);
+    expect(sweepOf(0, 360)).toBe(360);
+    expect(sweepOf(90, 90)).toBe(0); // LVGL draws nothing
+    expect(arcStretch({ kind: "arcline", w: 40, h: 40 })).toEqual({ s: 40, sx: 256, sy: 256 });
+    expect(arcStretch({ kind: "arcline", w: 30, h: 45 })).toEqual({ s: 30, sx: 256, sy: 384 });
+    expect(arcStretch({ kind: "arc", w: 30, h: 45 })).toBeNull();
+  });
+
+  it("closes and fills lines with triangles", () => {
+    const square: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    expect(triangulate(square).length).toBe(12); // 2 triangles
+    const concave: [number, number][] = [[0, 0], [20, 0], [20, 20], [10, 5], [0, 20]];
+    const t = triangulate(concave);
+    expect(t.length).toBe(18); // 3 triangles
+    let area = 0;
+    for (let i = 0; i < t.length; i += 6) area += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+    expect(area).toBe(250); // 400 minus the 150 notch
+    const py = one({ points: square, closed: true, bg: "#ff0000" }, "line");
+    expect(py).toContain('line0_points = [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 10}, {"x": 0, "y": 10}, {"x": 0, "y": 0}]');
+    expect(py).toMatch(/^line0_tris = \((\d+, ){11}\d+\)$/m);
+    expect(py).toContain("line0.add_event_cb(lambda e: _fill_tris(e, line0_tris, lv.color_hex(0xFF0000)), lv.EVENT.DRAW_MAIN_BEGIN, None)");
+    expect(py).toContain("def _fill_tris(e, tris, color):");
+    expect(one({ points: square, closed: true }, "line")).not.toContain("_fill_tris");
   });
 
   it("puts lv_arc circles in the top-left corner of their box", () => {

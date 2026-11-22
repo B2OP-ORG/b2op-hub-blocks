@@ -27,10 +27,10 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
     setSelected(null);
   };
 
-  const add = (kind: SceneKind, x: number, y: number, parent?: string, tab?: number) => {
+  const add = (kind: SceneKind, x: number, y: number, parent?: string, tab?: number, clamp = true) => {
     const w = makeWidget(kind, x, y, doc, parent, tab);
-    // Always land (as far as it fits) inside the parent / screen.
-    Object.assign(w, clampedPos(doc, w));
+    // Clicks land (as far as it fits) inside the parent / screen; drops stay where they were dropped.
+    if (clamp) Object.assign(w, clampedPos(doc, w));
     commit([...doc.widgets, w]);
     setSelected(w.uid);
   };
@@ -60,7 +60,7 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
     /** Add a widget whose top-left is (offX, offY) up-left of screen point (px, py), in the container under that point. */
     addAt: (kind: SceneKind, px: number, py: number, offX = 0, offY = 0) => {
       const c = containerAt(px, py);
-      add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab);
+      add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab, false);
     },
 
     /** A shape drawn with a draw tool (screen coordinates), in the container under its top-left corner. */
@@ -69,9 +69,9 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
         const mx = Math.min(...r.points.map((q) => q[0])), my = Math.min(...r.points.map((q) => q[1]));
         const c = containerAt(mx, my);
         const w = makeWidget("line", 0, 0, doc, c.parent, c.tab);
-        // The drawing offsets points by half the line width: keep the stroke where it was drawn.
-        const off = Math.floor((w.width ?? 2) / 2);
-        Object.assign(w, { x: Math.round(c.x) - off, y: Math.round(c.y) - off, points: r.points.map(([x, y]) => [x - mx, y - my]) });
+        // LVGL draws the points relative to the line's position, stroke centred on them.
+        Object.assign(w, { x: Math.round(c.x), y: Math.round(c.y), points: r.points.map(([x, y]) => [x - mx, y - my]) });
+        if (r.closed) w.closed = true;
         commit([...doc.widgets, w]);
         setSelected(w.uid);
         return;

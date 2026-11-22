@@ -7,7 +7,7 @@ import { useContext, type CSSProperties } from "react";
 import { useAssetUrl } from "../hooks/useAssetUrl";
 import { SceneAssetContext } from "./sceneAssets";
 import { LONG_MODES, type SceneWidget } from "../../scene/model";
-import { LV_ARC_WIDTH, ellipseArcPoints, lineSize, lvArcCircle, qrLayout } from "../../scene/geometry";
+import { LV_ARC_WIDTH, arcStretch, lineSize, linePoints, lvArcCircle, qrLayout, triangulate } from "../../scene/geometry";
 import { CARD, FONT_FAMILY, LV, align, arcAngles, arcPath, boxCss, fill, fontCss, frac, lineHeightOf } from "./lvStyle";
 
 /** "#rrggbb" darkened like lv_color_mix(c, black, mix). */
@@ -60,11 +60,20 @@ export function SceneWidgetBody({ w, focused, focusItem, editing }: { w: SceneWi
       // Plain lv.obj: the theme's card (white, grey border, rounded).
       return <div style={{ ...fill, ...boxCss(w, CARD), ...ring }} />;
     case "line": {
-      const pts = w.points ?? [];
+      // The canvas places a line's box half a stroke up-left of its position
+      // (see SceneCanvas), so points sit at +off here: exactly where LVGL draws them.
+      const pts = linePoints(w);
       const s = lineSize(w);
       const off = (w.width ?? 2) / 2;
+      const tris = w.closed && w.bg ? triangulate(pts) : [];
+      const fillTris: React.ReactNode[] = [];
+      for (let i = 0; i < tris.length; i += 6) {
+        fillTris.push(<polygon key={i} points={`${tris[i] + off},${tris[i + 1] + off} ${tris[i + 2] + off},${tris[i + 3] + off} ${tris[i + 4] + off},${tris[i + 5] + off}`}
+          fill={w.bg} stroke={w.bg} strokeWidth={0.5} strokeLinejoin="round" />);
+      }
       return (
         <svg width={s.w} height={s.h} style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
+          {fillTris}
           <polyline points={pts.map((p) => `${p[0] + off},${p[1] + off}`).join(" ")} fill="none" stroke={w.color ?? LV.text}
             strokeWidth={w.width ?? 2} strokeLinecap={w.rounded === false ? "butt" : "round"} strokeLinejoin={w.rounded === false ? "miter" : "round"}
             strokeDasharray={w.dashWidth && w.dashGap ? `${w.dashWidth} ${w.dashGap}` : undefined} />
@@ -100,25 +109,36 @@ export function SceneWidgetBody({ w, focused, focusItem, editing }: { w: SceneWi
     }
     case "arc": {
       // lv_arc: circle in the box's top-left corner, radius = outer edge of the stroke.
-      const { cx, cy, r } = lvArcCircle(w);
+      // Stretched: a square arc of the smaller side scaled to the box (LVGL transform).
+      const st = arcStretch(w);
+      const { cx, cy, r } = lvArcCircle(st ? { w: st.s, h: st.s } : w);
       const aw = w.width ?? LV_ARC_WIDTH;
       const pr = Math.max(0, r - aw / 2);
       const { bg, ind } = arcAngles(w);
       const cap = w.rounded === false ? "butt" : "round";
       return (
         <svg width={w.w} height={w.h} style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
-          <path d={arcPath(cx, cy, pr, bg[0], bg[1])} fill="none" stroke={w.bg ?? LV.track} strokeWidth={aw} strokeLinecap={cap} />
-          {ind && <path d={arcPath(cx, cy, pr, ind[0], ind[1])} fill="none" stroke={w.color ?? LV.primary} strokeWidth={aw} strokeLinecap={cap} />}
+          <g transform={st ? `scale(${st.sx / 256} ${st.sy / 256})` : undefined}>
+            {bg && <path d={arcPath(cx, cy, pr, bg[0], bg[1])} fill="none" stroke={w.bg ?? LV.track} strokeWidth={aw} strokeLinecap={cap} />}
+            {ind && <path d={arcPath(cx, cy, pr, ind[0], ind[1])} fill="none" stroke={w.color ?? LV.primary} strokeWidth={aw} strokeLinecap={cap} />}
+          </g>
         </svg>
       );
     }
     case "arcline": {
-      // Drawn on the hub as an lv.line through the same points.
-      const pts = ellipseArcPoints(w);
+      // Background-only lv.arc of the smaller side, scaled to the box (LVGL transform).
+      const st = arcStretch(w)!;
+      const { cx, cy, r } = lvArcCircle({ w: st.s, h: st.s });
+      const aw = w.width ?? 3;
+      const { bg } = arcAngles(w);
       return (
         <svg width={w.w} height={w.h} style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
-          <polyline points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={w.color ?? LV.white} strokeWidth={w.width ?? 3}
-            strokeLinecap={w.rounded === false ? "butt" : "round"} strokeLinejoin="round" />
+          {bg && (
+            <g transform={`scale(${st.sx / 256} ${st.sy / 256})`}>
+              <path d={arcPath(cx, cy, Math.max(0, r - aw / 2), bg[0], bg[1])} fill="none" stroke={w.color ?? LV.white} strokeWidth={aw}
+                strokeLinecap={w.rounded === false ? "butt" : "round"} />
+            </g>
+          )}
         </svg>
       );
     }

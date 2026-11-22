@@ -2,7 +2,7 @@ import {
   ARC_MODES, CHECK_KINDS, FONT_SIZES, ITEM_KINDS, KIND_LABEL, LONG_MODES, TEXT_KINDS, isContainer, nameProblem,
   type ArcMode, type FontSize, type LongMode, type SceneDoc, type SceneKind, type SceneWidget, type TextAlign,
 } from "../../scene/model";
-import { LV_ARC_WIDTH, clampedPos, drawnSize, effectiveCrop, isOutside, normalizeLine } from "../../scene/geometry";
+import { LV_ARC_WIDTH, sweepOf, clampedPos, drawnSize, effectiveCrop, isOutside, normalizeLine } from "../../scene/geometry";
 import { usePalette } from "../theme";
 import { Button } from "../components/Button";
 import { CheckField } from "../components/CheckField";
@@ -16,6 +16,8 @@ import { SelectField } from "../components/SelectField";
 import { TextAreaField } from "../components/TextAreaField";
 import { TextField } from "../components/TextField";
 import type { FoldState } from "../hooks/useFoldState";
+import { AngleDial } from "./AngleDial";
+import { ARC_PRESETS } from "./constants";
 import { ImageField } from "./ImageField";
 import { ItemsField } from "./ItemsField";
 import { usageFor } from "./usage";
@@ -141,17 +143,36 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
       </>)}
 
       {has("arc", "arcline") && group("arc", "Arc", <>
-        <FieldRow>
-          {num("Start angle", w.startAngle ?? (k === "arc" ? 135 : 180), (startAngle) => ({ startAngle }), 0, 360)}
-          {num("End angle", w.endAngle ?? (k === "arc" ? 45 : 0), (endAngle) => ({ endAngle }), 0, 360)}
-        </FieldRow>
-        <FieldRow>
-          {num("Rotation", w.rotation ?? 0, (rotation) => ({ rotation: rotation || undefined }), 0, 360)}
-          {num(k === "arc" ? "Arc width" : "Line width", w.width ?? (k === "arc" ? LV_ARC_WIDTH : 3), (width) => ({ width }), 1)}
-        </FieldRow>
-        <div className={panelStyles.hint}>
-          Degrees, 0 = right, clockwise.{k === "arc" ? " The hub draws arcs as circles in the top-left of the box." : " Arc strokes fill their box, so a wide box makes an elliptical arc."}
-        </div>
+        {(() => {
+          const start = w.startAngle ?? (k === "arc" ? 135 : 180), end = w.endAngle ?? (k === "arc" ? 45 : 0), rot = w.rotation ?? 0;
+          const preset = rot === 0 ? ARC_PRESETS.find((q) => q.start === start && q.end === end)?.id ?? "custom" : "custom";
+          const span = sweepOf(start, end);
+          return (
+            <>
+              <SelectField grow label="Shape" value={preset}
+                options={[...ARC_PRESETS.map((q): [string, string] => [q.id, q.label]), ["custom", "Custom"]]}
+                onChange={(id) => { const q = ARC_PRESETS.find((x) => x.id === id); if (q) onChange({ startAngle: q.start, endAngle: q.end, rotation: undefined }); }} />
+              <AngleDial start={start} end={end} rotation={rot} onChange={onChange} />
+              <FieldRow>
+                {num("Start (°)", start, (startAngle) => ({ startAngle }), 0, 360)}
+                {num("Length (°)", span, (len) => (len >= 360
+                  // A full circle must be 0 → 360 in LVGL: keep the start via the rotation.
+                  ? { startAngle: 0, endAngle: 360, rotation: (rot + start) % 360 || undefined }
+                  : { endAngle: (start + Math.max(1, len)) % 360 }), 1, 360)}
+              </FieldRow>
+              <FieldRow>
+                {num("End (°)", end, (endAngle) => ({ endAngle }), 0, 360)}
+                {num("Rotation (°)", rot, (rotation) => ({ rotation: rotation || undefined }), 0, 359)}
+              </FieldRow>
+              {num(k === "arc" ? "Arc width" : "Line width", w.width ?? (k === "arc" ? LV_ARC_WIDTH : 3), (width) => ({ width }), 1)}
+              <div className={panelStyles.hint}>0° = right, clockwise. Drag the dial's dots (Shift: 1° steps).</div>
+            </>
+          );
+        })()}
+        {k === "arc" && (
+          <CheckField label="Stretch to the box (ellipse)" value={!!w.stretch} onChange={(v) => onChange({ stretch: v || undefined })} />
+        )}
+        {k === "arc" && !w.stretch && w.w !== w.h && <div className={panelStyles.hint}>Not stretched, the hub draws a circle in the box's top-left corner.</div>}
         <CheckField label="Round ends" value={w.rounded !== false} onChange={(v) => onChange({ rounded: v ? undefined : false })} />
         <CheckField label="Crop (show only part of it)" value={!!w.crop}
           onChange={(v) => onChange({ crop: v ? { x: 0, y: 0, w: w.w, h: Math.max(1, Math.round(w.h / 2)) } : undefined })} />
@@ -184,6 +205,13 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
 
       {k === "line" && group("line", "Line", <>
         {num("Line width", w.width ?? 2, (width) => ({ width }), 1)}
+        {(w.points ?? []).length >= 3 && (w.closed
+          ? <Button onClick={() => onChange({ closed: undefined })} style={{ alignSelf: "flex-start" }}>Open the loop</Button>
+          : <Button onClick={() => onChange({ closed: true })} style={{ alignSelf: "flex-start" }}>Close the loop</Button>)}
+        {w.closed
+          ? <CheckField label="Fill" value={!!w.bg} onChange={(v) => onChange({ bg: v ? w.bg ?? "#2196f3" : undefined })} />
+          : <div className={panelStyles.hint}>Close the loop to fill it.</div>}
+        {w.closed && w.bg && <ColorField label="Fill colour" value={w.bg} onChange={(v) => onChange({ bg: v })} />}
         <CheckField label="Round ends" value={w.rounded !== false} onChange={(v) => onChange({ rounded: v ? undefined : false })} />
         <FieldRow>
           {num("Dash", w.dashWidth ?? 0, (dashWidth) => ({ dashWidth: dashWidth || undefined }), 0)}
@@ -194,7 +222,8 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
 
       {group("appearance", "Appearance", <>
         {k !== "image" && <ColorField label={colorLabel} value={w.color} onChange={(v) => onChange({ color: v })} />}
-        {!has("line", "led", "switch", "checkbox", "arcline") && <ColorField label={bgLabel} value={w.bg} onChange={(v) => onChange({ bg: v })} />}
+        {has("rect", "ellipse") && <CheckField label="Fill" value={!!w.bg} onChange={(v) => onChange({ bg: v ? w.bg ?? "#2196f3" : undefined })} />}
+        {!has("line", "led", "switch", "checkbox", "arcline") && !(has("rect", "ellipse") && !w.bg) && <ColorField label={bgLabel} value={w.bg} onChange={(v) => onChange({ bg: v })} />}
         {boxed && (
           <>
             <FieldRow>

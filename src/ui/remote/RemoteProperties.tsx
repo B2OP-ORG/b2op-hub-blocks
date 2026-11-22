@@ -9,6 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { TextField } from "../components/TextField";
 import type { FoldState } from "../hooks/useFoldState";
 import { MIN_H, MIN_W } from "./bounds";
+import { normAngle } from "../../geometry/rotation";
 
 /** Inspector for the selected remote widget (same grouped layout as the scene editor's). */
 export function RemoteProperties({ w, fileName, others, folds, onChange, onDelete }: {
@@ -62,6 +63,7 @@ export function RemoteProperties({ w, fileName, others, folds, onChange, onDelet
           <NumberField label="Width" value={w.w} min={MIN_W} int onCommit={(v) => onChange({ w: v })} />
           <NumberField label="Height" value={w.h} min={MIN_H} int onCommit={(v) => onChange({ h: v })} />
         </FieldRow>
+        <NumberField label="Rotation (°)" value={w.angle ?? 0} min={-360} max={360} int onCommit={(v) => onChange({ angle: normAngle(v) || undefined })} />
       </>)}
 
       {group("value", "Value", <>

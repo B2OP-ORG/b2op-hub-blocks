@@ -2,6 +2,7 @@
 
 import type { RemoteValue } from "../../device/protocol";
 import type { Widget } from "../../remote/layout";
+import { rotateVec } from "../../geometry/rotation";
 
 export function num(v: RemoteValue | undefined, fallback = 0): number {
   return typeof v === "number" ? v : typeof v === "boolean" ? (v ? 1 : 0) : fallback;
@@ -33,4 +34,20 @@ export function quantize(raw: number, min: number, max: number, step: number, fl
   let v = step > 0 ? min + Math.round((raw - min) / step) * step : raw;
   v = Math.max(min, Math.min(max, v));
   return float ? Math.round(v * 1e6) / 1e6 : Math.round(v);
+}
+
+/**
+ * Pointer position in an element's own unscaled, unrotated px (0,0 = its
+ * top-left corner), for an element inside a card zoomed by the canvas and
+ * rotated by `angle` degrees.
+ */
+export function localPoint(el: HTMLElement, clientX: number, clientY: number, angle = 0): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  const ow = el.offsetWidth, oh = el.offsetHeight;
+  // Bounding box of the rotated element = scale * (w|cos| + h|sin|) wide; its centre is the element's centre.
+  const c = Math.abs(Math.cos((angle * Math.PI) / 180)), s = Math.abs(Math.sin((angle * Math.PI) / 180));
+  const span = ow * c + oh * s;
+  const scale = span ? r.width / span : 1;
+  const [x, y] = rotateVec((clientX - (r.left + r.width / 2)) / scale, (clientY - (r.top + r.height / 2)) / scale, -angle);
+  return { x: x + ow / 2, y: y + oh / 2 };
 }

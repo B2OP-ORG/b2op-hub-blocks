@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ChevronLeft, ChevronRight, Columns2, Rows2 } from "lucide-react";
 import { useApp } from "../../state/store";
 import {
@@ -6,15 +7,19 @@ import {
 } from "../../settings/panelLayout";
 import { usePalette } from "../theme";
 import { IconButton } from "../components/IconButton";
-import { GroupTitle, Note } from "./settingsFields";
+import { DEFAULT_ROTATE_SNAP } from "../../settings/editorSettings";
+import { GroupTitle, Note, NumberInput, Row } from "./settingsFields";
 
 const label = (i: LayoutItem) => (i === "canvas" ? "Canvas" : PANEL_TOOL_LABEL[i]);
 
-/** Settings › Scene & remote: where the outline, properties and palette sit around the canvas. */
+/** Settings › Scene & remote: where the outline, properties and palette sit around the canvas; rotate handle snapping. */
 export function VisualEditorsSection() {
   const p = usePalette();
   const layoutStr = useApp((s) => s.editorSettings.panelLayout);
   const update = useApp((s) => s.updateEditorSettings);
+  const snap = useApp((s) => s.editorSettings.rotateSnap);
+  // Remounts the number inputs on "Reset to defaults" (they keep their own text while typing).
+  const [snapGen, setSnapGen] = useState(0);
   const layout = parsePanelLayout(layoutStr);
   const flat = flattenLayout(layout);
   const set = (l: PanelLayout) => update({ panelLayout: serializePanelLayout(l) });
@@ -80,6 +85,21 @@ export function VisualEditorsSection() {
       <div style={{ fontSize: 11, color: p.dimText, marginTop: 6 }}>
         <code>{layoutStr}</code>
       </div>
+
+      <GroupTitle onReset={() => { update({ rotateSnap: DEFAULT_ROTATE_SNAP }); setSnapGen((g) => g + 1); }}>Rotating widgets</GroupTitle>
+      <Note>
+        Drag the round handle at a selected widget's top-right corner to rotate it. Near the widget it turns in big steps;
+        move the pointer further away for finer steps.
+      </Note>
+      <Row label="Step near the widget">
+        <NumberInput key={`n${snapGen}`} value={snap.near} min={1} max={90} onChange={(near) => update({ rotateSnap: { ...snap, near } })} suffix="°" />
+      </Row>
+      <Row label="Step further away">
+        <NumberInput key={`f${snapGen}`} value={snap.far} min={1} max={90} onChange={(far) => update({ rotateSnap: { ...snap, far } })} suffix="°" />
+      </Row>
+      <Row label="Switch distance" help="How far from the widget's edge (screen pixels) the finer steps start.">
+        <NumberInput key={`d${snapGen}`} value={snap.distance} min={0} max={1000} onChange={(distance) => update({ rotateSnap: { ...snap, distance } })} suffix="px" />
+      </Row>
     </>
   );
 }

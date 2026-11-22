@@ -7,7 +7,7 @@ A **scene** is a screen layout for the hub's 160 × 128 screen, made in the scen
 Right-click in the file explorer and pick **New scene (screen layout)…**, or press **Create scene…** in the *Scenes* block category. Give it a short name, like `menu`. You get a file `menu.py`, which opens in the scene editor.
 
 - Drag widgets from the bar onto the screen (or click one to add it).
-- Move them with the mouse or the arrow keys (Shift = bigger steps), resize them with the handle in the corner. Drag one onto the bin in the corner (or press Delete) to remove it.
+- Move them with the mouse or the arrow keys (Shift = bigger steps), resize them with the handle in the bottom-right corner, rotate them with the round handle in the top-right corner (big steps close to the widget, small steps further away; set the steps in Settings › Scene & remote) or the Rotation property. Drag one onto the bin in the corner (or press Delete) to remove it.
 - Change text, colours, items and more on the right. The list on the left shows every widget; put widgets *inside* a panel, scroll box or tab with the **Inside** setting.
 - Every widget has a name (`label0`, `list0`, …) — that's how your program reaches it. Rename them to something that says what they are, like `title` or `speed_bar`.
 - **Preview** lets you try the scene with the keyboard: ↑ ↓ are the hub's up / down buttons, Enter is center, ← is left.

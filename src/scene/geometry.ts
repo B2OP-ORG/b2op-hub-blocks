@@ -1,6 +1,7 @@
 // Scene geometry: positions, drawn sizes, QR layout, bounds checks.
 
 import { SCREEN_H, SCREEN_W, type SceneDoc, type SceneWidget } from "./model";
+import { normAngle, rotateVec, rotatedBounds } from "../geometry/rotation";
 
 /** Content offset of a container (tab views draw their tab bar on top). */
 export function contentOffset(w: SceneWidget): { x: number; y: number } {
@@ -71,19 +72,57 @@ export function parentArea(doc: SceneDoc, w: Pick<SceneWidget, "parent">): { w: 
   return { w: p.w - off.x, h: p.h - off.y };
 }
 
+/** Whole-widget rotation in degrees (0..359). Lines have none: rotating one turns its points. */
+export function widgetAngle(w: Pick<SceneWidget, "kind" | "angle">): number {
+  return w.kind === "line" ? 0 : normAngle(w.angle ?? 0);
+}
+
+/** Sum of the rotations of the containers a widget sits in (its parent's frame on screen). */
+export function ancestorAngle(doc: SceneDoc, w: Pick<SceneWidget, "parent">): number {
+  let a = 0;
+  const seen = new Set<string>();
+  for (let p = w.parent ? doc.widgets.find((o) => o.uid === w.parent) : undefined; p && !seen.has(p.uid); p = p.parent ? doc.widgets.find((o) => o.uid === p!.parent) : undefined) {
+    seen.add(p.uid);
+    a += widgetAngle(p);
+  }
+  return a;
+}
+
+/** Box a widget covers in its parent (drawn size, rotation applied). */
+export function coveredBox(w: SceneWidget): { x: number; y: number; w: number; h: number } {
+  const s = drawnSize(w);
+  return rotatedBounds({ x: w.x, y: w.y, w: s.w, h: s.h, angle: widgetAngle(w) });
+}
+
 /** True when nothing of the widget is inside its parent / the screen (so nothing of it shows). */
 export function isOutside(doc: SceneDoc, w: SceneWidget): boolean {
-  const a = parentArea(doc, w), s = drawnSize(w);
-  return w.x >= a.w || w.y >= a.h || w.x + s.w <= 0 || w.y + s.h <= 0;
+  const a = parentArea(doc, w), b = coveredBox(w);
+  return b.x >= a.w || b.y >= a.h || b.x + b.w <= 0 || b.y + b.h <= 0;
 }
 
 /** Position that keeps the widget inside its parent / the screen (as far as it fits). */
 export function clampedPos(doc: SceneDoc, w: SceneWidget): { x: number; y: number } {
-  const a = parentArea(doc, w), s = drawnSize(w);
+  const a = parentArea(doc, w), b = coveredBox(w);
   return {
-    x: Math.round(Math.min(Math.max(0, w.x), Math.max(0, a.w - s.w))),
-    y: Math.round(Math.min(Math.max(0, w.y), Math.max(0, a.h - s.h))),
+    x: Math.round(w.x + Math.min(Math.max(0, b.x), Math.max(0, a.w - b.w)) - b.x),
+    y: Math.round(w.y + Math.min(Math.max(0, b.y), Math.max(0, a.h - b.h)) - b.y),
   };
+}
+
+/**
+ * Line widget turned by `deg` around the centre of its points' box (points
+ * rounded to whole pixels, then normalized).
+ */
+export function rotateLine<W extends Pick<SceneWidget, "x" | "y" | "points">>(w: W, deg: number): W {
+  const pts = w.points ?? [];
+  if (!pts.length || !deg) return w;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const points = pts.map(([x, y]): [number, number] => {
+    const [rx, ry] = rotateVec(x - cx, y - cy, deg);
+    return [Math.round(cx + rx), Math.round(cy + ry)];
+  });
+  return normalizeLine({ ...w, points });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { SCREEN_H, SCREEN_W, childrenOf, isContainer, type SceneDoc, type SceneWidget } from "../../scene/model";
-import { contentOffset, drawnSize, effectiveCrop, isOutside } from "../../scene/geometry";
+import { ancestorAngle, contentOffset, drawnSize, effectiveCrop, isOutside, widgetAngle } from "../../scene/geometry";
+import { RotateHandle } from "../components/RotateHandle";
 import { usePalette } from "../theme";
 import type { WidgetDrag } from "../hooks/useWidgetDrag";
 import { MARGIN } from "./constants";
@@ -24,7 +25,7 @@ export interface SceneNodeContext {
   /** 0..1 while the dragged widget nears the toolbox bin (tints it red). */
   dragHeat: number;
   /** Start a drag; mode "point" drags point `point` of a line (`w` may already hold a newly inserted point). */
-  onBeginDrag: (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => void;
+  onBeginDrag: (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop" | "rotate", point?: number) => void;
   /** Remove point `i` of a line. */
   onRemovePoint: (w: SceneWidget, i: number) => void;
   onDragMove: (e: React.PointerEvent) => void;
@@ -59,6 +60,8 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
         const off = contentOffset(w);
         const lineOff = w.kind === "line" ? (w.width ?? 2) / 2 : 0;
         const outside = !preview && isOutside(ctx.shownDoc, w);
+        const angle = widgetAngle(w);
+        const rotating = drag?.uid === w.uid && drag.mode === "rotate";
         return (
           <div key={w.uid}
             onPointerDown={(e) => ctx.onBeginDrag(e, w0, "move")}
@@ -68,6 +71,7 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
             style={{
               // Lines: the box starts half a stroke up-left so the stroke (centred on the points, as in LVGL) is inside it.
               position: "absolute", left: w.x - lineOff, top: w.y - lineOff, width: size.w, height: size.h,
+              transform: angle ? `rotate(${angle}deg)` : undefined,
               outline: isSel ? `${1 / scale * 2}px solid ${p.accent}` : undefined, outlineOffset: 1 / scale,
               opacity: (w.opacity ?? 100) / 100 * (drag?.uid === w.uid && ctx.overTrash ? 0.3 : outside ? 0.4 : !preview && w.hidden ? 0.45 : 1),
               ...(outside && !isSel ? { outline: `${2 / scale}px dashed ${p.danger}` } : {}),
@@ -88,6 +92,10 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
             {drag?.uid === w.uid && drag.mode === "move" && <DragHeatTint heat={ctx.dragHeat} />}
             {isSel && w.kind === "line" && <LineHandles ctx={ctx} w={w} w0={w0} />}
             {isSel && w.crop && (w.kind === "arc" || w.kind === "arcline") && <CropHandles ctx={ctx} w={w} w0={w0} />}
+            {isSel && (
+              <RotateHandle size={10 / scale * 2} offset={(w.kind === "line" ? 14 : 6) / scale * 2} onPointerDown={(e) => ctx.onBeginDrag(e, w0, "rotate")}
+                label={rotating ? `${w.kind === "line" ? (w.angle ?? 0) : angle}°` : undefined} unrotate={ancestorAngle(ctx.shownDoc, w) + angle} />
+            )}
             {isSel && w.kind !== "line" && (
               <span onPointerDown={(e) => ctx.onBeginDrag(e, w0, "resize")} title="Resize (Shift: 4 px steps)"
                 style={{ position: "absolute", right: -6 / scale * 2, bottom: -6 / scale * 2, width: 10 / scale * 2, height: 10 / scale * 2, borderRadius: 2 / scale, background: p.accent, cursor: "nwse-resize" }} />

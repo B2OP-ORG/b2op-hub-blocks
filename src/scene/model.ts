@@ -53,6 +53,8 @@ export interface SceneWidget {
   h: number;
   /** Start hidden (show it from code). */
   hidden?: boolean;
+  /** Rotation of the whole widget around its box centre (degrees, clockwise, 0..359; absent = 0). Lines rotate their points instead. */
+  angle?: number;
 
   // ── Appearance (absent = LVGL theme default) ──
   /** Text / indicator / line / LED colour, "#rrggbb". */

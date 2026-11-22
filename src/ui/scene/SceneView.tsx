@@ -14,7 +14,9 @@ import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { PanelTool } from "../../settings/panelLayout";
 import { KIND_LABEL, SCREEN_H, SCREEN_W, emptyScene, makeWidget, moduleOfPath, splitSceneHeader, subtree, withSceneHeader, type SceneKind, type SceneWidget } from "../../scene/model";
-import { dragCropEdge, drawnSize, normalizeLine } from "../../scene/geometry";
+import { ancestorAngle, dragCropEdge, drawnSize, normalizeLine, rotateLine, widgetAngle } from "../../scene/geometry";
+import { keepTopLeft, rotateVec } from "../../geometry/rotation";
+import { dragAngle, rotatePivot, useRotateSnap } from "../hooks/rotateDrag";
 import { resolveSceneSrc } from "../../scene/project";
 import { sceneToPython } from "../../scene/codegen";
 import { usePalette } from "../theme";
@@ -87,6 +89,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   });
   const { zoom } = cv;
   const scale = zoom * BASE;
+  const rotateSnap = useRotateSnap();
   const tp = useToolPanels("scene", SCENE_TOOLS);
   const rootRef = useRef<HTMLDivElement>(null);
   const history = useUndoRedo({
@@ -162,11 +165,11 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
   // ── Widget drag (move / resize) ─────────────────────────────────────────────
   const { drag } = widgetDrag;
-  const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => {
+  const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop" | "rotate", point?: number) => {
     if (preview || tool || e.button !== 0) return;
     setSelected(w.uid);
     if (mode === "move") bin.begin(e);
-    widgetDrag.begin(e, w, mode, point);
+    widgetDrag.begin(e, w, mode, point, mode === "rotate" ? rotatePivot(e, scale) : undefined);
   };
   const removePoint = (w: SceneWidget, i: number) => {
     const points = (w.points ?? []).filter((_, j) => j !== i);
@@ -177,20 +180,33 @@ export function SceneView({ file }: { file: ProjectFile }) {
     if (drag.mode === "move") bin.move(e);
     const step = e.shiftKey ? 4 : 1;
     const sn = (v: number) => Math.round(v / step) * step;
-    widgetDrag.move(e, scale, (o, mode, dx, dy, point) => mode === "crop"
-      ? { ...o, crop: dragCropEdge(o, point ?? 0, sn(dx), sn(dy)) }
-      : mode === "point"
-      ? normalizeLine({ ...o, points: (o.points ?? []).map((q, i): [number, number] => i === point ? [sn(q[0] + dx), sn(q[1] + dy)] : q) })
-      : mode === "move"
-      ? { ...o, x: sn(o.x + dx), y: sn(o.y + dy) }
-      : o.kind === "image" && o.keepAspect !== false && o.w > 0 && o.h > 0
+    widgetDrag.move(e, scale, (o, mode, sdx, sdy, point) => {
+      // Pointer travel (screen-aligned) in the parent's frame and in the widget's own (rotated) frame.
+      const frame = ancestorAngle(doc, o), own = frame + widgetAngle(o);
+      const [px, py] = rotateVec(sdx, sdy, -frame);
+      const [dx, dy] = rotateVec(sdx, sdy, -own);
+      if (mode === "rotate") {
+        const size = drawnSize(o);
+        const a = dragAngle({ a0: widgetAngle(o), pivot: drag?.pivot ?? { x: 1, y: 0 }, dx: sdx, dy: sdy, frame, w: size.w, h: size.h, scale, snap: rotateSnap });
+        // Lines turn their points (`angle` only labels the handle while dragging; not committed).
+        return o.kind === "line" ? { ...rotateLine(o, a), angle: a > 180 ? a - 360 : a } : { ...o, angle: a || undefined };
+      }
+      if (mode === "crop") return { ...o, crop: dragCropEdge(o, point ?? 0, sn(dx), sn(dy)) };
+      if (mode === "point") return normalizeLine({ ...o, points: (o.points ?? []).map((q, i): [number, number] => i === point ? [sn(q[0] + dx), sn(q[1] + dy)] : q) });
+      if (mode === "move") return { ...o, x: sn(o.x + px), y: sn(o.y + py) };
+      const n = o.kind === "image" && o.keepAspect !== false && o.w > 0 && o.h > 0
         ? (() => {
             const f = Math.max((o.w + dx) / o.w, (o.h + dy) / o.h);
             return { ...o, w: Math.max(4, Math.round(o.w * f)), h: Math.max(4, Math.round(o.h * f)) };
           })()
-      : o.kind === "qrcode"
-        ? { ...o, w: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))), h: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))) }
-        : { ...o, w: Math.max(4, sn(o.w + dx)), h: Math.max(4, sn(o.h + dy)) });
+        : o.kind === "qrcode"
+          ? { ...o, w: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))), h: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))) }
+          : { ...o, w: Math.max(4, sn(o.w + dx)), h: Math.max(4, sn(o.h + dy)) };
+      // Rotated: the opposite (top-left) corner stays put on screen.
+      const s0 = drawnSize(o), s1 = drawnSize(n);
+      const tl = keepTopLeft(o.x, o.y, s0.w, s0.h, s1.w, s1.h, widgetAngle(o));
+      return { ...n, x: Math.round(tl.x), y: Math.round(tl.y) };
+    });
   };
   const endDrag = () => {
     const d = widgetDrag.end();
@@ -199,6 +215,12 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const { cur } = d;
     if (d.mode === "crop") {
       if (JSON.stringify(d.orig.crop) !== JSON.stringify(cur.crop)) ops.update(cur.uid, { crop: cur.crop });
+      return;
+    }
+    if (d.mode === "rotate") {
+      if (cur.kind === "line") {
+        if (JSON.stringify(d.orig.points) !== JSON.stringify(cur.points) || d.orig.x !== cur.x || d.orig.y !== cur.y) ops.update(cur.uid, { x: cur.x, y: cur.y, points: cur.points });
+      } else if ((d.orig.angle ?? 0) !== (cur.angle ?? 0)) ops.update(cur.uid, { angle: cur.angle });
       return;
     }
     if (d.mode === "point") {

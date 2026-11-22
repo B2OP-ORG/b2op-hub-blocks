@@ -1,5 +1,5 @@
 import type { SceneWidget } from "../../scene/model";
-import { drawnSize } from "../../scene/geometry";
+import { drawnSize, widgetAngle } from "../../scene/geometry";
 import { DragGhost } from "../components/DragGhost";
 import { SceneWidgetBody } from "./widgets";
 
@@ -11,7 +11,7 @@ export function PaletteDragGhost({ widget, x, y, scale, overTrash, heat = 0 }: {
 }) {
   const s = drawnSize(widget);
   return (
-    <DragGhost x={x} y={y} width={s.w} height={s.h} scale={scale} overTrash={overTrash} heat={heat}>
+    <DragGhost x={x} y={y} width={s.w} height={s.h} scale={scale} angle={widgetAngle(widget)} overTrash={overTrash} heat={heat}>
       <SceneWidgetBody w={widget} />
     </DragGhost>
   );

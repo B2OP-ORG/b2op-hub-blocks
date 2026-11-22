@@ -2,7 +2,8 @@ import {
   ARC_MODES, CHECK_KINDS, FONT_SIZES, ITEM_KINDS, KIND_LABEL, LONG_MODES, TEXT_KINDS, isContainer, nameProblem,
   type ArcMode, type FontSize, type LongMode, type SceneDoc, type SceneKind, type SceneWidget, type TextAlign,
 } from "../../scene/model";
-import { LV_ARC_WIDTH, sweepOf, clampedPos, drawnSize, effectiveCrop, isOutside, normalizeLine } from "../../scene/geometry";
+import { LV_ARC_WIDTH, sweepOf, clampedPos, drawnSize, effectiveCrop, isOutside, normalizeLine, rotateLine, widgetAngle } from "../../scene/geometry";
+import { normAngle } from "../../geometry/rotation";
 import { usePalette } from "../theme";
 import { Button } from "../components/Button";
 import { CheckField } from "../components/CheckField";
@@ -78,6 +79,11 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
               {num("Height", w.h, (v) => (lockAspect ? { h: v, w: Math.max(1, Math.round((v * w.w) / w.h)) } : { h: v }), 1)}
             </FieldRow>
           )}
+        {k === "line"
+          // Lines have no rotation of their own: this turns the points (around the middle of the line's box).
+          ? <NumberField key={`rot-${JSON.stringify(w.points)}`} label="Rotate by (°)" value={0} min={-360} max={360} int
+              onCommit={(v) => onChange(rotateLine({ x: w.x, y: w.y, points: w.points }, v))} />
+          : num("Rotation (°)", widgetAngle(w), (v) => ({ angle: normAngle(v) || undefined }), -360, 360)}
         {isOutside(doc, w) && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.danger, fontSize: 12 }}>
             <span style={{ flex: 1 }}>Outside {parent ? parent.name : "the screen"}: it won't be visible.</span>
@@ -162,7 +168,7 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
               </FieldRow>
               <FieldRow>
                 {num("End (°)", end, (endAngle) => ({ endAngle }), 0, 360)}
-                {num("Rotation (°)", rot, (rotation) => ({ rotation: rotation || undefined }), 0, 359)}
+                {num("Arc rotation (°)", rot, (rotation) => ({ rotation: rotation || undefined }), 0, 359)}
               </FieldRow>
               {num(k === "arc" ? "Arc width" : "Line width", w.width ?? (k === "arc" ? LV_ARC_WIDTH : 3), (width) => ({ width }), 1)}
               <div className={panelStyles.hint}>0° = right, clockwise. Drag the dial's dots (Shift: 1° steps).</div>

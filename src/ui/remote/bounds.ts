@@ -1,4 +1,5 @@
 import { GRID, type Widget } from "../../remote/layout";
+import { rotatedBounds } from "../../geometry/rotation";
 
 export const MIN_W = 64;
 export const MIN_H = 48;
@@ -13,8 +14,9 @@ export type Bounds = { left: number; top: number; right: number; bottom: number 
 
 export function canvasBounds(widgets: Widget[], viewW: number, viewH: number): Bounds {
   if (widgets.length === 0) return { left: 0, top: 0, right: viewW, bottom: viewH };
-  const minX = Math.min(...widgets.map((w) => w.x)), minY = Math.min(...widgets.map((w) => w.y));
-  const maxX = Math.max(...widgets.map((w) => w.x + w.w)), maxY = Math.max(...widgets.map((w) => w.y + w.h));
+  const boxes = widgets.map(rotatedBounds);
+  const minX = Math.floor(Math.min(...boxes.map((b) => b.x))), minY = Math.floor(Math.min(...boxes.map((b) => b.y)));
+  const maxX = Math.ceil(Math.max(...boxes.map((b) => b.x + b.w))), maxY = Math.ceil(Math.max(...boxes.map((b) => b.y + b.h)));
   return {
     left: minX < 0 ? minX - EXTRA : 0,
     top: minY < 0 ? minY - EXTRA : 0,

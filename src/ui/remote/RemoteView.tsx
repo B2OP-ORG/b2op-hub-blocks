@@ -24,6 +24,8 @@ import type { PanelTool } from "../../settings/panelLayout";
 import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
+import { dragAngle, rotatePivot, useRotateSnap } from "../hooks/rotateDrag";
+import { keepTopLeft, rotateVec, rotatedBounds } from "../../geometry/rotation";
 import { FileLoadError } from "../components/FileLoadError";
 import { ModeToggle } from "../components/ModeToggle";
 import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
@@ -85,6 +87,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     onPanStart: () => widgetDrag.cancel(),
   });
   const { zoom, zoomRef } = cv;
+  const rotateSnap = useRotateSnap();
   const tp = useToolPanels("remote", REMOTE_TOOLS);
   const rootRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -130,7 +133,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     setSelected(w.uid);
   };
   const addAtFreeSpot = (kind: WidgetKind) => {
-    const bottom = layout.widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0);
+    const bottom = layout.widgets.reduce((m, w) => { const b = rotatedBounds(w); return Math.max(m, b.y + b.h); }, 0);
     add(kind, 16, bottom + 16);
   };
 
@@ -155,22 +158,35 @@ export function RemoteView({ file }: { file: ProjectFile }) {
 
   // ── Pointer drag (move / resize), committed on release ──────────────────────
   const { drag } = widgetDrag;
-  const beginDrag = (e: React.PointerEvent, w: Widget, mode: "move" | "resize") => {
+  const beginDrag = (e: React.PointerEvent, w: Widget, mode: "move" | "resize" | "rotate") => {
     if (showing || e.button !== 0) return;
     setSelected(w.uid);
     if (mode === "move") bin.begin(e);
-    widgetDrag.begin(e, w, mode);
+    widgetDrag.begin(e, w, mode, undefined, mode === "rotate" ? rotatePivot(e, zoom) : undefined);
   };
   const onDragMove = (e: React.PointerEvent) => {
     if (drag?.mode === "move") bin.move(e);
-    widgetDrag.move(e, zoom, (o, mode, dx, dy) => mode === "move"
-      ? { ...o, x: snap(o.x + dx), y: snap(o.y + dy) }
-      : { ...o, w: Math.max(MIN_W, snap(o.w + dx)), h: Math.max(MIN_H, snap(o.h + dy)) });
+    widgetDrag.move(e, zoom, (o, mode, dx, dy) => {
+      if (mode === "move") return { ...o, x: snap(o.x + dx), y: snap(o.y + dy) };
+      if (mode === "rotate") {
+        const a = dragAngle({ a0: o.angle ?? 0, pivot: drag?.pivot ?? { x: 1, y: 0 }, dx, dy, w: o.w, h: o.h, scale: zoom, snap: rotateSnap });
+        return { ...o, angle: a || undefined };
+      }
+      // Resize in the widget's own (rotated) frame; the top-left corner stays put on screen.
+      const [lx, ly] = rotateVec(dx, dy, -(o.angle ?? 0));
+      const w = Math.max(MIN_W, snap(o.w + lx)), h = Math.max(MIN_H, snap(o.h + ly));
+      const tl = keepTopLeft(o.x, o.y, o.w, o.h, w, h, o.angle ?? 0);
+      return { ...o, x: Math.round(tl.x), y: Math.round(tl.y), w, h };
+    });
   };
   const endDrag = () => {
     const d = widgetDrag.end();
     if (!d) return;
     if (bin.end() && d.mode === "move") { remove(d.orig.uid); return; }
+    if (d.mode === "rotate") {
+      if ((d.orig.angle ?? 0) !== (d.cur.angle ?? 0)) update(d.cur.uid, { angle: d.cur.angle });
+      return;
+    }
     if (boxChanged(d)) update(d.cur.uid, { x: d.cur.x, y: d.cur.y, w: d.cur.w, h: d.cur.h });
   };
 
@@ -194,9 +210,11 @@ export function RemoteView({ file }: { file: ProjectFile }) {
    */
   const fitAll = () => {
     if (layout.widgets.length === 0) { cv.zoomTo(1); return; }
-    const minX = Math.min(...layout.widgets.map((w) => w.x)), minY = Math.min(...layout.widgets.map((w) => w.y));
-    const maxX = Math.max(...layout.widgets.map((w) => w.x + w.w)), maxY = Math.max(...layout.widgets.map((w) => w.y + w.h));
-    const dx = MARGIN - minX, dy = MARGIN - minY;
+    const boxes = layout.widgets.map(rotatedBounds);
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    const maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    // Whole units: rotated boxes have fractional edges.
+    const dx = Math.round(MARGIN - minX), dy = Math.round(MARGIN - minY);
     if (dx || dy) {
       // The area's origin returns to 0,0; fit sets the scroll itself, so skip the origin compensation.
       origin.current = { left: 0, top: 0 };
@@ -289,7 +307,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
             {shown.map((w) => (
               <RemoteWidgetCard
                 key={w.uid} w={w} showing={showing} selected={!showing && w.uid === selected} conflict={!showing && hasConflict(w)}
-                dragging={drag?.uid === w.uid} panCursor={panCursor}
+                dragging={drag?.uid === w.uid} rotating={drag?.uid === w.uid && drag.mode === "rotate"} panCursor={panCursor}
                 overTrash={drag?.uid === w.uid && drag.mode === "move" && bin.over}
                 heat={drag?.uid === w.uid && drag.mode === "move" ? bin.heat : 0}
                 live={preview || (live && session.phase === "running")}

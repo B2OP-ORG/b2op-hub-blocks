@@ -2,9 +2,13 @@ import { useState } from "react";
 
 export interface WidgetDrag<W> {
   uid: string;
-  /** "point": one point of a line widget (index in `point`); "crop": an edge of an arc's crop window (0..3 = left, top, right, bottom). */
-  mode: "move" | "resize" | "point" | "crop";
+  /**
+   * "point": one point of a line widget (index in `point`); "crop": an edge of an arc's crop window (0..3 = left, top, right, bottom);
+   * "rotate": the rotate handle (`pivot`: where the pointer started, relative to the widget centre, in canvas units).
+   */
+  mode: "move" | "resize" | "point" | "crop" | "rotate";
   point?: number;
+  pivot?: { x: number; y: number };
   startX: number;
   startY: number;
   /** Canvas scroll at drag start (a wheel scroll mid-drag moves the widget along). */
@@ -24,11 +28,11 @@ export function useWidgetDrag<W extends { uid: string }>(canvasRef: React.RefObj
   return {
     drag,
     /** Start dragging `w` (call from the widget's onPointerDown). */
-    begin: (e: React.PointerEvent, w: W, mode: WidgetDrag<W>["mode"], point?: number) => {
+    begin: (e: React.PointerEvent, w: W, mode: WidgetDrag<W>["mode"], point?: number, pivot?: WidgetDrag<W>["pivot"]) => {
       e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
       const el = canvasRef.current;
-      setDrag({ uid: w.uid, mode, point, startX: e.clientX, startY: e.clientY, scrollX: el?.scrollLeft ?? 0, scrollY: el?.scrollTop ?? 0, orig: w, cur: w });
+      setDrag({ uid: w.uid, mode, point, pivot, startX: e.clientX, startY: e.clientY, scrollX: el?.scrollLeft ?? 0, scrollY: el?.scrollTop ?? 0, orig: w, cur: w });
     },
     /**
      * Pointer moved: `place` maps the travel since the start (in canvas units:

@@ -6,7 +6,7 @@
 // Only `lvgl` is imported, so the module also works from plain Python files.
 
 import { ARC_MODES, BAR_MODES, LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
-import { arcStretch, contentOffset, effectiveCrop, linePoints, QR_CAPACITY_M, triangulate } from "./geometry";
+import { arcStretch, contentOffset, effectiveCrop, linePoints, QR_CAPACITY_M, triangulate, widgetAngle } from "./geometry";
 
 const I = "    ";
 const py = (s: string) => JSON.stringify(s); // JSON string literals are valid Python literals
@@ -47,7 +47,13 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
     L(`${c}.remove_flag(lv.obj.FLAG.CLICKABLE)`);
     parent = c;
   }
-  const pos = () => L(crop ? `${v}.set_pos(${-crop.x}, ${-crop.y})` : `${v}.set_pos(${num(w.x, 0)}, ${num(w.y, 0)})`);
+  // Stretched arcs: a square arc of the smaller side, scaled to the box.
+  const stretch = arcStretch(w);
+  // Rotation turns the box around its centre. A cropped arc turns its clip container
+  // (about the arc box centre); a stretched arc scales about its square's centre, so it moves to keep the box in place.
+  const angle = widgetAngle(w);
+  const stretchShift = stretch && angle && !crop ? { x: (w.w - stretch.s) / 2, y: (w.h - stretch.s) / 2 } : { x: 0, y: 0 };
+  const pos = () => L(crop ? `${v}.set_pos(${-crop.x}, ${-crop.y})` : `${v}.set_pos(${num(w.x + stretchShift.x, 0)}, ${num(w.y + stretchShift.y, 0)})`);
   const size = () => L(`${v}.set_size(${num(w.w, 10)}, ${num(w.h, 10)})`);
   const bg = () => {
     if (w.bg) { style("bg_color", color(w.bg)); style("bg_opa", "lv.OPA.COVER"); }
@@ -63,8 +69,6 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
     if (w.letterSpace) style("text_letter_space", num(w.letterSpace, 0));
     if (w.lineSpace) style("text_line_space", num(w.lineSpace, 0));
   };
-  // Stretched arcs: a square arc of the smaller side, scaled to the box.
-  const stretch = arcStretch(w);
   const arcSize = () => {
     if (!stretch) { size(); return; }
     L(`${v}.set_size(${stretch.s}, ${stretch.s})`);
@@ -331,6 +335,14 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       onValue(`${v}.get_tab_active(), selected_text(${py(v)})`);
       break;
     }
+  }
+  if (angle) {
+    const [t, px, py_] = crop
+      ? [`${v}_clip`, num(w.w / 2 - crop.x, 0), num(w.h / 2 - crop.y, 0)]
+      : stretch ? [v, num(stretch.s / 2, 0), num(stretch.s / 2, 0)] : [v, "lv.pct(50)", "lv.pct(50)"];
+    L(`${t}.set_style_transform_pivot_x(${px}, 0)`);
+    L(`${t}.set_style_transform_pivot_y(${py_}, 0)`);
+    L(`${t}.set_style_transform_rotation(${angle * 10}, 0)  # ${angle}°`);
   }
   if (w.opacity !== undefined && w.opacity < 100) style("opa", String(Math.round((Math.max(0, w.opacity) * 255) / 100)));
   if (w.hidden) L(`${v}.add_flag(lv.obj.FLAG.HIDDEN)`);

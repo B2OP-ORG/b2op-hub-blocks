@@ -2,6 +2,7 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import type { AssetRef, FileMode, ImageSource, MultiFileProject, ProjectFile, ProjectSettings } from "./format";
 import { DEFAULT_SETTINGS, binaryTypeOf, newMultiFileProject } from "./format";
 import { normalizeRelPath } from "./paths";
+import { newId } from "../utils/id";
 
 export const MANIFEST_NAME = "b2op-project.json";
 /** Folder of the full images that image files were cropped / scaled from (not project files). */
@@ -129,12 +130,12 @@ export async function zipToProject(data: Uint8Array, fallbackTitle: string, hash
       const source = manifest?.sources?.[path];
       if (source) asset.source = source;
       assets.set(asset.hash, bytes);
-      files.push({ id: crypto.randomUUID(), name: path, content: "", asset });
+      files.push({ id: newId(), name: path, content: "", asset });
       continue;
     }
     const text = decodeText(bytes);
     if (text === null) { skipped.push(path); continue; }
-    files.push({ id: crypto.randomUUID(), name: path, content: text, mode: manifest?.modes?.[path] });
+    files.push({ id: newId(), name: path, content: text, mode: manifest?.modes?.[path] });
   }
 
   for (const f of files) if (f.asset?.source && !assets.has(f.asset.source.hash)) delete f.asset.source;

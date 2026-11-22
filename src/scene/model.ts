@@ -6,6 +6,8 @@
 // scene editor generates from it (see codegen.ts). Programs `import <module>`
 // and call `<module>.show()`; every widget is a module global (`label0`, …).
 
+import { newId } from "../utils/id";
+
 export const SCENE_FORMAT = "b2op-scene";
 export const SCENE_VERSION = 1;
 export const SCENE_HEADER_PREFIX = "# __scene__: ";
@@ -284,9 +286,7 @@ export function tryParseScene(json: string): SceneDoc | null {
 }
 
 export function newUid(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2);
+  return newId();
 }
 
 /** Kind-specific defaults (size + options). */

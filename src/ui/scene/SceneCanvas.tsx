@@ -185,10 +185,10 @@ export function SceneCanvas({ ctx, canvasRef, screenRef, canvasProps, showHint, 
       ref={canvasRef}
       tabIndex={0}
       {...canvasProps}
-      className="remote-canvas"
+      className="remote-canvas pan-canvas"
       style={{
         flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", position: "relative", outline: "none",
-        background: p.panelAltBg, touchAction: "none", cursor: ctx.panCursor,
+        background: p.panelAltBg, cursor: ctx.panCursor,
         ["--sb-track" as string]: p.panelAltBg,
         ["--sb-thumb" as string]: `color-mix(in srgb, ${p.accent} 55%, transparent)`,
         ["--sb-thumb-hover" as string]: p.accent,

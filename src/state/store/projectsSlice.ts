@@ -5,6 +5,7 @@ import { loadProject, metaOf, removeProject, saveProject, saveProjectIndex, type
 import { sanitizeFilename } from "../../utils/sanitize";
 import { activate, projectHelpers, updateMeta } from "./helpers";
 import type { AppState } from "./types";
+import { newId } from "../../utils/id";
 
 export interface ProjectsSlice {
   /** Metadata of every stored project (the active one included). */
@@ -74,7 +75,7 @@ export const createProjectsSlice: StateCreator<AppState, [], [], ProjectsSlice> 
 
     importProject: (p, activateIt = true) => {
       const norm = normalizeProject(p) ?? newMultiFileProject();
-      const mfp = { ...norm, id: crypto.randomUUID(), title: get().uniqueProjectTitle(norm.title), upload: null };
+      const mfp = { ...norm, id: newId(), title: get().uniqueProjectTitle(norm.title), upload: null };
       get().persist();
       saveProject(mfp);
       const projects = [...get().projects, metaOf(mfp)];
@@ -115,7 +116,7 @@ export const createProjectsSlice: StateCreator<AppState, [], [], ProjectsSlice> 
     duplicateProject: (id) => {
       const src = get().getProject(id);
       if (!src) return;
-      const idMap = new Map(src.files.map((f) => [f.id, crypto.randomUUID()]));
+      const idMap = new Map(src.files.map((f) => [f.id, newId()]));
       const copy: MultiFileProject = {
         ...src,
         title: src.title + " copy",

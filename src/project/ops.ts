@@ -2,6 +2,7 @@
 
 import { fileToProject, newBlocksProject, type AnyProject, type AssetRef, type FileMode, type MultiFileProject, type ProjectFile } from "./format";
 import { ancestorDirs, normalizeRelPath, uniqueName } from "./paths";
+import { newId } from "../utils/id";
 
 export interface NewFileInput {
   /** Project-relative path. */
@@ -51,7 +52,7 @@ export function mergeFiles(mfp: MultiFileProject, files: NewFileInput[], overwri
       continue;
     }
     const finalPath = uniqueName(path, (c) => pathTaken(next, c));
-    const file: ProjectFile = { id: crypto.randomUUID(), name: finalPath, content: input.content, mode: input.mode, ...(input.asset ? { asset: input.asset } : {}) };
+    const file: ProjectFile = { id: newId(), name: finalPath, content: input.content, mode: input.mode, ...(input.asset ? { asset: input.asset } : {}) };
     next.files.push(file);
     ids.push(file.id);
   }

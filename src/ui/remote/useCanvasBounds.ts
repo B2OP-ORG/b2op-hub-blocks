@@ -22,7 +22,13 @@ export function useCanvasBounds({ canvasRef, widgets, hasLayout, zoom, zoomRef }
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setViewSize({ w: el.clientWidth, h: el.clientHeight }));
+    // Rounded down: clientWidth / Height may round a fractional size (common on
+    // touch screens' non-integer pixel ratios) up, and content that much bigger
+    // than the view brings up scrollbars, which shrink the view, and so on (flicker).
+    const ro = new ResizeObserver(([entry]) => {
+      const r = entry.contentRect; // inside the scrollbars, like clientWidth / Height
+      setViewSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [canvasRef, hasLayout]);

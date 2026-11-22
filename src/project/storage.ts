@@ -1,6 +1,7 @@
 import type { AnyProject, MultiFileProject, ProjectFile } from "./format";
 import { parseProject, DEFAULT_SETTINGS, normalizeProject, withBlocksHeader } from "./format";
 import { sanitizeFilename } from "../utils/sanitize";
+import { newId } from "../utils/id";
 
 // ── Keys ──────────────────────────────────────────────────────────────────────
 
@@ -188,8 +189,8 @@ export function migrateLegacy(): MultiFileProject | null {
 function legacyToFile(p: AnyProject): ProjectFile {
   const name = sanitizeFilename(p.title) + ".py";
   return p.type === "blocks"
-    ? { id: crypto.randomUUID(), name, content: withBlocksHeader(p.workspace, ""), mode: "blocks" }
-    : { id: crypto.randomUUID(), name, content: p.source, mode: "python" };
+    ? { id: newId(), name, content: withBlocksHeader(p.workspace, ""), mode: "blocks" }
+    : { id: newId(), name, content: p.source, mode: "python" };
 }
 
 /** Asset hashes used by any stored project (for gcAssets). */

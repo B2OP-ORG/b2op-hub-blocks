@@ -41,6 +41,13 @@ button { font: inherit; }
   .remote-canvas { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) var(--sb-track); }
 }
 
+/* Pan / zoom canvases (useCanvasView): the browser must not pan or zoom them
+   itself, the hook does. Chrome doesn't pass a scroll container's own
+   touch-action on to the content it scrolls, so a finger on the empty
+   background would start a native scroll (and cancel the pointer); set it on
+   the content too. */
+.pan-canvas, .pan-canvas > * { touch-action: none; }
+
 :root {
   --cyan-100: #cceff6;
   --cyan-200: #67e8f9;

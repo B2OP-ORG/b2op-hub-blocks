@@ -9,6 +9,7 @@ import { sanitizeFilename } from "../../utils/sanitize";
 import { showAlert } from "../dialog";
 import { addFilesWithPrompt, modeFor } from "./common";
 import { pickProject } from "./project";
+import { newId } from "../../utils/id";
 
 // ── Example flows ─────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ export async function openExampleAsProject(entry: ExampleEntry): Promise<void> {
   if (!files) return;
   const s = useApp.getState();
   const base = newMultiFileProject(s.uniqueProjectTitle(entry.title));
-  const withIds = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, content: f.content, mode: f.mode ?? "python" as FileMode }));
+  const withIds = files.map((f) => ({ id: newId(), name: f.name, content: f.content, mode: f.mode ?? "python" as FileMode }));
   const first = withIds.find((f) => f.name === "main.py") ?? withIds[0];
   const folders = [...new Set(withIds.flatMap((f) => {
     const parts = f.name.split("/").slice(0, -1);
@@ -65,7 +66,7 @@ export async function downloadExample(entry: ExampleEntry, file?: string): Promi
   const files = await loadExampleFiles(entry, false);
   if (!files) return;
   if (entry.folder && !file) {
-    const p = { ...newMultiFileProject(entry.title), files: files.map((f) => ({ id: crypto.randomUUID(), name: f.name, content: f.content, mode: f.mode ?? "python" as FileMode })) };
+    const p = { ...newMultiFileProject(entry.title), files: files.map((f) => ({ id: newId(), name: f.name, content: f.content, mode: f.mode ?? "python" as FileMode })) };
     downloadBytes(projectToZip(p), sanitizeFilename(entry.title) + ".zip", "application/zip");
     return;
   }

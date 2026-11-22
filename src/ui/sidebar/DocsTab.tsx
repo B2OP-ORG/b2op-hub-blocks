@@ -10,6 +10,7 @@ import { DocRow, ModuleTree } from "./DocsModuleTree";
 import { GUIDES } from "../../docs/guides";
 import { apiModules, rootModules, searchIndex } from "../../docs/apiModel";
 import { pageContent } from "../../docs/pages";
+import { newId } from "../../utils/id";
 
 const GROUP_TITLE: React.CSSProperties = { padding: "10px 12px 3px", letterSpacing: 0.5 };
 
@@ -18,7 +19,7 @@ const DocPage = lazy(() => import("../docs/DocPage").then((m) => ({ default: m.D
 /** Open a doc page as an editor tab. */
 function openDocInTab(pageId: string) {
   const title = pageContent(pageId)?.title ?? "Docs";
-  useApp.getState().openExtraTab({ id: `doc:${crypto.randomUUID()}`, kind: "doc", title, ref: pageId });
+  useApp.getState().openExtraTab({ id: `doc:${newId()}`, kind: "doc", title, ref: pageId });
 }
 
 export function DocsTab() {

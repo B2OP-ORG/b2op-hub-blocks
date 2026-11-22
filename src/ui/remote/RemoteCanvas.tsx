@@ -19,15 +19,17 @@ export function RemoteCanvas({ canvasRef, canvasProps, showing, bounds, zoom, pa
   children: React.ReactNode;
 }) {
   const p = usePalette();
+  // Whole px, rounded down: (viewW / zoom) * zoom can come out a hair above the view size → spurious scrollbar.
+  const px = (units: number) => Math.floor(units * zoom + 1e-6);
   return (
     <div
       ref={canvasRef}
       tabIndex={0}
       {...canvasProps}
-      className="remote-canvas"
+      className="remote-canvas pan-canvas"
       style={{
         flex: 1, minWidth: 0, overflow: "auto", position: "relative", outline: "none",
-        background: p.panelAltBg, touchAction: "none", cursor: panCursor,
+        background: p.panelAltBg, cursor: panCursor,
         ["--sb-track" as string]: p.panelAltBg,
         ["--sb-thumb" as string]: `color-mix(in srgb, ${p.accent} 55%, transparent)`,
         ["--sb-thumb-hover" as string]: p.accent,
@@ -36,7 +38,7 @@ export function RemoteCanvas({ canvasRef, canvasProps, showing, bounds, zoom, pa
       {/* Sized to the scaled area; the stage inside maps layout units (origin bounds.left / top) onto it. */}
       <div style={{
         position: "relative", overflow: "hidden", minWidth: "100%", minHeight: "100%",
-        width: (bounds.right - bounds.left) * zoom, height: (bounds.bottom - bounds.top) * zoom,
+        width: px(bounds.right - bounds.left), height: px(bounds.bottom - bounds.top),
         backgroundImage: showing ? undefined : `radial-gradient(${p.border} ${Math.max(0.6, zoom)}px, transparent ${Math.max(0.6, zoom)}px)`,
         backgroundSize: `${GRID * 2 * zoom}px ${GRID * 2 * zoom}px`,
         backgroundPosition: `${-bounds.left * zoom}px ${-bounds.top * zoom}px`,

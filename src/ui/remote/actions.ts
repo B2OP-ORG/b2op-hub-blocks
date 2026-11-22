@@ -1,3 +1,4 @@
+import { Gauge, Hash, Joystick, Lightbulb, MousePointerClick, SlidersHorizontal, TextCursorInput, ToggleRight, type LucideIcon } from "lucide-react";
 import { useApp } from "../../state/store";
 import { showAlert, showList, showPrompt } from "../dialog";
 import {
@@ -32,6 +33,24 @@ export const KIND_HINT: Record<WidgetKind, string> = {
   led: "indicator · bool",
   gauge: "indicator · number as bar or dial",
 };
+
+/** Palette icon per widget kind. */
+export const KIND_ICON: Record<WidgetKind, LucideIcon> = {
+  slider: SlidersHorizontal,
+  switch: ToggleRight,
+  button: MousePointerClick,
+  joystick: Joystick,
+  text_input: TextCursorInput,
+  display: Hash,
+  led: Lightbulb,
+  gauge: Gauge,
+};
+
+/** Palette groups. */
+export const PALETTE_CATEGORIES: { id: string; title: string; kinds: WidgetKind[] }[] = [
+  { id: "controls", title: "Controls", kinds: CONTROL_KINDS },
+  { id: "indicators", title: "Indicators", kinds: INDICATOR_KINDS },
+];
 
 /**
  * "Create remote name…" from the block toolbox: pick a widget kind and a name,

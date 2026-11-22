@@ -11,10 +11,12 @@ import { LspSection } from "./LspSection";
 import { RunSection } from "./RunSection";
 import { SettingsNav } from "./SettingsNav";
 import { SidebarSection } from "./SidebarSection";
+import { VisualEditorsSection } from "./VisualEditorsSection";
 
 const SECTION_VIEWS: Record<Section, () => React.ReactNode> = {
   general: GeneralSection,
   sidebar: SidebarSection,
+  visual: VisualEditorsSection,
   blocks: BlocksSection,
   code: CodeEditorSection,
   lsp: LspSection,

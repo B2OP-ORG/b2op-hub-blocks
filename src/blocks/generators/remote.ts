@@ -1,9 +1,9 @@
 import type { Block } from "blockly";
 import { Order, pythonGenerator, type PythonGenerator } from "blockly/python";
 import { RemoteType } from "../../device/protocol";
-import { findSymbol, remoteSymbols } from "../../remote/registry";
+import { findSymbol } from "../../remote/registry";
 import { isAttrName } from "../../remote/layout";
-import { REMOTE_GET_BLOCK, remoteGetKind, type RemoteValueKind } from "../remoteKinds";
+import { REMOTE_GET_BLOCK, type RemoteValueKind } from "../remoteKinds";
 
 const KEY_IMPORT = "remote_import";
 const KEY_MESSAGES = "remote_messages";
@@ -40,40 +40,13 @@ export function remoteReadExpr(name: string): string {
   return isAttrName(name) ? `remote.${name}` : `remote.get(${pyString(name)})`;
 }
 
-/** Message type for an indicator the layouts don't define, from the value block. */
-function guessType(block: Block): RemoteType {
-  const target = block.getInputTargetBlock("VALUE");
-  if (!target) return RemoteType.Float;
-  if (remoteGetKind(target.type)) {
-    const s = findSymbol("control", target.getFieldValue("NAME"));
-    if (s) return s.type;
-  }
-  const check = target.outputConnection?.getCheck() ?? [];
-  if (check.includes("String")) return RemoteType.Str;
-  if (check.includes("Boolean")) return RemoteType.Bool;
-  return RemoteType.Float;
-}
-
 /**
- * Id + type for indicator / control `name`: from the layouts, else a free id
- * (not used by any layout widget — controls and indicators share ids — or an
- * earlier declaration) and a type guessed from the block. Controls get a
- * create_message too: a no-op while the editor has them defined, and the
- * program still works without it.
+ * Id + type of the layout indicator / control `name`, recorded for the
+ * create_message declarations (a no-op on the hub for controls while the
+ * editor has them defined, but the program still works without it).
  */
-function declare(name: string, block: Block): { id: number; type: RemoteType } {
-  const known = declared.get(name);
-  if (known) return known;
-  const sym = findSymbol("any", name);
-  let entry: { id: number; type: RemoteType };
-  if (sym) {
-    entry = { id: sym.id, type: sym.type };
-  } else {
-    const used = new Set([...remoteSymbols().map((s) => s.id), ...[...declared.values()].map((d) => d.id)]);
-    let id = 0;
-    while (used.has(id) && id < 255) id++;
-    entry = { id, type: guessType(block) };
-  }
+function declare(name: string, sym: { id: number; type: RemoteType }): { id: number; type: RemoteType } {
+  const entry = declared.get(name) ?? { id: sym.id, type: sym.type };
   declared.set(name, entry);
   return entry;
 }
@@ -95,7 +68,8 @@ export function registerRemoteGenerators(gen: PythonGenerator): void {
     const empty = kind === "bool" ? "False" : kind === "text" ? "''" : "0";
     gen.forBlock[type] = (block: Block) => {
       const name: string = block.getFieldValue("NAME") ?? "";
-      if (!name) return [empty, Order.ATOMIC];
+      // Deleted / not yet created control: read nothing.
+      if (!name || !findSymbol("control", name)) return [empty, Order.ATOMIC];
       needsRemote(gen);
       return [remoteReadExpr(name), isAttrName(name) ? Order.MEMBER : Order.FUNCTION_CALL];
     };
@@ -104,8 +78,11 @@ export function registerRemoteGenerators(gen: PythonGenerator): void {
   gen.forBlock["remote_set_indicator"] = (block: Block) => {
     const name: string = block.getFieldValue("NAME") ?? "";
     if (!name) return "";
+    // Deleted / not yet created indicator or control: send nothing.
+    const sym = findSymbol("any", name);
+    if (!sym) return `pass  # remote name ${pyString(name)} not defined\n`;
     needsRemote(gen);
-    const { id, type } = declare(name, block);
+    const { id, type } = declare(name, sym);
     writeDeclarations(gen);
     const target = block.getInputTargetBlock("VALUE");
     let value = gen.valueToCode(block, "VALUE", Order.NONE);

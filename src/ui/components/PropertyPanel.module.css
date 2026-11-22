@@ -1,7 +1,6 @@
 .panel {
-  flex-shrink: 0;
-  border-left: 1px solid var(--p-border);
-  background: var(--p-panel-bg);
+  flex: 1;
+  min-height: 0;
   padding: 12px;
   overflow-y: auto;
   display: flex;
@@ -28,3 +27,24 @@
 .danger { color: var(--p-danger); }
 .warn { color: var(--p-warn-text); }
 .dim { color: var(--p-dim-text); }
+
+.group { display: flex; flex-direction: column; gap: 8px; }
+.group + .group { border-top: 1px solid var(--p-border); padding-top: 8px; }
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--p-dim-text);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  text-align: left;
+}
+.groupHeader:hover { color: var(--p-text); }
+.groupBody { display: flex; flex-direction: column; gap: 10px; }
+.hint { font-size: 12px; color: var(--p-dim-text); line-height: 1.4; }

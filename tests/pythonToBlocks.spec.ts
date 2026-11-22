@@ -306,9 +306,9 @@ hub.led.setColorIdx(x)
   it("translates list literal", () => {
     const src = `${VH}\nx = [1, 2, 3]\n`;
     const chain = translate(src);
-    const list = chain?.inputs?.VALUE.block;
+    const list = chain?.inputs?.VALUE?.block;
     expect(list?.type).toBe("lists_create_with");
-    expect((list?.extraState as { itemCount: number }).itemCount).toBe(3);
+    expect((list?.extraState as { itemCount: number } | undefined)?.itemCount).toBe(3);
     expect(list?.inputs?.ADD0.block?.fields?.NUM).toBe("1");
     expect(list?.inputs?.ADD2.block?.fields?.NUM).toBe("3");
   });

@@ -1,0 +1,35 @@
+.panel { display: flex; height: 100%; min-width: 0; }
+
+/* 3px separator with a grip mark in the middle; wider invisible hit area. */
+.sep {
+  width: 3px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  cursor: ew-resize;
+  touch-action: none;
+  background: var(--p-border);
+}
+.sep::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.sep::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 28px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: var(--p-dim-text);
+}
+.sep:hover, .sep:active { background: var(--p-accent); }
+.sep:hover::after, .sep:active::after { background: var(--p-accent-text); }
+
+.content { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }

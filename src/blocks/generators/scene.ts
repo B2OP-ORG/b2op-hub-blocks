@@ -2,7 +2,7 @@ import type { Block } from "blockly";
 import { Order, type PythonGenerator } from "blockly/python";
 import { needsLvglImport } from "../setup";
 import { coerceColor } from "./lvgl";
-import { findSceneWidget } from "../../scene/registry";
+import { findScene, findSceneWidget } from "../../scene/registry";
 import { eventArgs, type SceneKind } from "../../scene/model";
 import { splitWidgetRef } from "../defs/scene";
 
@@ -29,26 +29,33 @@ export function eventParams(kind: SceneKind | undefined, body: string): { params
 export function registerSceneGenerators(gen: PythonGenerator): void {
   const val = (block: Block, name: string, def = "0") => gen.valueToCode(block, name, Order.NONE) || def;
 
-  /** Widget reference of a block: module, name, Python expression and kind (if defined). */
+  /**
+   * Widget reference of a block: module, name, Python expression and kind.
+   * Empty name (and no import) when the widget is deleted / not created yet.
+   */
   const ref = (block: Block) => {
     const [module, name] = splitWidgetRef(block.getFieldValue("WIDGET") ?? "");
-    if (module) needsScene(gen, module);
-    return { module, name, w: `${module}.${name}`, kind: findSceneWidget(module, name)?.kind };
+    const kind = module && name ? findSceneWidget(module, name)?.kind : undefined;
+    if (!kind) return { module, name: "", w: "", kind };
+    needsScene(gen, module);
+    return { module, name, w: `${module}.${name}`, kind };
   };
   const missing = (block: Block) => `pass  # scene widget "${block.getFieldValue("WIDGET") ?? ""}" not found\n`;
+  /** Scene module of a block, or "" (no import) when the scene doesn't exist. */
   const sceneOf = (block: Block) => {
     const m = block.getFieldValue("SCENE") ?? "";
-    if (m) needsScene(gen, m);
+    if (!m || !findScene(m)) return "";
+    needsScene(gen, m);
     return m;
   };
 
   gen.forBlock["scene_show"] = (block: Block) => {
     const m = sceneOf(block);
-    return m ? `${m}.show()\n` : "pass  # no scene picked\n";
+    return m ? `${m}.show()\n` : `pass  # scene "${block.getFieldValue("SCENE") ?? ""}" not found\n`;
   };
   gen.forBlock["scene_hide"] = (block: Block) => {
     const m = sceneOf(block);
-    return m ? `${m}.hide()\n` : "pass  # no scene picked\n";
+    return m ? `${m}.hide()\n` : `pass  # scene "${block.getFieldValue("SCENE") ?? ""}" not found\n`;
   };
   gen.forBlock["scene_is_shown"] = (block: Block) => {
     const m = sceneOf(block);

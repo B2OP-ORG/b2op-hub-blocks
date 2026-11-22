@@ -6,7 +6,7 @@ import { useRef, useState } from "react";
 import type { RemoteValue } from "../../device/protocol";
 import { joystickNames, type Widget } from "../../remote/layout";
 import type { Palette } from "../theme";
-import { INSET, KNOB, fmt, isVertical, num, quantize } from "./widgetUtils";
+import { INSET, KNOB, fmt, isVertical, localPoint, num, quantize } from "./widgetUtils";
 
 export interface WidgetProps {
   w: Widget;
@@ -38,12 +38,11 @@ function Slider({ w, p, live, values, onChange }: WidgetProps) {
   };
   const fromPointer = (e: React.PointerEvent) => {
     const el = ref.current!;
-    const r = el.getBoundingClientRect();
-    // Work in the track's own (unzoomed) px: the canvas may be scaled.
-    const scale = el.offsetWidth ? r.width / el.offsetWidth : 1;
+    // Work in the track's own (unzoomed, unrotated) px: the canvas may be scaled, the card rotated.
+    const pt = localPoint(el, e.clientX, e.clientY, w.angle);
     const d = Math.min(el.offsetWidth, el.offsetHeight) - INSET * 2;
     const usable = (vertical ? el.offsetHeight : el.offsetWidth) - INSET * 2 - d;
-    const along = (vertical ? r.bottom - e.clientY : e.clientX - r.left) / scale;
+    const along = vertical ? el.offsetHeight - pt.y : pt.x;
     const f = usable > 0 ? (along - INSET - d / 2) / usable : 0;
     set(min + Math.max(0, Math.min(1, f)) * (max - min), true);
   };
@@ -108,7 +107,8 @@ function Switch({ w, p, live, values, onChange }: WidgetProps) {
     ? { left: "50%", transform: "translateX(-50%)", top: on ? `${INSET}px` : end, transition: "top .15s" }
     : { top: "50%", transform: "translateY(-50%)", left: on ? end : `${INSET}px`, transition: "left .15s" };
   const labelPos: React.CSSProperties = vertical
-    ? { left: "50%", transform: "translate(-50%, -50%)", top: on ? `calc(100% - ${KNOB} / 2 - ${INSET}px - ${KNOB} / 2)` : `calc(${KNOB} + ${INSET}px + ${KNOB} / 2)` }
+    // Centred in the free part of the track (the knob is at the top when on, at the bottom when off).
+    ? { left: "50%", transform: "translate(-50%, -50%)", top: on ? `calc((100% + ${INSET}px + ${KNOB}) / 2)` : `calc((100% - ${INSET}px - ${KNOB}) / 2)` }
     : { top: "50%", transform: "translateY(-50%)", ...(on ? { left: labelAt } : { right: labelAt }) };
   return (
     <button
@@ -162,10 +162,11 @@ function Joystick({ w, p, live, values, onChange }: WidgetProps) {
   const x = live ? num(values[nx]) : 0;
   const y = live ? num(values[ny]) : 0;
   const move = (e: React.PointerEvent) => {
-    const r = ref.current!.getBoundingClientRect();
-    const half = Math.min(r.width, r.height) / 2;
-    let dx = (e.clientX - (r.left + r.width / 2)) / half;
-    let dy = -(e.clientY - (r.top + r.height / 2)) / half;
+    const el = ref.current!;
+    const pt = localPoint(el, e.clientX, e.clientY, w.angle);
+    const half = Math.min(el.offsetWidth, el.offsetHeight) / 2;
+    let dx = (pt.x - el.offsetWidth / 2) / half;
+    let dy = -(pt.y - el.offsetHeight / 2) / half;
     const len = Math.hypot(dx, dy);
     if (len > 1) { dx /= len; dy /= len; }
     onChange(nx, Math.round(dx * range), true);

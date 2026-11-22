@@ -1,4 +1,4 @@
-import { Blocks, File, FileCode, Gamepad2, Monitor } from "lucide-react";
+import { Blocks, File, FileCode, FileImage, Gamepad2, Monitor } from "lucide-react";
 import { fileMode, type ProjectFile } from "../../project/format";
 import { isRemoteFile } from "../../remote/layout";
 import { isSceneFile } from "../../scene/project";
@@ -8,6 +8,7 @@ import { RowIcon } from "../components/ListRow";
 /** Coloured icon for a project file: scene, blocks, Python, remote layout or other. */
 export function FileIcon({ file }: { file: ProjectFile }) {
   const p = usePalette();
+  if (file.asset) return <RowIcon color="#0d9488"><FileImage size={13} /></RowIcon>;
   const scene = isSceneFile(file);
   const mode = !scene && /\.pyi?$/i.test(file.name) ? fileMode(file) : null;
   const remote = isRemoteFile(file.name);

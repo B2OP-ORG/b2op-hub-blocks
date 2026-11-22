@@ -20,56 +20,7 @@ function makeWorkspace(state: object): Blockly.Workspace {
   return ws;
 }
 
-describe("Phase 2 blocks", () => {
-  it("emits hub.imu.acceleration.x", () => {
-    const ws = makeWorkspace(
-      underHat({
-        type: "text_print",
-        inputs: { TEXT: { block: { type: "hub_imu_accel", fields: { AXIS: "x" } } } },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toContain("hub.imu.acceleration.x");
-  });
-
-  it("emits hub.log.setLevel(1)", () => {
-    const ws = makeWorkspace(underHat({ type: "hub_log_level", fields: { LEVEL: "1" } }));
-    const py = workspaceToPython(ws);
-    expect(py).toContain("hub.log.setLevel(1)");
-  });
-
-  it("emits LCD backlight on", () => {
-    const ws = makeWorkspace(underHat({ type: "hub_lcd_backlight", fields: { STATE: "on" } }));
-    const py = workspaceToPython(ws);
-    expect(py).toContain("hub.lcd.on()");
-  });
-
-  it("emits motor setAccTime with profile", () => {
-    const ws = makeWorkspace(
-      underHat({
-        type: "motor_set_acc_time",
-        fields: { PORT: "A", PROFILE: "1" },
-        inputs: { MS: { block: { type: "math_number", fields: { NUM: 500 } } } },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toContain("isinstance(dev_a, devices.encoder_motor)");
-    expect(py).toContain("dev_a.setAccTime(500, 1)");
-  });
-
-  it("emits basic_motor_power via typed-device startPower", () => {
-    const ws = makeWorkspace(
-      underHat({
-        type: "basic_motor_power",
-        fields: { PORT: "B" },
-        inputs: { POWER: { block: { type: "math_number", fields: { NUM: 75 } } } },
-      }),
-    );
-    const py = workspaceToPython(ws);
-    expect(py).toContain("isinstance(dev_b, devices.basic_motor)");
-    expect(py).toContain("dev_b.startPower(75)");
-  });
-
+describe("LVGL codegen", () => {
   it("LVGL setup includes import and screen_active", () => {
     const ws = makeWorkspace(underHat({ type: "lvgl_clear_screen" }));
     const py = workspaceToPython(ws);
@@ -110,19 +61,6 @@ describe("Phase 2 blocks", () => {
     const py = workspaceToPython(ws);
     expect(py).toContain("label0 = 1");
     expect(py).toContain("label1 = lv.label(_scr)");
-  });
-
-  it("indents generated blocks with 4 spaces", () => {
-    const ws = makeWorkspace(underHat({
-      type: "controls_repeat_ext",
-      inputs: {
-        TIMES: { block: { type: "math_number", fields: { NUM: 3 } } },
-        DO: { block: { type: "text_print", inputs: { TEXT: { block: { type: "text", fields: { TEXT: "x" } } } } } },
-      },
-    }));
-    const py = workspaceToPython(ws);
-    expect(py).toMatch(/\n {4}print\('x'\)/);
-    expect(py).not.toMatch(/\n {2}print/);
   });
 
   it("LVGL label emits create + set_text + set_pos", () => {

@@ -1,0 +1,46 @@
+.panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--p-panel-bg);
+}
+
+/* Keeps its minimum width when the panel is narrower; the panel then scrolls sideways. */
+.inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel.left { border-right: 1px solid var(--p-border); }
+.panel.right { border-left: 1px solid var(--p-border); }
+
+/* Drag handle on the canvas-facing edge; same element open or closed so a drag keeps going. */
+.handle {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+/* Open: 5px hit area straddling the panel border. */
+.open { width: 5px; background: transparent; }
+.open.left { margin: 0 -3px 0 -2px; }
+.open.right { margin: 0 -2px 0 -3px; }
+.open:hover, .open:active { background: var(--p-accent); }
+
+/* Closed: a 1px line with an invisible, wider hit area. */
+.closed { width: 1px; background: var(--p-border); }
+.closed::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.closed:hover, .closed:active { background: var(--p-accent); }

@@ -85,12 +85,13 @@ export function workspaceToPython(workspace: Workspace): string {
       buttonDefs.push(`@hub.buttons.on("${btn}")\ndef ${name}():\n${indentBody(globalDecl + body)}`);
     } else if (top.type === SCENE_HAT) {
       const [module, widget] = splitWidgetRef(top.getFieldValue("WIDGET") ?? "");
-      if (!module || !widget) continue;
+      // Deleted / not yet created widget: no handler at all.
+      const kind = module && widget ? findSceneWidget(module, widget)?.kind : undefined;
+      if (!kind) continue;
       needsScene(gen, module);
       const child: Block | null = top.getInputTargetBlock("DO");
       const code = child ? gen.blockToCode(child) : "";
       const body = Array.isArray(code) ? code[0] : code;
-      const kind = findSceneWidget(module, widget)?.kind;
       const { params, prelude } = eventParams(kind, body);
       const base = `_on_${module.split(".").join("_")}_${widget}`;
       let name = base;

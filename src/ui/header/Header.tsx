@@ -1,11 +1,12 @@
 import { useRef } from "react";
-import { Code2, Gamepad2, Layers, Settings } from "lucide-react";
+import { Code2, FileCode, Gamepad2, Layers, Settings } from "lucide-react";
 import { useApp } from "../../state/store";
 import { useDark } from "../theme";
 import { useCompactLevel } from "../hooks/useCompactLevel";
 import { switchActiveFileMode } from "../editor/modeSwitch";
 import { openRemoteController } from "../remote/actions";
 import { isSceneFile } from "../../scene/project";
+import { pythonPanelUsable } from "../workspace/pythonPanel";
 import { BoardInfo } from "./BoardInfo";
 import { DeviceActions } from "./DeviceActions";
 import { dis, headerStyles, iconPad, labelShown } from "./headerStyles";
@@ -34,6 +35,9 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
   // The children read their own state, but the overflow check runs after a
   // Header render: re-render whenever anything that changes the bar's width does.
   useApp((s) => [!!s.device, s.running, s.connection, s.connectionError, s.boardName, s.boardVersion, s.fwVersion, s.project.settings.liveMode].join("|"));
+  const pyUsable = useApp(pythonPanelUsable);
+  const pyOpen = useApp((s) => s.pyPanel.open);
+  const setPyPanel = useApp((s) => s.setPyPanel);
   const headerRef = useRef<HTMLElement>(null);
   const compactLevel = useCompactLevel(headerRef, 3);
   const dark = useDark();
@@ -73,6 +77,14 @@ export function Header({ onOpenSettings, onOpenFwUpdate, onOpenFwUpdater, latest
         title="Open the project's remote controller (sliders, buttons, indicators for remote.*)">
         <Gamepad2 size={13} />{show(1) && " Remote"}
       </button>
+      {/* Only for editors with a generated-Python panel (blocks, scenes). */}
+      {pyUsable && (
+        <button type="button" style={{ ...(pyOpen ? s.primary : s.btn), ...iconPad(compactLevel, 1) }} aria-pressed={pyOpen}
+          onClick={() => setPyPanel({ open: !pyOpen })}
+          title={pyOpen ? "Hide the generated Python code" : "Show the generated Python code"}>
+          <FileCode size={13} />{show(1) && " Python"}
+        </button>
+      )}
 
       <div style={s.divider} />
 

@@ -1,5 +1,7 @@
 /** Global editor settings (persisted in localStorage, not part of a project). */
 
+import { DEFAULT_PANEL_LAYOUT, normalizePanelLayout } from "./panelLayout";
+
 export type LspMode = "off" | "worker" | "remote";
 
 // ── Editor settings (global, persisted in localStorage) ──────────────────────
@@ -112,6 +114,19 @@ export const DEFAULT_AUTO_RELOAD: AutoReloadSettings = {
   python: { mode: "off", delaySec: 2 },
 };
 
+/**
+ * Scene / remote editors: rotating a widget by its corner handle snaps to
+ * `near` degree steps while the pointer is within `distance` screen px of the
+ * widget, and to the finer `far` steps further out.
+ */
+export interface RotateSnapSettings {
+  near: number;
+  far: number;
+  distance: number;
+}
+
+export const DEFAULT_ROTATE_SNAP: RotateSnapSettings = { near: 15, far: 1, distance: 80 };
+
 export interface EditorSettings {
   darkMode: boolean;
   showAdvanced: boolean;
@@ -125,6 +140,10 @@ export interface EditorSettings {
   monaco: MonacoSettings;
   /** Reload the running program when its files change. */
   autoReload: AutoReloadSettings;
+  /** Scene / remote editors: tool panels around the canvas (see panelLayout.ts). */
+  panelLayout: string;
+  /** Scene / remote editors: snapping of the rotate handle. */
+  rotateSnap: RotateSnapSettings;
 }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -138,6 +157,8 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sidebar: DEFAULT_SIDEBAR_SETTINGS,
   monaco: DEFAULT_MONACO_SETTINGS,
   autoReload: DEFAULT_AUTO_RELOAD,
+  panelLayout: DEFAULT_PANEL_LAYOUT,
+  rotateSnap: DEFAULT_ROTATE_SNAP,
 };
 
 /** Merge stored (possibly partial / older) settings over the defaults. */
@@ -159,5 +180,7 @@ export function mergeEditorSettings(raw: unknown): EditorSettings {
       scenes: { ...DEFAULT_AUTO_RELOAD.scenes, ...(r.autoReload?.scenes ?? {}) },
       python: { ...DEFAULT_AUTO_RELOAD.python, ...(r.autoReload?.python ?? {}) },
     },
+    panelLayout: normalizePanelLayout(r.panelLayout ?? DEFAULT_PANEL_LAYOUT),
+    rotateSnap: { ...DEFAULT_ROTATE_SNAP, ...(r.rotateSnap ?? {}) },
   };
 }

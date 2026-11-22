@@ -9,7 +9,7 @@ export function SceneProperties({ doc, module, onChange }: { doc: SceneDoc; modu
   const events = doc.widgets.filter((w) => EVENT_KINDS.includes(w.kind));
   const nested = module.includes(".");
   return (
-    <PropertyPanel width={260} title="Scene" subtitle={module}>
+    <PropertyPanel title="Scene" subtitle={module}>
       <ColorField label="Background" value={doc.bg} onChange={(v) => onChange({ bg: v ?? "#000000" })} required />
       <CodeUsage code={[`import ${module}`, `${module}.show()`, ...(events[0] ? [`${module}.on("${events[0].name}", my_function)`] : [])].join("\n")} />
       {nested && <div style={{ color: p.warnText, fontSize: 12 }}>This scene is in a folder. If <code>import {module}</code> fails on the hub, move it to the project's top level.</div>}

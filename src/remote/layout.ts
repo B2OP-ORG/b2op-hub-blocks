@@ -40,6 +40,8 @@ export interface Widget {
   y: number;
   w: number;
   h: number;
+  /** Rotation around the box centre (degrees, clockwise, 0..359; absent = 0). */
+  angle?: number;
   /** slider / display / gauge: number type; display may also be "bool" / "str". */
   valueType?: ValueType;
   /** slider / gauge range, joystick ±range. */

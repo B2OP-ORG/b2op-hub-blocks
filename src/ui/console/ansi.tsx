@@ -31,7 +31,8 @@ function applyAnsiCodes(s: AnsiSty, codes: number[]): AnsiSty {
 
 /** Render text with ANSI SGR colour / bold codes as styled spans. */
 export function parseAnsi(text: string): React.ReactNode {
-  const re = /\x1b\[([0-9;]*)m/g;
+  // ESC [ … m (ESC built from its code: a literal control character in a regex trips the linter).
+  const re = new RegExp(`${String.fromCharCode(27)}\\[([0-9;]*)m`, "g");
   const nodes: React.ReactNode[] = [];
   let sty: AnsiSty = {};
   let last = 0;

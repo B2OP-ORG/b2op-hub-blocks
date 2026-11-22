@@ -9,12 +9,15 @@ import { isSceneFile } from "../../scene/project";
 import { projectFileUri } from "../../lsp/projectFiles";
 import { setEditorArea } from "../../run/autoReload";
 import { NoFileOpen } from "./NoFileOpen";
+import { PythonPanel } from "./PythonPanel";
+import { PY_SEPARATOR } from "./pythonPanel";
 
 // Heavy editors (Blockly, Monaco + LSP) are split into their own chunks.
 const BlocklyView = lazy(() => import("../editor/BlocklyView").then((m) => ({ default: m.BlocklyView })));
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
 const ExtraTabView = lazy(() => import("./ExtraTabView").then((m) => ({ default: m.ExtraTabView })));
 const RemoteView = lazy(() => import("../remote/RemoteView").then((m) => ({ default: m.RemoteView })));
+const ImageView = lazy(() => import("../image/ImageView").then((m) => ({ default: m.ImageView })));
 const SceneView = lazy(() => import("../scene/SceneView").then((m) => ({ default: m.SceneView })));
 
 export function Workspace() {
@@ -26,7 +29,8 @@ export function Workspace() {
   const activeFile = useApp((s) => s.mfp.files.find((f) => f.id === s.activeFileId));
   const editorSettings = useApp((s) => s.editorSettings);
   const extraTab = useApp((s) => (s.activeExtraTab ? s.extraTabs.find((t) => t.id === s.activeExtraTab) : undefined));
-  const [pySize, setPySize] = useState(0);
+  const pyPanel = useApp((s) => s.pyPanel);
+  const pySize = pyPanel.open ? pyPanel.width : 0;
   const [conSize, setConSize] = useState(0);
 
   const onBlockChange = useCallback(
@@ -66,13 +70,15 @@ export function Workspace() {
     editor = <Suspense fallback={null}><ExtraTabView tab={extraTab} /></Suspense>;
   } else if (!activeFile) {
     editor = <NoFileOpen />;
+  } else if (activeFile.asset) {
+    editor = <Suspense fallback={null}><ImageView key={activeFile.id} file={activeFile} /></Suspense>;
   } else if (isRemoteFile(activeFile.name)) {
     editor = <Suspense fallback={null}><RemoteView file={activeFile} /></Suspense>;
   } else if (isSceneFile(activeFile)) {
-    columns = `1fr ${pySize + DRAWER_HANDLE}px`;
+    columns = `1fr ${pySize + PY_SEPARATOR}px`;
     editor = <Suspense fallback={null}><SceneView file={activeFile} /></Suspense>;
   } else if (project.type === "blocks") {
-    columns = `1fr ${pySize + DRAWER_HANDLE}px`;
+    columns = `1fr ${pySize + PY_SEPARATOR}px`;
     editor = (
       <Suspense fallback={null}>
         <BlocklyView
@@ -115,11 +121,11 @@ export function Workspace() {
       {(isBlocks || isScene) && activeFile && (
         <div style={{ gridRow: "1 / span 2", gridColumn: 2, minWidth: 0, minHeight: 0 }}>
           {/* Shows the whole file as stored/uploaded: blocks/scene header line + generated Python. */}
-          <Drawer side="right" label="Python" storageKey="drawer.python" defaultSize={360} dark={p.dark} onSizeChange={setPySize}>
+          <PythonPanel>
             <Suspense fallback={null}>
               <MonacoView value={activeFile.content} readOnly lspUri={lspUri} />
             </Suspense>
-          </Drawer>
+          </PythonPanel>
         </div>
       )}
       <div style={{ gridRow: 2, gridColumn: 1, minWidth: 0, minHeight: 0 }}>

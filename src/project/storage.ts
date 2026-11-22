@@ -191,3 +191,17 @@ function legacyToFile(p: AnyProject): ProjectFile {
     ? { id: crypto.randomUUID(), name, content: withBlocksHeader(p.workspace, ""), mode: "blocks" }
     : { id: crypto.randomUUID(), name, content: p.source, mode: "python" };
 }
+
+/** Asset hashes used by any stored project (for gcAssets). */
+export function referencedAssetHashes(extra: readonly MultiFileProject[] = []): Set<string> {
+  const out = new Set<string>();
+  const add = (p: MultiFileProject | null) => {
+    for (const f of p?.files ?? []) {
+      if (f.asset) out.add(f.asset.hash);
+      if (f.asset?.source) out.add(f.asset.source.hash);
+    }
+  };
+  for (const m of readIndex()?.projects ?? []) add(loadProject(m.id));
+  for (const p of extra) add(p);
+  return out;
+}

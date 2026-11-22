@@ -3,9 +3,10 @@
 import { type FileMode, baseName } from "../../project/format";
 import { normalizeRelPath, relJoin } from "../../project/paths";
 import { type NewFileInput, useApp } from "../../state/store";
-import { downloadText, pickFiles } from "../../utils/download";
+import { downloadBytes, downloadText, pickFiles } from "../../utils/download";
+import { getAssetBytes } from "../../project/assets";
 import { showAlert, showConfirm, showPrompt } from "../dialog";
-import { addFilesWithPrompt, decodeText, modeFor, validateRelName } from "./common";
+import { addFilesWithPrompt, fileInputFromBytes, validateRelName } from "./common";
 
 // ── File flows (active project) ──────────────────────────────────────────────
 
@@ -42,9 +43,15 @@ export async function deleteFolderFlow(path: string): Promise<void> {
   }
 }
 
-export function downloadProjectFile(id: string): void {
+export async function downloadProjectFile(id: string): Promise<void> {
   const f = useApp.getState().mfp.files.find((x) => x.id === id);
   if (!f) return;
+  if (f.asset) {
+    const bytes = await getAssetBytes(f.asset.hash);
+    if (bytes) downloadBytes(bytes, baseName(f.name), f.asset.type);
+    else await showAlert("Can't download", "This file's data isn't stored in this browser.");
+    return;
+  }
   downloadText(f.content, baseName(f.name), "text/x-python");
 }
 
@@ -54,9 +61,9 @@ export async function importFilesFromComputer(dir = ""): Promise<void> {
   const inputs: NewFileInput[] = [];
   const skipped: string[] = [];
   for (const file of files) {
-    const text = decodeText(new Uint8Array(await file.arrayBuffer()));
-    if (text === null) { skipped.push(file.name); continue; }
-    inputs.push({ name: relJoin(dir, file.name), content: text, mode: modeFor(text) });
+    const input = await fileInputFromBytes(relJoin(dir, file.name), new Uint8Array(await file.arrayBuffer()));
+    if (!input) { skipped.push(file.name); continue; }
+    inputs.push(input);
   }
   const s = useApp.getState();
   const ids = inputs.length ? await addFilesWithPrompt(s.mfp.id, inputs) : [];

@@ -10,34 +10,53 @@
 // area is the home view (0,0 + visible size) and grows past any widget that
 // sticks out, so it scrolls only when something is outside (bounds.ts,
 // useCanvasBounds.ts). Pan / zoom: see hooks/useCanvasView.ts.
+//
+// Shared with the scene editor: pointer drag from the toolbox (with the widget
+// following the pointer), deleting by dragging onto the bin or back onto the
+// toolbox (hooks/useBinDrag.ts), undo / redo (hooks/useUndoRedo.ts).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Gamepad2, Pencil } from "lucide-react";
+import { Eye, Gamepad2, PanelLeft, PanelRight, Pencil } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { RemoteValue } from "../../device/protocol";
+import type { PanelTool } from "../../settings/panelLayout";
 import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
+import { dragAngle, rotatePivot, useRotateSnap } from "../hooks/rotateDrag";
+import { keepTopLeft, rotateVec, rotatedBounds } from "../../geometry/rotation";
 import { FileLoadError } from "../components/FileLoadError";
 import { ModeToggle } from "../components/ModeToggle";
-import { PaletteGroup } from "../components/PaletteGroup";
-import { Toolbar, ToolbarHint, ToolbarSeparator, ToolbarTitle } from "../components/Toolbar";
+import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
+import { PanelToggle } from "../components/PanelToggle";
+import { ToolColumns, type ToolNodes } from "../components/ToolPanels";
+import { useToolPanels } from "../hooks/useToolPanels";
+import { Toolbar } from "../components/Toolbar";
 import { ZoomControls } from "../components/ZoomControls";
-import { KIND_HINT } from "./actions";
-import { DND_TYPE, MARGIN, MIN_H, MIN_W } from "./bounds";
+import { ToolboxBin, TrashTarget } from "../components/TrashTarget";
+import { UndoRedoButtons } from "../components/UndoRedoButtons";
+import { useBinDrag } from "../hooks/useBinDrag";
+import { useFoldState } from "../hooks/useFoldState";
+import { usePaletteDrag, type NewDrag } from "../hooks/usePaletteDrag";
+import { commitEdit, useUndoRedo } from "../hooks/useUndoRedo";
+import { KIND_HINT, KIND_ICON, PALETTE_CATEGORIES } from "./actions";
+import { MARGIN, MIN_H, MIN_W } from "./bounds";
+import { LayoutProperties } from "./LayoutProperties";
 import { RemoteCanvas } from "./RemoteCanvas";
 import { RemoteProperties } from "./RemoteProperties";
-import { RemoteWidgetCard } from "./RemoteWidgetCard";
+import { RemoteWidgetCard, RemoteWidgetGhost } from "./RemoteWidgetCard";
 import { useCanvasBounds } from "./useCanvasBounds";
 import {
-  CONTROL_KINDS, GRID, INDICATOR_KINDS, KIND_LABEL, emptyLayout, initialValue, previewIndicatorValue, makeWidget,
-  parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicted, symbolConflicts, widgetSymbols,
+  GRID, KIND_LABEL, emptyLayout, initialValue, previewIndicatorValue, makeWidget,
+  parseLayout, projectSymbols, roleOf, serializeLayout, snap, symbolConflicted, symbolConflicts, tryParseLayout, widgetSymbols,
   type RemoteLayout, type Widget, type WidgetKind,
 } from "../../remote/layout";
 import { messageByName, setControl, useRemoteSession } from "../../remote/session";
 
 const NO_WIDGETS: Widget[] = [];
+/** The remote editor has no outline. */
+const REMOTE_TOOLS: PanelTool[] = ["properties", "palette"];
 
 export function RemoteView({ file }: { file: ProjectFile }) {
   const p = usePalette();
@@ -68,6 +87,27 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     onPanStart: () => widgetDrag.cancel(),
   });
   const { zoom, zoomRef } = cv;
+  const rotateSnap = useRotateSnap();
+  const tp = useToolPanels("remote", REMOTE_TOOLS);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const bin = useBinDrag({ paletteRef, canvasRef });
+  const { trash } = bin;
+  // Refreshed every render below (needs the current layout).
+  const dropNew = useRef<(d: NewDrag<WidgetKind>) => void>(() => {});
+  const paletteDrag = usePaletteDrag<WidgetKind>(trash, (d) => dropNew.current(d),
+    () => paletteRef.current?.getBoundingClientRect());
+  const { newDrag } = paletteDrag;
+  const paletteFolds = useFoldState("b2op.remote.paletteFolds");
+  const propFolds = useFoldState("b2op.remote.propFolds");
+  const history = useUndoRedo({
+    fileId: file.id, rootRef, selected,
+    enabled: parsed.layout !== null && !showing && !widgetDrag.drag,
+    restore: (s) => {
+      useApp.getState().updateFile(file.id, s.content);
+      setSelected(tryParseLayout(s.content)?.widgets.some((w) => w.uid === s.selected) ? s.selected : null);
+    },
+  });
   const { bounds, origin } = useCanvasBounds({ canvasRef, widgets: parsed.layout?.widgets ?? NO_WIDGETS, hasLayout: parsed.layout !== null, zoom, zoomRef });
 
   // Symbols of the whole project (names / ids must be unique across layouts).
@@ -82,8 +122,10 @@ export function RemoteView({ file }: { file: ProjectFile }) {
   }
   const layout = parsed.layout;
 
-  const commit = (widgets: Widget[]) => useApp.getState().updateFile(file.id, serializeLayout({ ...layout, widgets }));
-  const update = (uid: string, patch: Partial<Widget>) => commit(layout.widgets.map((w) => (w.uid === uid ? { ...w, ...patch } : w)));
+  /** Write the widgets back as one undo step (`coalesceKey`: merge quick repeats, see editHistory.ts). */
+  const commit = (widgets: Widget[], coalesceKey?: string) => commitEdit(file.id, serializeLayout({ ...layout, widgets }), selected, coalesceKey);
+  const update = (uid: string, patch: Partial<Widget>, coalesce = false) =>
+    commit(layout.widgets.map((w) => (w.uid === uid ? { ...w, ...patch } : w)), coalesce ? `${uid}:${Object.keys(patch).sort().join(",")}` : undefined);
   const remove = (uid: string) => { commit(layout.widgets.filter((w) => w.uid !== uid)); setSelected(null); };
   const add = (kind: WidgetKind, x: number, y: number) => {
     const w = makeWidget(kind, x, y, allSymbols);
@@ -91,27 +133,61 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     setSelected(w.uid);
   };
   const addAtFreeSpot = (kind: WidgetKind) => {
-    const bottom = layout.widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0);
+    const bottom = layout.widgets.reduce((m, w) => { const b = rotatedBounds(w); return Math.max(m, b.y + b.h); }, 0);
     add(kind, 16, bottom + 16);
   };
 
   const hasConflict = (w: Widget) =>
     widgetSymbols(w, file.name).some((s) => symbolConflicted(conflicts, s));
 
+  // ── Palette drag (new widget) ───────────────────────────────────────────────
+  /** The widget a palette drag would add (for the ghost and the drop maths). */
+  const template = newDrag ? makeWidget(newDrag.kind, 0, 0, allSymbols) : null;
+  // A new widget taken back to the toolbox is put back (shown like the bin).
+  const newHeat = newDrag?.moved && newDrag.away ? bin.heatAt(newDrag.x, newDrag.y) : 0;
+  dropNew.current = (d) => {
+    if (!d.moved) { addAtFreeSpot(d.kind); return; } // a click
+    const el = canvasRef.current;
+    if (trash.overRef.current || !el) return;
+    const r = el.getBoundingClientRect();
+    if (d.x < r.left || d.x > r.right || d.y < r.top || d.y > r.bottom) return;
+    // The ghost is centred on the pointer: keep that spot under the pointer.
+    const t = makeWidget(d.kind, 0, 0, allSymbols);
+    add(d.kind, (d.x - r.left + el.scrollLeft) / zoom + bounds.left - t.w / 2, (d.y - r.top + el.scrollTop) / zoom + bounds.top - t.h / 2);
+  };
+
   // ── Pointer drag (move / resize), committed on release ──────────────────────
   const { drag } = widgetDrag;
-  const beginDrag = (e: React.PointerEvent, w: Widget, mode: "move" | "resize") => {
+  const beginDrag = (e: React.PointerEvent, w: Widget, mode: "move" | "resize" | "rotate") => {
     if (showing || e.button !== 0) return;
     setSelected(w.uid);
-    widgetDrag.begin(e, w, mode);
+    if (mode === "move") bin.begin(e);
+    widgetDrag.begin(e, w, mode, undefined, mode === "rotate" ? rotatePivot(e, zoom) : undefined);
   };
-  const onDragMove = (e: React.PointerEvent) =>
-    widgetDrag.move(e, zoom, (o, mode, dx, dy) => mode === "move"
-      ? { ...o, x: snap(o.x + dx), y: snap(o.y + dy) }
-      : { ...o, w: Math.max(MIN_W, snap(o.w + dx)), h: Math.max(MIN_H, snap(o.h + dy)) });
+  const onDragMove = (e: React.PointerEvent) => {
+    if (drag?.mode === "move") bin.move(e);
+    widgetDrag.move(e, zoom, (o, mode, dx, dy) => {
+      if (mode === "move") return { ...o, x: snap(o.x + dx), y: snap(o.y + dy) };
+      if (mode === "rotate") {
+        const a = dragAngle({ a0: o.angle ?? 0, pivot: drag?.pivot ?? { x: 1, y: 0 }, dx, dy, w: o.w, h: o.h, scale: zoom, snap: rotateSnap });
+        return { ...o, angle: a || undefined };
+      }
+      // Resize in the widget's own (rotated) frame; the top-left corner stays put on screen.
+      const [lx, ly] = rotateVec(dx, dy, -(o.angle ?? 0));
+      const w = Math.max(MIN_W, snap(o.w + lx)), h = Math.max(MIN_H, snap(o.h + ly));
+      const tl = keepTopLeft(o.x, o.y, o.w, o.h, w, h, o.angle ?? 0);
+      return { ...o, x: Math.round(tl.x), y: Math.round(tl.y), w, h };
+    });
+  };
   const endDrag = () => {
     const d = widgetDrag.end();
-    if (d && boxChanged(d)) update(d.cur.uid, { x: d.cur.x, y: d.cur.y, w: d.cur.w, h: d.cur.h });
+    if (!d) return;
+    if (bin.end() && d.mode === "move") { remove(d.orig.uid); return; }
+    if (d.mode === "rotate") {
+      if ((d.orig.angle ?? 0) !== (d.cur.angle ?? 0)) update(d.cur.uid, { angle: d.cur.angle });
+      return;
+    }
+    if (boxChanged(d)) update(d.cur.uid, { x: d.cur.x, y: d.cur.y, w: d.cur.w, h: d.cur.h });
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -123,7 +199,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     const step = e.shiftKey ? GRID * 4 : GRID;
     const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     const m = moves[e.key];
-    if (m) { e.preventDefault(); update(w.uid, { x: snap(w.x + m[0]), y: snap(w.y + m[1]) }); }
+    if (m) { e.preventDefault(); update(w.uid, { x: snap(w.x + m[0]), y: snap(w.y + m[1]) }, true); }
   };
 
   const shown = layout.widgets.map((w) => (drag?.uid === w.uid ? drag.cur : w));
@@ -134,9 +210,11 @@ export function RemoteView({ file }: { file: ProjectFile }) {
    */
   const fitAll = () => {
     if (layout.widgets.length === 0) { cv.zoomTo(1); return; }
-    const minX = Math.min(...layout.widgets.map((w) => w.x)), minY = Math.min(...layout.widgets.map((w) => w.y));
-    const maxX = Math.max(...layout.widgets.map((w) => w.x + w.w)), maxY = Math.max(...layout.widgets.map((w) => w.y + w.h));
-    const dx = MARGIN - minX, dy = MARGIN - minY;
+    const boxes = layout.widgets.map(rotatedBounds);
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    const maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    // Whole units: rotated boxes have fractional edges.
+    const dx = Math.round(MARGIN - minX), dy = Math.round(MARGIN - minY);
     if (dx || dy) {
       // The area's origin returns to 0,0; fit sets the scroll itself, so skip the origin compensation.
       origin.current = { left: 0, top: 0 };
@@ -159,21 +237,44 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     setPreviewValues(values);
   };
 
-  const paletteGroup = (title: string, kinds: WidgetKind[]) => (
-    <PaletteGroup title={title} kinds={kinds} label={(k) => KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the canvas or click to add`}
-      chipProps={(k) => ({
-        draggable: true,
-        onDragStart: (e) => { e.dataTransfer.setData(DND_TYPE, k); e.dataTransfer.effectAllowed = "copy"; },
-        onClick: () => addAtFreeSpot(k),
-      })} />
+  const paletteGroup = (id: string, title: string, kinds: WidgetKind[]) => (
+    <PaletteGroup key={id} title={title} kinds={kinds} label={(k) => KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the canvas or click to add`}
+      chipProps={(k) => paletteDrag.chipProps(k, addAtFreeSpot)} icon={(k) => { const I = KIND_ICON[k]; return <I size={14} />; }}
+      folded={paletteFolds.isFolded(id)} onToggle={() => paletteFolds.toggle(id)} />
   );
 
+  const tools: ToolNodes = {
+    properties: showing ? null : sel ? (
+      <RemoteProperties
+        key={sel.uid} w={sel} fileName={file.name} folds={propFolds}
+        others={allSymbols.filter((s) => !(s.uid === sel.uid && s.file === file.name))}
+        onChange={(patch) => update(sel.uid, patch, true)}
+        onDelete={() => remove(sel.uid)}
+      />
+    ) : (
+      <LayoutProperties layout={layout} fileName={file.name} conflicts={layout.widgets.filter(hasConflict).length} />
+    ),
+    palette: (
+      <PalettePanel ref={paletteRef}>
+        {live ? (
+          <PaletteHint>Controls are live while the program runs. <b>Stop</b> the program to edit.</PaletteHint>
+        ) : preview ? (
+          <PaletteHint>Preview: the controls react, but nothing is sent. Indicators show sample values.</PaletteHint>
+        ) : (
+          PALETTE_CATEGORIES.map((c) => paletteGroup(c.id, c.title, c.kinds))
+        )}
+      </PalettePanel>
+    ),
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
-      <Toolbar>
-        <Gamepad2 size={16} color={p.accent} />
-        <ToolbarTitle>{file.name}</ToolbarTitle>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
+      {/* Compacts when narrow: 1 hides the status text (still the icon's tooltip), 2 the mode labels, 3 the zoom % and icon. */}
+      <Toolbar maxCompact={3}>{(c) => <>
+        {tp.has("left") && <PanelToggle open={tp.isOpen("left")} onToggle={() => tp.toggle("left")} title={tp.toggleTitle("left")} icon={<PanelLeft size={15} />} />}
+        {c < 3 && <span title={status} style={{ display: "flex" }}><Gamepad2 size={15} color={p.accent} /></span>}
         <ModeToggle
+          iconOnly={c >= 2}
           value={live ? null : preview ? "preview" : "edit"}
           disabled={live}
           onChange={(m) => (m === "edit" ? setPreviewValues(null) : startPreview())}
@@ -182,63 +283,56 @@ export function RemoteView({ file }: { file: ProjectFile }) {
             { value: "preview", label: "Preview", title: "Preview: try the controller without a hub; nothing is sent", icon: <Eye size={13} /> },
           ]}
         />
-        <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>
+        <UndoRedoButtons history={history} />
+        {c < 1 && <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>}
         <ZoomControls
           percent={zoom * 100}
           canZoomOut={zoom > MIN_ZOOM} canZoomIn={zoom < MAX_ZOOM}
           onZoomOut={() => cv.zoomTo(zoom / ZOOM_STEP)} onZoomIn={() => cv.zoomTo(zoom * ZOOM_STEP)} onReset={() => cv.zoomTo(1)}
           resetTitle="Reset zoom to 100% (Ctrl 0)"
-          onFit={fitAll} fitTitle="Fit: move the widgets to the top-left and zoom to show them all"
+          onFit={fitAll} fitTitle="Fit: move the widgets to the top-left and zoom to show them all" hidePercent={c >= 3}
         />
-      </Toolbar>
-
-      {/* Palette (edit mode); same bar in run / preview so the canvas doesn't jump */}
-      <Toolbar variant="palette">
-        {live ? (
-          <ToolbarHint>Controls are live while the program runs. <b>Stop</b> the program to edit.</ToolbarHint>
-        ) : preview ? (
-          <ToolbarHint>Preview: the controls react, but nothing is sent. Indicators show sample values.</ToolbarHint>
-        ) : (
-          <>
-            {paletteGroup("Controls", CONTROL_KINDS)}
-            <ToolbarSeparator />
-            {paletteGroup("Indicators", INDICATOR_KINDS)}
-          </>
-        )}
-      </Toolbar>
+        {tp.has("right") && <PanelToggle open={tp.isOpen("right")} onToggle={() => tp.toggle("right")} title={tp.toggleTitle("right")} icon={<PanelRight size={15} />} />}
+      </>}</Toolbar>
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <RemoteCanvas
-          canvasRef={canvasRef}
-          canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => setSelected(null) }}
-          showing={showing} bounds={bounds} zoom={zoom} panCursor={panCursor} empty={shown.length === 0}
-          onDropKind={(kind, x, y) => add(kind, x - 16, y - 16)}
-        >
-          {shown.map((w) => (
-            <RemoteWidgetCard
-              key={w.uid} w={w} showing={showing} selected={!showing && w.uid === selected} conflict={!showing && hasConflict(w)}
-              dragging={drag?.uid === w.uid} panCursor={panCursor}
-              live={preview || (live && session.phase === "running")}
-              values={preview ? (previewValues ?? {}) : session.values}
-              indicatorValue={roleOf(w.kind) !== "indicator" ? undefined : preview ? previewIndicatorValue(w) : messageByName(session.messages, w.name)?.value}
-              onChange={(name, value, merge) => {
-                if (preview) setPreviewValues((v) => (v ? { ...v, [name]: value } : v));
-                else setControl(name, value, merge);
-              }}
-              onBeginDrag={beginDrag} onDragMove={onDragMove} onDragEnd={endDrag}
-            />
-          ))}
-        </RemoteCanvas>
+        <ToolColumns tp={tp} side="left" nodes={tools} emptyHint="Properties can be edited in edit mode." />
 
-        {/* Properties (edit mode) */}
-        {sel && (
-          <RemoteProperties
-            key={sel.uid} w={sel} fileName={file.name}
-            others={allSymbols.filter((s) => !(s.uid === sel.uid && s.file === file.name))}
-            onChange={(patch) => update(sel.uid, patch)}
-            onDelete={() => remove(sel.uid)}
-          />
-        )}
+        <div style={{ flex: 1, minWidth: 0, position: "relative", display: "flex" }}>
+          <RemoteCanvas
+            canvasRef={canvasRef}
+            canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => setSelected(null) }}
+            showing={showing} bounds={bounds} zoom={zoom} panCursor={panCursor} empty={shown.length === 0 && !newDrag?.moved}
+          >
+            {shown.map((w) => (
+              <RemoteWidgetCard
+                key={w.uid} w={w} showing={showing} selected={!showing && w.uid === selected} conflict={!showing && hasConflict(w)}
+                dragging={drag?.uid === w.uid} rotating={drag?.uid === w.uid && drag.mode === "rotate"} panCursor={panCursor}
+                overTrash={drag?.uid === w.uid && drag.mode === "move" && bin.over}
+                heat={drag?.uid === w.uid && drag.mode === "move" ? bin.heat : 0}
+                live={preview || (live && session.phase === "running")}
+                values={preview ? (previewValues ?? {}) : session.values}
+                indicatorValue={roleOf(w.kind) !== "indicator" ? undefined : preview ? previewIndicatorValue(w) : messageByName(session.messages, w.name)?.value}
+                onChange={(name, value, merge) => {
+                  if (preview) setPreviewValues((v) => (v ? { ...v, [name]: value } : v));
+                  else setControl(name, value, merge);
+                }}
+                onBeginDrag={beginDrag} onDragMove={onDragMove} onDragEnd={endDrag}
+              />
+            ))}
+          </RemoteCanvas>
+          {!showing && <TrashTarget trashRef={trash.ref} over={trash.over} active={drag?.mode === "move" || !!newDrag?.moved} />}
+        </div>
+
+        {newDrag?.moved && template && <RemoteWidgetGhost w={template} x={newDrag.x} y={newDrag.y} zoom={zoom} overTrash={trash.over} heat={newHeat} />}
+        {/* A widget dragged out of the canvas (towards the toolbox) keeps following the pointer. */}
+        {drag?.mode === "move" && (() => {
+          const g = bin.outsideGhost();
+          return g && <RemoteWidgetGhost w={drag.cur} x={g.x} y={g.y} zoom={zoom} overTrash={trash.over} heat={bin.heat} />;
+        })()}
+        {Math.max(bin.heat, newHeat) > 0 && <ToolboxBin rect={paletteRef.current?.getBoundingClientRect()} heat={Math.max(bin.heat, newHeat)} putBack={newHeat > 0} />}
+
+        <ToolColumns tp={tp} side="right" nodes={tools} emptyHint="Properties can be edited in edit mode." />
       </div>
     </div>
   );

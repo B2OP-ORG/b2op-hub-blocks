@@ -1,22 +1,29 @@
 // Edits of a scene document, written back to its file (header + generated Python).
 
-import { useApp } from "../../state/store";
 import { SCREEN_H, childrenOf, isContainer, makeWidget, subtree, withSceneHeader, type SceneDoc, type SceneKind, type SceneWidget } from "../../scene/model";
 import { absolutePos, clampedPos, contentOffset, drawnSize } from "../../scene/geometry";
 import { sceneToPython } from "../../scene/codegen";
+import { moveWidget, type TreeDrop } from "../../scene/reorder";
+import type { DrawResult } from "./DrawOverlay";
+import { commitEdit } from "../hooks/useUndoRedo";
 
 export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected: string | null, setSelected: (uid: string | null) => void) {
-  const commitDoc = (next: SceneDoc) => useApp.getState().updateFile(fileId, withSceneHeader(next, sceneToPython(next, module)));
-  const commit = (widgets: SceneWidget[]) => commitDoc({ ...doc, widgets });
+  /** Write `next` to the file as one undo step (`coalesceKey`: merge quick repeats, see editHistory). */
+  const commitDoc = (next: SceneDoc, coalesceKey?: string) =>
+    commitEdit(fileId, withSceneHeader(next, sceneToPython(next, module)), selected, coalesceKey);
+  const commit = (widgets: SceneWidget[], coalesceKey?: string) => commitDoc({ ...doc, widgets }, coalesceKey);
 
-  /** Merge `patch` into a widget; `undefined` values remove the key. */
-  const update = (uid: string, patch: Partial<SceneWidget>) =>
+  /**
+   * Merge `patch` into a widget; `undefined` values remove the key. `coalesce`:
+   * quick repeats of the same change (nudges, colour drags) are one undo step.
+   */
+  const update = (uid: string, patch: Partial<SceneWidget>, coalesce = false) =>
     commit(doc.widgets.map((w) => {
       if (w.uid !== uid) return w;
       const n = { ...w, ...patch };
       for (const k of Object.keys(patch) as (keyof SceneWidget)[]) if (patch[k] === undefined) delete n[k];
       return n;
-    }));
+    }), coalesce ? `${uid}:${Object.keys(patch).sort().join(",")}` : undefined);
 
   /** Delete a widget and everything inside it. */
   const remove = (uid: string) => {
@@ -25,10 +32,10 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
     setSelected(null);
   };
 
-  const add = (kind: SceneKind, x: number, y: number, parent?: string, tab?: number) => {
+  const add = (kind: SceneKind, x: number, y: number, parent?: string, tab?: number, clamp = true) => {
     const w = makeWidget(kind, x, y, doc, parent, tab);
-    // Always land (as far as it fits) inside the parent / screen.
-    Object.assign(w, clampedPos(doc, w));
+    // Clicks land (as far as it fits) inside the parent / screen; drops stay where they were dropped.
+    if (clamp) Object.assign(w, clampedPos(doc, w));
     commit([...doc.widgets, w]);
     setSelected(w.uid);
   };
@@ -58,7 +65,27 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
     /** Add a widget whose top-left is (offX, offY) up-left of screen point (px, py), in the container under that point. */
     addAt: (kind: SceneKind, px: number, py: number, offX = 0, offY = 0) => {
       const c = containerAt(px, py);
-      add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab);
+      add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab, false);
+    },
+
+    /** A shape drawn with a draw tool (screen coordinates), in the container under its top-left corner. */
+    addShape: (r: DrawResult) => {
+      if (r.kind === "line") {
+        const mx = Math.min(...r.points.map((q) => q[0])), my = Math.min(...r.points.map((q) => q[1]));
+        const c = containerAt(mx, my);
+        const w = makeWidget("line", 0, 0, doc, c.parent, c.tab);
+        // LVGL draws the points relative to the line's position, stroke centred on them.
+        Object.assign(w, { x: Math.round(c.x), y: Math.round(c.y), points: r.points.map(([x, y]) => [x - mx, y - my]) });
+        if (r.closed) w.closed = true;
+        commit([...doc.widgets, w]);
+        setSelected(w.uid);
+        return;
+      }
+      const c = containerAt(r.x, r.y);
+      const w = makeWidget(r.kind, Math.round(c.x), Math.round(c.y), doc, c.parent, c.tab);
+      Object.assign(w, { w: Math.max(2, Math.round(r.w)), h: Math.max(2, Math.round(r.h)) });
+      commit([...doc.widgets, w]);
+      setSelected(w.uid);
     },
 
     /** Palette click: into the selected container (or the screen), below the lowest sibling if it fits. */
@@ -73,6 +100,12 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
       const fits = bottom + 4 + (makeWidget(kind, 0, 0, doc).h || 0) <= h;
       const n = sibs.length;
       add(kind, fits ? 4 : 4 + (n % 8) * 6, fits ? (sibs.length ? bottom + 4 : 4) : 4 + (n % 8) * 6, parent?.uid, tab);
+    },
+
+    /** Outline drag & drop: reorder and / or move into another container. */
+    moveTo: (uid: string, drop: TreeDrop) => {
+      const next = moveWidget(doc, uid, drop);
+      if (next) commitDoc(next);
     },
 
     /** Swap a widget with its previous / next sibling (draw + focus order). */

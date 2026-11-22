@@ -1,25 +1,14 @@
 .bar {
   display: flex;
   align-items: center;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 2px 6px;
+  min-height: 30px;
   border-bottom: 1px solid var(--p-border);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
   box-sizing: border-box;
+  background: var(--p-panel-bg);
 }
-
-/* Top bar of an editor: icon, file name, mode toggle, zoom. */
-.main { gap: 10px; background: var(--p-panel-bg); }
-
-/* Second bar: widget palette or a status hint. */
-.palette { gap: 6px; min-height: 40px; background: var(--p-panel-alt-bg); }
-
-.title { font-weight: 600; }
-
-.hint { font-size: 12px; color: var(--p-dim-text); }
-
-.separator {
-  width: 1px;
-  align-self: stretch;
-  background: var(--p-border);
-  margin: 0 4px;
-}
+.bar > * { flex-shrink: 0; }

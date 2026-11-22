@@ -40,8 +40,7 @@ export type AnyProject = BlocksProject | PythonProject;
 export function parseProject(raw: unknown): { project: AnyProject; stale: boolean } | null {
   if (!raw || typeof raw !== "object") return null;
   const p = raw as Record<string, unknown>;
-  // Accept old format name so stale detection works for pre-rename projects.
-  if (p.format !== "b2op-hub-blocks" && p.format !== "b2op-hub-blocks") return null;
+  if (p.format !== "b2op-hub-blocks") return null;
   if (p.type !== "blocks" && p.type !== "python") return null;
   const project = p as unknown as AnyProject;
   const stale = p.format !== "b2op-hub-blocks" || project.version !== PROJECT_VERSION;
@@ -84,6 +83,38 @@ export function newPythonProject(title = "Untitled"): PythonProject {
 
 export type FileMode = "blocks" | "python";
 
+/** Crop rectangle in source image pixels. */
+export interface CropRect { x: number; y: number; w: number; h: number }
+
+/**
+ * The full image an image file was made from (kept so crops / resizes can be
+ * redone or undone at full quality). Never uploaded to the hub.
+ */
+export interface ImageSource {
+  hash: string;
+  type: string;
+  size: number;
+  width: number;
+  height: number;
+  /** Part of the source shown (absent = all of it). */
+  crop?: CropRect;
+}
+
+/** A binary project file's bytes, kept in the asset store (project/assets.ts). */
+export interface AssetRef {
+  /** SHA-256 hex of the bytes (the asset store key). */
+  hash: string;
+  /** MIME type, e.g. "image/png". */
+  type: string;
+  /** Byte size. */
+  size: number;
+  /** Image size in px, when known. */
+  width?: number;
+  height?: number;
+  /** Image files: the original these bytes were rendered from. */
+  source?: ImageSource;
+}
+
 export interface ProjectFile {
   id: string;
   /** Project-relative path using "/" separators, e.g. "main.py" or "lib/util.py". */
@@ -95,6 +126,8 @@ export interface ProjectFile {
    * Needed because a blocks file switched to Python keeps its header line.
    */
   mode?: FileMode;
+  /** Binary file (image): bytes in the asset store, `content` is "". */
+  asset?: AssetRef;
 }
 
 export interface UploadState {
@@ -185,6 +218,26 @@ export function projectToFileContent(project: AnyProject, currentPythonPreview: 
   return project.source;
 }
 
+/** File types kept as binary assets, by extension. */
+const BINARY_TYPES: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp",
+};
+
+/** MIME type of a binary (image) file name, or null for text files. */
+export function binaryTypeOf(name: string): string | null {
+  const m = /\.([a-z0-9]+)$/i.exec(name);
+  return (m && BINARY_TYPES[m[1].toLowerCase()]) || null;
+}
+
+export function isAssetFile(f: Pick<ProjectFile, "asset">): f is ProjectFile & { asset: AssetRef } {
+  return !!f.asset;
+}
+
+/** Change-detection hash of a file (uploads). */
+export function fileHash(f: Pick<ProjectFile, "content" | "asset">): string {
+  return f.asset ? `asset:${f.asset.hash}` : hashContent(f.content);
+}
+
 /** 32-bit FNV-1a over UTF-16 code units, hex. Cheap change detection for uploads. */
 export function hashContent(s: string): string {
   let h = 0x811c9dc5;
@@ -226,7 +279,8 @@ export function normalizeProject(raw: unknown): MultiFileProject | null {
   const p = raw as Partial<MultiFileProject>;
   if (p.format !== "b2op-hub-v3" || !Array.isArray(p.files)) return null;
   const files = p.files.filter((f) => f && typeof f.id === "string" && typeof f.name === "string")
-    .map((f) => ({ ...f, content: typeof f.content === "string" ? f.content : "" }));
+    .map((f) => ({ ...f, content: typeof f.content === "string" ? f.content : "" }))
+    .map((f) => (f.asset && typeof f.asset.hash !== "string" ? { ...f, asset: undefined } : f));
   const ids = new Set(files.map((f) => f.id));
   const openFileIds = (Array.isArray(p.openFileIds) ? p.openFileIds : []).filter((id) => ids.has(id));
   const activeFileId = p.activeFileId && ids.has(p.activeFileId) ? p.activeFileId : (openFileIds[0] ?? files[0]?.id ?? "");

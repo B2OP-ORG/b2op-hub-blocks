@@ -120,6 +120,9 @@ describe("remote blocks", () => {
     const py = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "speed" } } } } }));
     expect(py).toContain("import remote");
     expect(py).toContain("print(remote.speed)");
+    const l = layout("slider");
+    l.widgets[0].name = "my speed";
+    setRemoteSymbols(layoutSymbols(l, DEFAULT_REMOTE_FILE));
     const odd = run(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "my speed" } } } } }));
     expect(odd).toContain("print(remote.get('my speed'))");
   });
@@ -140,14 +143,18 @@ describe("remote blocks", () => {
     expect(py).toContain("remote.send(2, True)");
   });
 
-  it("keeps undefined names: free id, type from the value block", () => {
+  it("skips undefined names in code but keeps them on the block", () => {
     const py = run(prog({
       type: "remote_set_indicator",
       fields: { NAME: "status" },
       inputs: { VALUE: { block: { type: "text", fields: { TEXT: "ok" } } } },
+      next: { block: { type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "ghost" } } } } } },
     }));
-    expect(py).toContain("remote.create_message(3, 'status', remote.STR)");
-    expect(py).toContain("remote.send(3, 'ok')");
+    expect(py).not.toContain("import remote");
+    expect(py).not.toContain("create_message");
+    expect(py).not.toContain("remote.send");
+    expect(py).toContain("pass  # remote name 'status' not defined");
+    expect(py).toContain("print(0)");
     const ws = new Blockly.Workspace();
     Blockly.serialization.workspaces.load(prog({ type: "text_print", inputs: { TEXT: { block: { type: "remote_get_number", fields: { NAME: "ghost" } } } } }), ws);
     const f = ws.getAllBlocks(false).find((b) => b.type === "remote_get_number")!.getField("NAME") as FieldRemoteName;
@@ -204,6 +211,9 @@ describe("remote blocks", () => {
   });
 
   it("translates remote.get(\"x\") reads", async () => {
+    const l = layout("slider");
+    l.widgets[0].name = "my speed";
+    setRemoteSymbols(layoutSymbols(l, DEFAULT_REMOTE_FILE));
     const src = "# b2op-hub-blocks v2.0.0\n\nimport remote\n\nprint(remote.get('my speed'))\n";
     const t = await checkTranslation(src);
     expect(t.hasRaw).toBe(false);
@@ -219,6 +229,10 @@ describe("typed remote reporters", () => {
     registerAllBlocks();
     setRemoteSymbols([sym("speed", RemoteType.Int, 0), sym("lamp", RemoteType.Bool, 1), sym("msg", RemoteType.Str, 2)]);
   });
+  const withOut = () => setRemoteSymbols([
+    sym("speed", RemoteType.Int, 0), sym("lamp", RemoteType.Bool, 1), sym("msg", RemoteType.Str, 2),
+    { ...sym("out", RemoteType.Str, 3), role: "indicator" as const, kind: "display" as const },
+  ]);
 
   it("outputs Number / Boolean / String", () => {
     const ws = new Blockly.Workspace();
@@ -251,6 +265,7 @@ describe("typed remote reporters", () => {
   });
 
   it("does not str() a text control sent to a STR indicator", () => {
+    withOut();
     const py = run(prog({
       type: "remote_set_indicator",
       fields: { NAME: "out" },

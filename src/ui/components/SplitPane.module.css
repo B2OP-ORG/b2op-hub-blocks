@@ -1,0 +1,26 @@
+.box {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 1px line with a 5px hit area straddling it. */
+.handle {
+  flex-shrink: 0;
+  height: 5px;
+  margin: -2px 0;
+  position: relative;
+  z-index: 5;
+  cursor: ns-resize;
+  touch-action: none;
+  background: linear-gradient(var(--p-border), var(--p-border)) center / 100% 1px no-repeat;
+}
+.handle:hover, .handle:active { background: var(--p-accent); }

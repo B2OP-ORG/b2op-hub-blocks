@@ -11,7 +11,8 @@ import { DialogHost, showAlert } from "./ui/dialog";
 import { TransferOverlay } from "./ui/workspace/TransferOverlay";
 import { useApp } from "./state/store";
 import { downloadProjectZip } from "./ui/actions";
-import { loadWorkspace } from "./project/storage";
+import { loadWorkspace, referencedAssetHashes } from "./project/storage";
+import { gcAssets } from "./project/assets";
 import { useApplyPaletteVars, usePalette } from "./ui/theme";
 import boardVersions from "./device/boardVersions.json";
 import { isNewer, isDevBuild } from "./device/fwVersion";
@@ -32,6 +33,11 @@ startRemoteSession();
 startSceneSync();
 startAutoReload();
 setSyncAlertHandler(showAlert);
+// Sweep image blobs no stored project uses any more (deleted files / projects).
+setTimeout(() => {
+  const keep = referencedAssetHashes(useApp.getState().projects.map((m) => useApp.getState().getProject(m.id)).filter((p) => !!p));
+  gcAssets(keep).catch(() => { /* IndexedDB unavailable */ });
+}, 5000);
 
 // Restore projects before the first render so nothing flashes the default project.
 (() => {

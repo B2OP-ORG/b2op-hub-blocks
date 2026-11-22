@@ -2,6 +2,7 @@
 
 import type { RemoteValue } from "../../device/protocol";
 import type { Widget } from "../../remote/layout";
+import { rotateVec } from "../../geometry/rotation";
 
 export function num(v: RemoteValue | undefined, fallback = 0): number {
   return typeof v === "number" ? v : typeof v === "boolean" ? (v ? 1 : 0) : fallback;
@@ -33,4 +34,35 @@ export function quantize(raw: number, min: number, max: number, step: number, fl
   let v = step > 0 ? min + Math.round((raw - min) / step) * step : raw;
   v = Math.max(min, Math.min(max, v));
   return float ? Math.round(v * 1e6) / 1e6 : Math.round(v);
+}
+
+/**
+ * Pointer position in an element's own unscaled, unrotated px (0,0 = its
+ * top-left corner), for an element inside a card zoomed by the canvas and
+ * rotated by `angle` degrees.
+ */
+export function localPoint(el: HTMLElement, clientX: number, clientY: number, angle = 0): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  const ow = el.offsetWidth, oh = el.offsetHeight;
+  // Bounding box of the rotated element = scale * (w|cos| + h|sin|) wide; its centre is the element's centre.
+  const c = Math.abs(Math.cos((angle * Math.PI) / 180)), s = Math.abs(Math.sin((angle * Math.PI) / 180));
+  const span = ow * c + oh * s;
+  const scale = span ? r.width / span : 1;
+  const [x, y] = rotateVec((clientX - (r.left + r.width / 2)) / scale, (clientY - (r.top + r.height / 2)) / scale, -angle);
+  return { x: x + ow / 2, y: y + oh / 2 };
+}
+
+/**
+ * How a rotated card lays out its contents: they turn back by the nearest
+ * quarter turn (`quarter`, 0..3) so text stays upright (title on top) at
+ * 0 / 90 / 180 / 270°, and are laid out for the box as it then stands (width
+ * and height swapped on odd quarters). `tilt`: what is left of the rotation on
+ * screen, -45..45°.
+ */
+export function uprightFrame(w: Pick<Widget, "w" | "h" | "angle">): { quarter: number; tilt: number; w: number; h: number } {
+  const a = w.angle ?? 0;
+  const turns = Math.round(a / 90);
+  const quarter = ((turns % 4) + 4) % 4;
+  const odd = quarter % 2 === 1;
+  return { quarter, tilt: a - turns * 90, w: odd ? w.h : w.w, h: odd ? w.w : w.h };
 }

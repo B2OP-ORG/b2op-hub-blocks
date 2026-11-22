@@ -211,7 +211,7 @@ export function SceneWidgetBody({ w, focused, focusItem, editing }: { w: SceneWi
           {[0, 1, 2].map((i) => <line key={`h${i}`} x1={0} x2={w.w} y1={pad + (ih * i) / 2 + 0.5} y2={pad + (ih * i) / 2 + 0.5} stroke={LV.track} strokeWidth={1} />)}
           {[0, 1, 2, 3, 4].map((i) => <line key={`v${i}`} y1={0} y2={w.h} x1={pad + (iw * i) / 4 + 0.5} x2={pad + (iw * i) / 4 + 0.5} stroke={LV.track} strokeWidth={1} />)}
           {w.chartType === "bar"
-            ? vals.map((v, i) => <rect key={i} x={pad + (first + i) * (bw + gap)} y={y(v)} width={bw} height={pad + ih - y(v)} rx={2} fill={c} />)
+            ? vals.map((v: number, i: number) => <rect key={i} x={pad + (first + i) * (bw + gap)} y={y(v)} width={bw} height={pad + ih - y(v)} rx={2} fill={c} />)
             : <>
                 <polyline fill="none" stroke={c} strokeWidth={2} strokeLinejoin="round" points={vals.map((v, i) => `${pad + (iw * (first + i)) / (n - 1)},${y(v)}`).join(" ")} />
                 {vals.map((v, i) => <rect key={i} x={pad + (iw * (first + i)) / (n - 1) - 3.5} y={y(v) - 3.5} width={7} height={7} rx={2} fill={c} />)}

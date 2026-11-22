@@ -94,7 +94,7 @@ export function TabBar() {
     const f = mfp.files.find((x) => x.id === id);
     if (!f) return;
     openContextMenu(e, [
-      !isRemoteFile(f.name) && !isSceneFile(f) && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(id) },
+      !isRemoteFile(f.name) && !isSceneFile(f) && !f.asset && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(id) },
       "separator",
       { label: "Rename", icon: <Pencil size={13} />, onSelect: () => rename.start({ id, value: baseName(f.name) }) },

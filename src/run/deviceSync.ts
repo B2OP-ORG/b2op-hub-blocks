@@ -3,7 +3,8 @@
 import { useApp } from "../state/store";
 import type { DeviceClient } from "../device/deviceClient";
 import type { MultiFileProject, ProjectFile } from "../project/format";
-import { hashContent } from "../project/format";
+import { fileHash } from "../project/format";
+import { getAssetBytes } from "../project/assets";
 import { ancestorDirs } from "../project/paths";
 import { sanitizeFilename } from "../utils/sanitize";
 
@@ -130,7 +131,7 @@ export interface SyncResult {
 /** Files that would be uploaded by a "changed" sync. */
 export function changedFiles(p: MultiFileProject, deviceName: string): ProjectFile[] {
   const hashes = p.upload && p.upload.device === deviceName ? p.upload.hashes : {};
-  return p.files.filter((f) => hashes[f.name] !== hashContent(f.content));
+  return p.files.filter((f) => hashes[f.name] !== fileHash(f));
 }
 
 /**
@@ -162,9 +163,13 @@ export async function syncProject(projectId: string, opts: SyncOptions): Promise
     for (const f of todo) {
       i++;
       const path = devicePathFor(p.title, f.name);
-      const bytes = new TextEncoder().encode(f.content);
+      const bytes = f.asset ? await getAssetBytes(f.asset.hash) : new TextEncoder().encode(f.content);
+      if (!bytes) {
+        useApp.getState().appendConsole("err", `[upload: ${f.name} skipped: its data isn't stored in this browser]\n`);
+        continue;
+      }
       await uploadWithProgress(device, path, bytes, `Uploading ${f.name}…`, { fileIndex: i, fileCount: todo.length, startedAt });
-      useApp.getState().recordUpload(projectId, deviceName, { [f.name]: hashContent(f.content) });
+      useApp.getState().recordUpload(projectId, deviceName, { [f.name]: fileHash(f) });
       useApp.getState().appendConsole("info", `[upload → ${path} (${bytes.length}B)]\n`);
     }
     return { uploaded: todo.length, unchanged: pool.length - todo.length };
@@ -358,5 +363,5 @@ export function isFileUnsynced(mfp: MultiFileProject, file: ProjectFile, deviceN
   if (!mfp.upload) return true;
   if (deviceName && mfp.upload.device !== deviceName) return true;
   const h = mfp.upload.hashes[file.name];
-  return h === undefined || h !== hashContent(file.content);
+  return h === undefined || h !== fileHash(file);
 }

@@ -17,6 +17,7 @@ const BlocklyView = lazy(() => import("../editor/BlocklyView").then((m) => ({ de
 const MonacoView = lazy(() => import("../editor/MonacoView").then((m) => ({ default: m.MonacoView })));
 const ExtraTabView = lazy(() => import("./ExtraTabView").then((m) => ({ default: m.ExtraTabView })));
 const RemoteView = lazy(() => import("../remote/RemoteView").then((m) => ({ default: m.RemoteView })));
+const ImageView = lazy(() => import("../image/ImageView").then((m) => ({ default: m.ImageView })));
 const SceneView = lazy(() => import("../scene/SceneView").then((m) => ({ default: m.SceneView })));
 
 export function Workspace() {
@@ -69,6 +70,8 @@ export function Workspace() {
     editor = <Suspense fallback={null}><ExtraTabView tab={extraTab} /></Suspense>;
   } else if (!activeFile) {
     editor = <NoFileOpen />;
+  } else if (activeFile.asset) {
+    editor = <Suspense fallback={null}><ImageView key={activeFile.id} file={activeFile} /></Suspense>;
   } else if (isRemoteFile(activeFile.name)) {
     editor = <Suspense fallback={null}><RemoteView file={activeFile} /></Suspense>;
   } else if (isSceneFile(activeFile)) {

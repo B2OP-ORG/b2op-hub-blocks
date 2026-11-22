@@ -1,6 +1,7 @@
 // Helpers shared by the action flows: text decoding, name checks, adding files with a collision prompt.
 
-import { type FileMode, getBlocksWorkspace } from "../../project/format";
+import { putAsset } from "../../project/assets";
+import { type FileMode, binaryTypeOf, getBlocksWorkspace } from "../../project/format";
 import { normalizeRelPath } from "../../project/paths";
 import { type NewFileInput, useApp } from "../../state/store";
 import { showChoice } from "../dialog";
@@ -13,6 +14,14 @@ export function decodeText(bytes: Uint8Array): string | null {
   } catch {
     return null;
   }
+}
+
+/** Project file for raw bytes: images go to the asset store, UTF-8 text stays text; null = neither. */
+export async function fileInputFromBytes(name: string, bytes: Uint8Array): Promise<NewFileInput | null> {
+  const type = binaryTypeOf(name);
+  if (type) return { name, content: "", asset: { hash: await putAsset(bytes), type, size: bytes.length } };
+  const text = decodeText(bytes);
+  return text === null ? null : { name, content: text, mode: modeFor(text) };
 }
 
 export function modeFor(content: string): FileMode | undefined {

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Blockly from "blockly/core";
 import { registerAllBlocks } from "../src/blocks";
 import { workspaceToPython } from "../src/codegen/pythonGen";
-import { DISPLAY_KINDS, INPUT_KINDS, SCENE_HEADER_PREFIX, emptyScene, makeWidget, nameProblem, parseScene, splitSceneHeader, uniqueName, withSceneHeader, moduleNameProblem, type SceneDoc, type SceneKind } from "../src/scene/model";
-import { absolutePos, isOutside, clampedPos, qrLayout, drawnSize } from "../src/scene/geometry";
+import { DISPLAY_KINDS, INPUT_KINDS, SCENE_HEADER_PREFIX, emptyScene, makeWidget, nameProblem, parseScene, splitSceneHeader, uniqueName, withSceneHeader, moduleNameProblem, type SceneDoc, type SceneKind, type SceneWidget } from "../src/scene/model";
+import { absolutePos, isOutside, clampedPos, qrLayout, drawnSize, normalizeLine, simplifyPoints, ellipseArcPoints, lvArcCircle, effectiveCrop, dragCropEdge } from "../src/scene/geometry";
 import { sceneToPython } from "../src/scene/codegen";
-import { isSceneFile, projectScenes } from "../src/scene/project";
+import { isSceneFile, projectScenes, resolveSceneSrc, sceneSrcFor } from "../src/scene/project";
 import { setScenes } from "../src/scene/registry";
 import { sceneFlyout } from "../src/blocks/toolbox";
 
@@ -158,6 +158,107 @@ describe("scene codegen", () => {
     expect(out).toContain("label0 = lv.label(panel0)");
     // parent created before child even though the label comes first in the list
     expect(out.indexOf("panel0 = lv.obj")).toBeLessThan(out.indexOf("label0 = lv.label"));
+  });
+});
+
+describe("scene shapes and styles", () => {
+  const one = (patch: Partial<SceneWidget>, kind: SceneKind) => {
+    const doc = docWith(kind);
+    Object.assign(doc.widgets[0], patch);
+    return sceneToPython(doc, "s");
+  };
+
+  it("draws rectangles, circles and arc strokes with plain LVGL objects", () => {
+    const rect = one({}, "rect");
+    expect(rect).toContain("rect0 = lv.obj(root)");
+    expect(rect).toContain("rect0.remove_flag(lv.obj.FLAG.SCROLLABLE)");
+    expect(rect).toContain("rect0.set_style_bg_color(lv.color_hex(0x2196F3), 0)");
+    expect(one({ bg: undefined }, "rect")).toContain("rect0.set_style_bg_opa(lv.OPA.TRANSP, 0)");
+    expect(one({}, "ellipse")).toContain("ellipse0.set_style_radius(lv.RADIUS_CIRCLE, 0)");
+    const arc = one({ w: 60, h: 20 }, "arcline");
+    expect(arc).toContain("arcline0 = lv.line(root)");
+    expect(arc).toMatch(/^arcline0_points = \[\{"x": \d+, "y": \d+\}/m);
+    expect(arc).toContain("arcline0.set_size(60, 20)");
+    expect(arc).toContain("arcline0.set_style_line_color(lv.color_hex(0xFFFFFF), 0)");
+    expect(arc).not.toContain("lv.arc(");
+  });
+
+  it("sets arc angles, mode, track colour and rounding", () => {
+    const py = one({ startAngle: 180, endAngle: 0, arcMode: "symmetrical", bg: "#112233", rounded: false }, "arc");
+    expect(py).toContain("arc0.set_bg_angles(180, 0)");
+    expect(py).toContain("arc0.set_mode(1)  # symmetrical");
+    expect(py).toContain("arc0.set_style_arc_color(lv.color_hex(0x112233), 0)");
+    expect(py).toContain("arc0.set_style_arc_rounded(False, lv.PART.INDICATOR)");
+    // Untouched arcs keep LVGL's defaults.
+    expect(one({}, "arc")).not.toMatch(/set_bg_angles|set_mode|set_rotation/);
+  });
+
+  it("styles lines, bars, spinners, text and opacity", () => {
+    const line = one({ dashWidth: 4, dashGap: 2, rounded: false }, "line");
+    expect(line).toContain("line0.set_style_line_dash_width(4, 0)");
+    expect(line).toContain("line0.set_style_line_dash_gap(2, 0)");
+    expect(line).toContain("line0.set_style_line_rounded(False, 0)");
+    expect(one({ barMode: "symmetrical" }, "bar")).toContain("bar0.set_mode(1)  # symmetrical");
+    expect(one({ spinTime: 2000, spinArc: 90 }, "spinner")).toContain("spinner0.set_anim_params(2000, 90)");
+    const label = one({ letterSpace: 2, lineSpace: 3, opacity: 50 }, "label");
+    expect(label).toContain("label0.set_style_text_letter_space(2, 0)");
+    expect(label).toContain("label0.set_style_text_line_space(3, 0)");
+    expect(label).toContain("label0.set_style_opa(128, 0)");
+    expect(one({ opacity: 100 }, "label")).not.toContain("set_style_opa");
+  });
+
+  it("draws arc strokes as elliptical arcs inside their box", () => {
+    const pts = ellipseArcPoints({ w: 100, h: 40, width: 4, startAngle: 180, endAngle: 0 });
+    expect(pts[0]).toEqual([2, 20]);
+    expect(pts[pts.length - 1]).toEqual([98, 20]);
+    // Top half: everything at or above the centre line, touching the top inside the stroke.
+    expect(Math.max(...pts.map((q) => q[1]))).toBe(20);
+    expect(Math.min(...pts.map((q) => q[1]))).toBe(2);
+  });
+
+  it("puts lv_arc circles in the top-left corner of their box", () => {
+    expect(lvArcCircle({ w: 100, h: 41 })).toEqual({ cx: 20, cy: 20, r: 20 });
+    expect(lvArcCircle({ w: 30, h: 80 })).toEqual({ cx: 15, cy: 15, r: 15 });
+  });
+
+  it("crops arcs with a clipping container", () => {
+    const doc = docWith("arc");
+    Object.assign(doc.widgets[0], { x: 10, y: 20, w: 60, h: 60, crop: { x: 0, y: 0, w: 60, h: 30 } });
+    const py = sceneToPython(doc, "s");
+    expect(py).toContain("arc0_clip = lv.obj(root)");
+    expect(py).toContain("arc0_clip.set_pos(10, 20)");
+    expect(py).toContain("arc0_clip.set_size(60, 30)");
+    expect(py).toContain("arc0 = lv.arc(arc0_clip)");
+    expect(py).toContain("arc0.set_pos(0, 0)");
+    expect(py.indexOf("arc0_clip = lv.obj")).toBeLessThan(py.indexOf("arc0 = lv.arc"));
+    // A window covering everything is no crop; edges stay inside the box.
+    expect(effectiveCrop({ kind: "arc", w: 60, h: 60, crop: { x: 0, y: 0, w: 60, h: 60 } })).toBeUndefined();
+    expect(effectiveCrop({ kind: "arc", w: 60, h: 60, crop: { x: 50, y: -5, w: 30, h: 10 } })).toEqual({ x: 50, y: 0, w: 10, h: 10 });
+    expect(dragCropEdge({ kind: "arc", w: 60, h: 60, crop: { x: 0, y: 0, w: 60, h: 30 } }, 3, 0, 100)).toEqual({ x: 0, y: 0, w: 60, h: 60 });
+    expect(nameProblem("arc0_clip", doc)).toBe("Another widget already uses this name.");
+  });
+
+  it("keeps line points at the origin and simplifies pen strokes", () => {
+    expect(normalizeLine({ x: 10, y: 10, points: [[-5, 2], [5, -3]] as [number, number][] }))
+      .toEqual({ x: 5, y: 7, points: [[0, 5], [10, 0]] });
+    const w = { x: 1, y: 2, points: [[0, 0], [3, 4]] as [number, number][] };
+    expect(normalizeLine(w)).toBe(w);
+    const stroke: [number, number][] = Array.from({ length: 21 }, (_, i) => [i, i < 10 ? 0 : i - 10 + 0.2]);
+    const s = simplifyPoints(stroke, 0.8);
+    expect(s[0]).toEqual([0, 0]);
+    expect(s[s.length - 1]).toEqual([20, 10]);
+    expect(s.length).toBeLessThanOrEqual(4);
+  });
+
+  it("resolves image paths relative to the scene", () => {
+    expect(resolveSceneSrc("scenes/menu.py", "images/a.png")).toBe("scenes/images/a.png");
+    expect(resolveSceneSrc("menu.py", "images/a.png")).toBe("images/a.png");
+    expect(resolveSceneSrc("scenes/menu.py", "../logo.png")).toBe("logo.png");
+    expect(resolveSceneSrc("menu.py", "../logo.png")).toBeNull();
+    expect(resolveSceneSrc("menu.py", "/sd/x.png")).toBeNull();
+    expect(sceneSrcFor("scenes/menu.py", "scenes/images/a.png")).toBe("images/a.png");
+    expect(sceneSrcFor("scenes/menu.py", "logo.png")).toBe("../logo.png");
+    expect(sceneSrcFor("menu.py", "images/a.png")).toBe("images/a.png");
   });
 });
 

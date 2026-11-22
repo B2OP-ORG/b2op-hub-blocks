@@ -17,6 +17,8 @@ export type SceneKind =
   // display
   | "label" | "panel" | "line" | "bar" | "arc" | "led" | "spinner" | "image" | "qrcode"
   | "chart" | "scale" | "table" | "textarea"
+  // drawn shapes
+  | "rect" | "ellipse" | "arcline"
   // focusable (driven by the hub buttons)
   | "button" | "list" | "roller" | "dropdown" | "slider" | "checkbox" | "switch"
   | "scrollbox" | "tabview";
@@ -27,6 +29,12 @@ export type TextAlign = "left" | "center" | "right";
 /** LVGL label long modes, in lv_label_long_mode_t order. */
 export const LONG_MODES = ["wrap", "dots", "scroll", "circular", "clip"] as const;
 export type LongMode = (typeof LONG_MODES)[number];
+/** LVGL arc modes, in lv_arc_mode_t order. */
+export const ARC_MODES = ["normal", "symmetrical", "reverse"] as const;
+export type ArcMode = (typeof ARC_MODES)[number];
+/** LVGL bar modes used here, in lv_bar_mode_t order. */
+export const BAR_MODES = ["normal", "symmetrical"] as const;
+export type BarMode = (typeof BAR_MODES)[number];
 
 export interface SceneWidget {
   /** Stable key (not shown). */
@@ -56,6 +64,11 @@ export interface SceneWidget {
   radius?: number;
   font?: FontSize;
   align?: TextAlign;
+  /** Whole-widget opacity, 0..100 % (absent = 100). */
+  opacity?: number;
+  /** Extra space between letters / lines of text (px). */
+  letterSpace?: number;
+  lineSpace?: number;
 
   // ── Kind-specific ──
   /** label / button / checkbox / textarea text; qrcode data. */
@@ -76,8 +89,28 @@ export interface SceneWidget {
   points?: [number, number][];
   /** line width / arc width. */
   width?: number;
+  /** line / arc / arc stroke: round line ends (absent = line: true, arcs: theme default). */
+  rounded?: boolean;
+  /** line: dash length / gap (px; LVGL dashes horizontal and vertical segments only). */
+  dashWidth?: number;
+  dashGap?: number;
+  /** arc / arc stroke: background start / end angle (degrees, 0 = 3 o'clock, clockwise). */
+  startAngle?: number;
+  endAngle?: number;
+  /** arc / arc stroke: visible window, relative to the widget box (absent = all of it). */
+  crop?: { x: number; y: number; w: number; h: number };
+  /** arc / arc stroke: rotation of the angles (degrees). */
+  rotation?: number;
+  arcMode?: ArcMode;
+  /** bar / slider: symmetrical fills from 0. */
+  barMode?: BarMode;
+  /** spinner: one turn (ms) / arc length (degrees). */
+  spinTime?: number;
+  spinArc?: number;
   /** image: PNG path (relative to the scene file, or absolute like /sd/x.png). */
   src?: string;
+  /** image: resizing keeps the aspect ratio (absent = true; editor only). */
+  keepAspect?: boolean;
   /** chart: initial values (one series). */
   values?: number[];
   chartType?: "line" | "bar";
@@ -121,10 +154,14 @@ export const KIND_LABEL: Record<SceneKind, string> = {
   switch: "Switch",
   scrollbox: "Scroll box",
   tabview: "Tabs",
+  rect: "Rectangle",
+  ellipse: "Circle / oval",
+  arcline: "Arc stroke",
 };
 
 export const DISPLAY_KINDS: SceneKind[] = [
   "label", "panel", "line", "bar", "arc", "led", "spinner", "image", "qrcode", "chart", "scale", "table", "textarea",
+  "rect", "ellipse", "arcline",
 ];
 export const INPUT_KINDS: SceneKind[] = [
   "button", "list", "roller", "dropdown", "slider", "checkbox", "switch", "scrollbox", "tabview",
@@ -241,7 +278,7 @@ export function defaultsFor(kind: SceneKind): Partial<SceneWidget> {
     case "bar": return { w: 100, h: 10, min: 0, max: 100, value: 50 };
     case "arc": return { w: 60, h: 60, min: 0, max: 100, value: 50, width: 6 };
     case "led": return { w: 16, h: 16, color: "#ff0000", checked: true };
-    case "spinner": return { w: 32, h: 32 };
+    case "spinner": return { w: 32, h: 32, width: 4 };
     case "image": return { w: 32, h: 32, src: "image.png" };
     case "qrcode": return { w: 64, h: 64, text: "https://example.com" };
     case "chart": return { w: 120, h: 60, min: 0, max: 100, values: [10, 40, 30, 70, 50], chartType: "line" };
@@ -257,6 +294,9 @@ export function defaultsFor(kind: SceneKind): Partial<SceneWidget> {
     case "switch": return { w: 40, h: 20, checked: false };
     case "scrollbox": return { w: 120, h: 80, border: 1 };
     case "tabview": return { w: 160, h: 128, items: ["Tab 1", "Tab 2"], value: 0, barSize: 20 };
+    case "rect": return { w: 40, h: 24, bg: "#2196f3", border: 0, radius: 0 };
+    case "ellipse": return { w: 32, h: 32, bg: "#2196f3", border: 0 };
+    case "arcline": return { w: 48, h: 48, startAngle: 180, endAngle: 0, width: 3, color: "#ffffff" };
   }
 }
 
@@ -281,6 +321,8 @@ export function helperGlobals(w: Pick<SceneWidget, "kind" | "name">): string[] {
     case "image": return [`${w.name}_dsc`];
     case "tabview": return [`${w.name}_tabs`];
     case "line": return [`${w.name}_points`];
+    case "arcline": return [`${w.name}_points`, `${w.name}_clip`];
+    case "arc": return [`${w.name}_clip`];
     case "list": return [`${w.name}_buttons`];
     default: return [];
   }

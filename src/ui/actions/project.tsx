@@ -1,5 +1,6 @@
 // Project flows: new / rename / delete / download / import / pick.
 
+import { loadProjectAssets, sha256Hex, storeAssets } from "../../project/assets";
 import { projectToZip, zipToProject } from "../../project/zip";
 import { useApp } from "../../state/store";
 import { downloadBytes, pickFile } from "../../utils/download";
@@ -51,17 +52,21 @@ export async function deleteProjectFlow(id: string): Promise<void> {
   if (ok) useApp.getState().deleteProject(id);
 }
 
-export function downloadProjectZip(id: string): void {
+export async function downloadProjectZip(id: string): Promise<void> {
   const p = useApp.getState().getProject(id);
   if (!p) return;
-  downloadBytes(projectToZip(p), sanitizeFilename(p.title) + ".zip", "application/zip");
+  const assets = await loadProjectAssets(p.files).catch(() => new Map<string, Uint8Array>());
+  const missing = p.files.filter((f) => f.asset && !assets.has(f.asset.hash)).map((f) => f.name);
+  downloadBytes(projectToZip(p, assets), sanitizeFilename(p.title) + ".zip", "application/zip");
+  if (missing.length) await showAlert("Some files were left out", `Their data isn't stored in this browser: ${missing.join(", ")}`);
 }
 
 export async function importZipFlow(): Promise<void> {
   const file = await pickFile(".zip,application/zip");
   if (!file) return;
   try {
-    const { project, skipped } = zipToProject(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.zip$/i, "") || "Imported");
+    const { project, skipped, assets } = await zipToProject(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.zip$/i, "") || "Imported", sha256Hex);
+    await storeAssets(assets);
     if (project.files.length === 0) {
       await showAlert("Nothing to import", "The zip has no text files.");
       return;
@@ -69,7 +74,7 @@ export async function importZipFlow(): Promise<void> {
     useApp.getState().importProject(project, true);
     useApp.getState().openSidebarTab("explorer");
     if (skipped.length) {
-      await showAlert("Some files were skipped", <>These aren't text files and can't be edited here:<ul>{skipped.map((s) => <li key={s}><code>{s}</code></li>)}</ul></>);
+      await showAlert("Some files were skipped", <>These aren't text or image files and can't be used here:<ul>{skipped.map((s) => <li key={s}><code>{s}</code></li>)}</ul></>);
     }
   } catch (e) {
     await showAlert("Import failed", `Couldn't read the zip: ${(e as Error).message}`);

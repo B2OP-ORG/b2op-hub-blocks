@@ -5,8 +5,8 @@
 //
 // Only `lvgl` is imported, so the module also works from plain Python files.
 
-import { LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
-import { contentOffset, QR_CAPACITY_M } from "./geometry";
+import { ARC_MODES, BAR_MODES, LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
+import { contentOffset, effectiveCrop, ellipseArcPoints, QR_CAPACITY_M } from "./geometry";
 
 const I = "    ";
 const py = (s: string) => JSON.stringify(s); // JSON string literals are valid Python literals
@@ -29,11 +29,25 @@ function parentExpr(doc: SceneDoc, w: SceneWidget): string {
 /** Lines that create + configure one widget. */
 function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
   const v = w.name;
-  const parent = parentExpr(doc, w);
   const out: string[] = [];
   const L = (s: string) => out.push(s);
   const style = (prop: string, value: string, sel = "0") => L(`${v}.set_style_${prop}(${value}, ${sel})`);
-  const pos = () => L(`${v}.set_pos(${num(w.x, 0)}, ${num(w.y, 0)})`);
+  // Cropped arcs sit in a transparent container the size of the visible window:
+  // LVGL clips children to their parent.
+  const crop = effectiveCrop(w);
+  let parent = parentExpr(doc, w);
+  if (crop) {
+    const c = `${v}_clip`;
+    L(`# ${v} (cropped)`);
+    L(`${c} = lv.obj(${parent})`);
+    L(`${c}.set_pos(${num(w.x + crop.x, 0)}, ${num(w.y + crop.y, 0)})`);
+    L(`${c}.set_size(${crop.w}, ${crop.h})`);
+    for (const [prop, val] of [["pad_all", "0"], ["border_width", "0"], ["radius", "0"], ["bg_opa", "lv.OPA.TRANSP"]]) L(`${c}.set_style_${prop}(${val}, 0)`);
+    L(`${c}.remove_flag(lv.obj.FLAG.SCROLLABLE)`);
+    L(`${c}.remove_flag(lv.obj.FLAG.CLICKABLE)`);
+    parent = c;
+  }
+  const pos = () => L(crop ? `${v}.set_pos(${-crop.x}, ${-crop.y})` : `${v}.set_pos(${num(w.x, 0)}, ${num(w.y, 0)})`);
   const size = () => L(`${v}.set_size(${num(w.w, 10)}, ${num(w.h, 10)})`);
   const bg = () => {
     if (w.bg) { style("bg_color", color(w.bg)); style("bg_opa", "lv.OPA.COVER"); }
@@ -46,6 +60,22 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
   const text = () => {
     if (w.font && w.font !== 14) style("text_font", `lv.font_montserrat_${w.font}`);
     if (w.align && w.align !== "left") style("text_align", `lv.TEXT_ALIGN.${w.align.toUpperCase()}`);
+    if (w.letterSpace) style("text_letter_space", num(w.letterSpace, 0));
+    if (w.lineSpace) style("text_line_space", num(w.lineSpace, 0));
+  };
+  const arcShape = () => {
+    if (w.startAngle !== undefined || w.endAngle !== undefined) L(`${v}.set_bg_angles(${num(w.startAngle, 135)}, ${num(w.endAngle, 45)})`);
+    if (w.rotation) L(`${v}.set_rotation(${num(w.rotation, 0)})`);
+    L(`${v}.remove_style(None, lv.PART.KNOB)`);
+    L(`${v}.remove_flag(lv.obj.FLAG.CLICKABLE)`);
+  };
+  const shape = () => {
+    style("pad_all", "0");
+    L(`${v}.remove_flag(lv.obj.FLAG.SCROLLABLE)`);
+    L(`${v}.remove_flag(lv.obj.FLAG.CLICKABLE)`);
+    if (w.bg) bg(); else style("bg_opa", "lv.OPA.TRANSP");
+    style("border_width", num(w.border, 0));
+    if (w.borderColor) style("border_color", color(w.borderColor));
   };
   const textColor = () => { if (w.color) style("text_color", color(w.color)); };
   const focus = () => L(`group.add_obj(${v})`);
@@ -54,7 +84,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
   const onValue = (args: string) =>
     L(`${v}.add_event_cb(lambda e: _emit(${py(v)}${args ? ", " + args : ""}), lv.EVENT.VALUE_CHANGED, None)`);
 
-  L(`# ${v}`);
+  if (!crop) L(`# ${v}`);
   switch (w.kind) {
     case "label":
       L(`${v} = lv.label(${parent})`);
@@ -78,24 +108,48 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       L(`${v}.set_points(${v}_points, ${pts.length})`);
       style("line_width", num(w.width, 2));
       if (w.color) style("line_color", color(w.color));
-      style("line_rounded", "True");
+      style("line_rounded", w.rounded === false ? "False" : "True");
+      if (w.dashWidth && w.dashGap) { style("line_dash_width", num(w.dashWidth, 0)); style("line_dash_gap", num(w.dashGap, 0)); }
       break;
     }
     case "bar":
       L(`${v} = lv.bar(${parent})`);
       pos(); size(); range();
+      if (w.barMode === "symmetrical") L(`${v}.set_mode(${BAR_MODES.indexOf(w.barMode)})  # symmetrical`);
       L(`${v}.set_value(${num(w.value, 0)}, False)`);
       indicator(); bg(); box();
       break;
     case "arc":
       L(`${v} = lv.arc(${parent})`);
-      pos(); size(); range();
+      pos(); size();
+      arcShape();
+      if (w.arcMode && w.arcMode !== "normal") L(`${v}.set_mode(${ARC_MODES.indexOf(w.arcMode)})  # ${w.arcMode}`);
+      range();
       L(`${v}.set_value(${num(w.value, 0)})`);
-      L(`${v}.remove_style(None, lv.PART.KNOB)`);
-      L(`${v}.remove_flag(lv.obj.FLAG.CLICKABLE)`);
       if (w.width !== undefined) { style("arc_width", num(w.width, 6)); style("arc_width", num(w.width, 6), "lv.PART.INDICATOR"); }
+      if (w.rounded !== undefined) { style("arc_rounded", w.rounded ? "True" : "False"); style("arc_rounded", w.rounded ? "True" : "False", "lv.PART.INDICATOR"); }
+      if (w.bg) style("arc_color", color(w.bg));
       if (w.color) style("arc_color", color(w.color), "lv.PART.INDICATOR");
       textColor(); text();
+      break;
+    case "arcline": {
+      // An elliptical arc as a polyline (lv.arc can only draw circles).
+      const pts = ellipseArcPoints(w).map(([x, y]) => `{"x": ${x}, "y": ${y}}`);
+      L(`${v}_points = [${pts.join(", ")}]`);
+      L(`${v} = lv.line(${parent})`);
+      pos(); size();
+      L(`${v}.set_points(${v}_points, ${pts.length})`);
+      style("line_width", num(w.width, 3));
+      style("line_color", color(w.color, "0xFFFFFF"));
+      style("line_rounded", w.rounded === false ? "False" : "True");
+      break;
+    }
+    case "rect":
+    case "ellipse":
+      L(`${v} = lv.obj(${parent})`);
+      pos(); size();
+      shape();
+      style("radius", w.kind === "ellipse" ? "lv.RADIUS_CIRCLE" : num(w.radius, 0));
       break;
     case "led":
       L(`${v} = lv.led(${parent})`);
@@ -106,6 +160,9 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
     case "spinner":
       L(`${v} = lv.spinner(${parent})`);
       pos(); size();
+      if (w.spinTime !== undefined || w.spinArc !== undefined) L(`${v}.set_anim_params(${num(w.spinTime, 1000)}, ${num(w.spinArc, 200)})`);
+      if (w.width !== undefined) { style("arc_width", num(w.width, 12)); style("arc_width", num(w.width, 12), "lv.PART.INDICATOR"); }
+      if (w.bg) style("arc_color", color(w.bg));
       if (w.color) style("arc_color", color(w.color), "lv.PART.INDICATOR");
       break;
     case "image": {
@@ -119,6 +176,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       L(`${I}${I}_data = _f.read()`);
       L(`${I}${v}_dsc = lv.image_dsc_t({"data_size": len(_data), "data": _data})`);
       L(`${I}${v}.set_src(${v}_dsc)`);
+      L(`${I}${v}.set_inner_align(11)  # stretch: fill the widget (a no-op when the PNG already has its size)`);
       L(`except OSError:`);
       L(`${I}print(${py(`scene: image not found: ${src}`)})`);
       bg(); box();
@@ -216,6 +274,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
     case "slider":
       L(`${v} = lv.slider(${parent})`);
       pos(); size(); range();
+      if (w.barMode === "symmetrical") L(`${v}.set_mode(${BAR_MODES.indexOf(w.barMode)})  # symmetrical`);
       L(`${v}.set_value(${num(w.value, 0)}, False)`);
       if (w.color) { indicator(); style("bg_color", color(w.color), "lv.PART.KNOB"); }
       bg(); box();
@@ -262,6 +321,7 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       break;
     }
   }
+  if (w.opacity !== undefined && w.opacity < 100) style("opa", String(Math.round((Math.max(0, w.opacity) * 255) / 100)));
   if (w.hidden) L(`${v}.add_flag(lv.obj.FLAG.HIDDEN)`);
   return out;
 }

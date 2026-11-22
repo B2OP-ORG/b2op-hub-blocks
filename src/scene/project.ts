@@ -31,3 +31,34 @@ export function projectScenes(files: FileLike[]): SceneInfo[] {
   }
   return out.sort((a, b) => a.module.localeCompare(b.module));
 }
+
+/** Directory of a scene file ("" at the top level). */
+function dirOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
+/**
+ * Project path an image widget's `src` points at (relative to the scene file,
+ * like the generated code's `_DIR + "/" + src`); null for absolute device
+ * paths ("/sd/…") and paths leaving the project.
+ */
+export function resolveSceneSrc(scenePath: string, src: string): string | null {
+  if (!src || src.startsWith("/")) return null;
+  const segs = dirOf(scenePath) ? dirOf(scenePath).split("/") : [];
+  for (const s of src.replace(/\\/g, "/").split("/")) {
+    if (!s || s === ".") continue;
+    if (s === "..") { if (!segs.length) return null; segs.pop(); continue; }
+    segs.push(s);
+  }
+  return segs.length ? segs.join("/") : null;
+}
+
+/** `src` for project file `path` as seen from scene file `scenePath` ("images/a.png", "../logo.png"). */
+export function sceneSrcFor(scenePath: string, path: string): string {
+  const from = dirOf(scenePath) ? dirOf(scenePath).split("/") : [];
+  const to = path.split("/");
+  let i = 0;
+  while (i < from.length && i < to.length - 1 && from[i] === to[i]) i++;
+  return [...from.slice(i).map(() => ".."), ...to.slice(i)].join("/");
+}

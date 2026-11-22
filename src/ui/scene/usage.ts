@@ -9,6 +9,9 @@ export function usageFor(w: SceneWidget, module: string): string {
     case "button": return [`${v}_label.set_text("Go")`, ...ev].join("\n");
     case "bar": case "slider": return [`${v}.set_value(42, False)`, `${v}.get_value()`, ...ev].join("\n");
     case "arc": return `${v}.set_value(42)`;
+    case "arcline": return `${v}.set_bg_angles(180, 270)\n${v}.set_style_arc_color(lv.color_hex(0xFF0000), 0)`;
+    case "rect": case "ellipse": case "panel": return `${v}.set_style_bg_color(lv.color_hex(0xFF0000), 0)\n${v}.add_flag(lv.obj.FLAG.HIDDEN)`;
+    case "line": return `${v}.set_style_line_color(lv.color_hex(0xFF0000), 0)`;
     case "qrcode": return `${module}.set_qr("${w.name}", "https://example.com")`;
     case "led": return `${v}.on()\n${v}.off()`;
     case "list": case "roller": case "dropdown": return [`${module}.set_items("${w.name}", ["A", "B"])`, `${module}.selected_text("${w.name}")`, ...ev].join("\n");

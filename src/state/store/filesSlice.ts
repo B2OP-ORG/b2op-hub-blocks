@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { fileToProject, newBlocksProject, withBlocksHeader, type FileMode, type ProjectFile, type ProjectSettings } from "../../project/format";
+import { fileToProject, newBlocksProject, withBlocksHeader, type AssetRef, type FileMode, type ProjectFile, type ProjectSettings } from "../../project/format";
 import { deriveProject, mergeFiles, pathTaken, touch, withFolders } from "../../project/ops";
 import { isWithin, normalizeRelPath, relJoin, uniqueName } from "../../project/paths";
 import { projectHelpers, reorder } from "./helpers";
@@ -14,6 +14,8 @@ export interface FilesSlice {
   /** Reorder open file tabs: move `id` before (or `after`) `targetId`. */
   moveOpenFile: (id: string, targetId: string, after: boolean) => void;
   updateFile: (id: string, content: string) => void;
+  /** Replace a binary file's bytes reference (image re-rendered by crop / resize). */
+  setFileAsset: (id: string, asset: AssetRef) => void;
   /** Rename/move a file to a new project-relative path. Returns an error message or null. */
   renameFile: (id: string, newPath: string) => string | null;
   /** Create a file (unique name in `dir`) and open it. Returns its id. */
@@ -67,6 +69,12 @@ export const createFilesSlice: StateCreator<AppState, [], [], FilesSlice> = (set
       setActiveFiles(touch(s.mfp, { files }));
     },
 
+    setFileAsset: (id, asset) => {
+      const s = get();
+      const files = s.mfp.files.map((f) => (f.id === id ? { ...f, asset } : f));
+      setActiveFiles(touch(s.mfp, { files }));
+    },
+
     renameFile: (id, newPath) => {
       const s = get();
       const file = s.mfp.files.find((f) => f.id === id);
@@ -102,7 +110,7 @@ export const createFilesSlice: StateCreator<AppState, [], [], FilesSlice> = (set
       const s = get();
       const file = s.mfp.files.find((f) => f.id === id);
       if (!file) return;
-      const { mfp } = mergeFiles(s.mfp, [{ name: file.name, content: file.content, mode: file.mode }], false);
+      const { mfp } = mergeFiles(s.mfp, [{ name: file.name, content: file.content, mode: file.mode, asset: file.asset }], false);
       setActiveFiles(mfp);
     },
 

@@ -12,8 +12,9 @@ import { Eye, Monitor, PanelLeft, PanelRight, Pencil } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { PanelTool } from "../../settings/panelLayout";
-import { DISPLAY_KINDS, INPUT_KINDS, KIND_LABEL, SCREEN_H, SCREEN_W, emptyScene, makeWidget, moduleOfPath, splitSceneHeader, subtree, withSceneHeader, type SceneKind, type SceneWidget } from "../../scene/model";
-import { drawnSize } from "../../scene/geometry";
+import { KIND_LABEL, SCREEN_H, SCREEN_W, emptyScene, makeWidget, moduleOfPath, splitSceneHeader, subtree, withSceneHeader, type SceneKind, type SceneWidget } from "../../scene/model";
+import { dragCropEdge, drawnSize, normalizeLine } from "../../scene/geometry";
+import { resolveSceneSrc } from "../../scene/project";
 import { sceneToPython } from "../../scene/codegen";
 import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
@@ -24,9 +25,12 @@ import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGr
 import { PanelToggle } from "../components/PanelToggle";
 import { ToolColumns, type ToolNodes } from "../components/ToolPanels";
 import { useToolPanels } from "../hooks/useToolPanels";
+import { useFoldState } from "../hooks/useFoldState";
 import { Toolbar } from "../components/Toolbar";
 import { ZoomControls } from "../components/ZoomControls";
-import { BASE, KIND_HINT, MARGIN } from "./constants";
+import { BASE, DRAW_TOOLS, PROP_FOLDED_BY_DEFAULT, KIND_HINT, KIND_ICON, MARGIN, PALETTE_CATEGORIES, PALETTE_LABEL, type DrawTool } from "./constants";
+import { DrawOverlay } from "./DrawOverlay";
+import { fitSceneImage } from "./imageUpload";
 import { OUTLINE_ROOT, Outline } from "./Outline";
 import { PaletteDragGhost } from "./PaletteDragGhost";
 import { PREVIEW_KEYS, applyPreviewKey, focusStops, startPreviewState, type PreviewState } from "./preview";
@@ -36,6 +40,7 @@ import { SceneProperties } from "./SceneProperties";
 import { TrashTarget } from "./TrashTarget";
 import { usePaletteDrag, useTrash, type NewDrag } from "./usePaletteDrag";
 import { WidgetProperties } from "./WidgetProperties";
+import { SceneAssetContext } from "./sceneAssets";
 
 const SCENE_TOOLS: PanelTool[] = ["outline", "properties", "palette"];
 
@@ -52,6 +57,11 @@ export function SceneView({ file }: { file: ProjectFile }) {
     return next;
   });
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  /** Active draw tool (null = select / move). */
+  const [tool, setTool] = useState<DrawTool | null>(null);
+  const paletteFolds = useFoldState("b2op.scene.paletteFolds");
+  const propFolds = useFoldState("b2op.scene.propFolds", PROP_FOLDED_BY_DEFAULT);
+  const files = useApp((s) => s.mfp.files);
   const canvasRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
   const trash = useTrash();
@@ -98,7 +108,17 @@ export function SceneView({ file }: { file: ProjectFile }) {
   }
   const doc = parsed.doc;
   const shownDoc = preview?.doc ?? doc;
-  const ops = sceneOps(doc, file.id, module, selected, setSelected);
+  const ops0 = sceneOps(doc, file.id, module, selected, setSelected);
+  // Image widgets: a new size re-renders their PNG at that size (the hub draws it 1:1).
+  const ops = {
+    ...ops0,
+    update: (uid: string, patch: Partial<SceneWidget>) => {
+      ops0.update(uid, patch);
+      if ((patch.w !== undefined || patch.h !== undefined) && doc.widgets.find((x) => x.uid === uid)?.kind === "image") {
+        fitSceneImage(file.name, uid).catch((e: Error) => useApp.getState().appendConsole("err", `[image resize failed: ${e.message}]\n`));
+      }
+    },
+  };
 
   // ── Palette drag (new widget) ───────────────────────────────────────────────
   /** The widget a palette drag would add (for the ghost and the drop maths). */
@@ -115,18 +135,31 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
   // ── Widget drag (move / resize) ─────────────────────────────────────────────
   const { drag } = widgetDrag;
-  const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize") => {
-    if (preview || e.button !== 0) return;
+  const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => {
+    if (preview || tool || e.button !== 0) return;
     setSelected(w.uid);
-    widgetDrag.begin(e, w, mode);
+    widgetDrag.begin(e, w, mode, point);
+  };
+  const removePoint = (w: SceneWidget, i: number) => {
+    const points = (w.points ?? []).filter((_, j) => j !== i);
+    if (points.length >= 2) ops.update(w.uid, normalizeLine({ x: w.x, y: w.y, points }));
   };
   const onDragMove = (e: React.PointerEvent) => {
     if (!drag) return;
     if (drag.mode === "move") trash.set(trash.hit(e.clientX, e.clientY));
     const step = e.shiftKey ? 4 : 1;
     const sn = (v: number) => Math.round(v / step) * step;
-    widgetDrag.move(e, scale, (o, mode, dx, dy) => mode === "move"
+    widgetDrag.move(e, scale, (o, mode, dx, dy, point) => mode === "crop"
+      ? { ...o, crop: dragCropEdge(o, point ?? 0, sn(dx), sn(dy)) }
+      : mode === "point"
+      ? normalizeLine({ ...o, points: (o.points ?? []).map((q, i): [number, number] => i === point ? [sn(q[0] + dx), sn(q[1] + dy)] : q) })
+      : mode === "move"
       ? { ...o, x: sn(o.x + dx), y: sn(o.y + dy) }
+      : o.kind === "image" && o.keepAspect !== false && o.w > 0 && o.h > 0
+        ? (() => {
+            const f = Math.max((o.w + dx) / o.w, (o.h + dy) / o.h);
+            return { ...o, w: Math.max(4, Math.round(o.w * f)), h: Math.max(4, Math.round(o.h * f)) };
+          })()
       : o.kind === "qrcode"
         ? { ...o, w: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))), h: Math.max(8, sn(Math.min(o.w, o.h) + Math.max(dx, dy))) }
         : { ...o, w: Math.max(4, sn(o.w + dx)), h: Math.max(4, sn(o.h + dy)) });
@@ -136,6 +169,15 @@ export function SceneView({ file }: { file: ProjectFile }) {
     if (!d) return;
     if (d.mode === "move" && trash.overRef.current) { trash.set(false); ops.remove(d.orig.uid); return; }
     const { cur } = d;
+    if (d.mode === "crop") {
+      if (JSON.stringify(d.orig.crop) !== JSON.stringify(cur.crop)) ops.update(cur.uid, { crop: cur.crop });
+      return;
+    }
+    if (d.mode === "point") {
+      const was = doc.widgets.find((w) => w.uid === cur.uid);
+      if (was && (JSON.stringify(was.points) !== JSON.stringify(cur.points) || was.x !== cur.x || was.y !== cur.y)) ops.update(cur.uid, { x: cur.x, y: cur.y, points: cur.points });
+      return;
+    }
     if (boxChanged(d)) ops.update(cur.uid, { x: cur.x, y: cur.y, w: cur.w, h: cur.h });
   };
 
@@ -143,6 +185,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const stop = preview ? focusStops(preview.doc)[preview.focus] : undefined;
   const startPreview = () => {
     setSelected(null);
+    setTool(null);
     setPreview(startPreviewState(doc));
     canvasRef.current?.focus();
   };
@@ -170,7 +213,18 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
   const nodeCtx: SceneNodeContext = {
     doc, shownDoc, preview, selected, stop, drag, scale, panCursor, overTrash: trash.over,
-    onBeginDrag: beginDrag, onDragMove, onDragEnd: endDrag,
+    onBeginDrag: beginDrag, onDragMove, onDragEnd: endDrag, onRemovePoint: removePoint,
+  };
+  /** Image widget src → its project image (resolved next to the scene file). */
+  const resolveAsset = (src: string) => {
+    const path = resolveSceneSrc(file.name, src);
+    return path ? files.find((f) => f.name === path)?.asset : undefined;
+  };
+  const pickTool = (t: DrawTool) => {
+    const next = tool === t ? null : t;
+    setTool(next);
+    if (next) setSelected(null);
+    canvasRef.current?.focus();
   };
   const chipProps = (k: SceneKind): React.ButtonHTMLAttributes<HTMLButtonElement> => ({
     onPointerDown: (e) => { if (e.button !== 0) return; e.preventDefault(); paletteDrag.start(k, e.clientX, e.clientY); },
@@ -178,15 +232,18 @@ export function SceneView({ file }: { file: ProjectFile }) {
     onClick: (e) => { if (e.detail === 0) ops.addDefault(k); },
     style: { touchAction: "none", userSelect: "none" },
   });
-  const paletteGroup = (title: string, kinds: SceneKind[]) => (
-    <PaletteGroup title={title} kinds={kinds} label={(k) => KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the screen or click to add`} chipProps={chipProps} />
+  const paletteGroup = (id: string, title: string, kinds: SceneKind[]) => (
+    <PaletteGroup key={id} title={title} kinds={kinds} label={(k) => PALETTE_LABEL[k] ?? KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the screen or click to add`}
+      chipProps={chipProps} icon={(k) => { const I = KIND_ICON[k]; return <I size={14} />; }}
+      folded={paletteFolds.isFolded(id)} onToggle={() => paletteFolds.toggle(id)} />
   );
+  const drawTool = (t: DrawTool) => DRAW_TOOLS.find((d) => d.tool === t)!;
 
   const tools: ToolNodes = {
     outline: <Outline doc={doc} selected={preview ? null : selected} collapsed={collapsed} onToggle={toggleCollapsed}
       editable={!preview} onDropWidget={ops.moveTo} onSelect={(u) => { setPreview(null); setSelected(u); }} onMove={ops.moveZ} />,
     properties: preview ? null : sel
-      ? <WidgetProperties key={sel.uid} doc={doc} w={sel} module={module} selPath={subtree(doc, sel.uid)}
+      ? <WidgetProperties key={sel.uid} doc={doc} w={sel} module={module} scenePath={file.name} selPath={subtree(doc, sel.uid)} folds={propFolds}
           onChange={(patch) => ops.update(sel.uid, patch)} onDelete={() => ops.remove(sel.uid)} />
       : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch })} />,
     palette: (
@@ -195,8 +252,12 @@ export function SceneView({ file }: { file: ProjectFile }) {
           <PaletteHint>{preview.log}</PaletteHint>
         ) : (
           <>
-            {paletteGroup("Display", DISPLAY_KINDS)}
-            {paletteGroup("Buttons", INPUT_KINDS)}
+            <PaletteGroup title="Draw" kinds={DRAW_TOOLS.map((d) => d.tool)} label={(t) => drawTool(t).label}
+              hint={(t) => `${drawTool(t).hint} — click to pick, again (or Esc) to stop`}
+              icon={(t) => { const I = drawTool(t).icon; return <I size={14} />; }} active={(t) => tool === t}
+              chipProps={(t) => ({ onClick: () => pickTool(t) })}
+              folded={paletteFolds.isFolded("draw")} onToggle={() => paletteFolds.toggle("draw")} />
+            {PALETTE_CATEGORIES.map((c) => paletteGroup(c.id, c.title, c.kinds))}
           </>
         )}
       </PalettePanel>
@@ -233,13 +294,19 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
+            <SceneAssetContext value={resolveAsset}>
             <SceneCanvas
               ctx={nodeCtx}
               canvasRef={canvasRef}
               screenRef={screenRef}
-              showHint={!preview && doc.widgets.length === 0 && !newDrag?.moved}
+              showHint={!preview && !tool && doc.widgets.length === 0 && !newDrag?.moved}
+              overlay={!preview && tool && (
+                <DrawOverlay tool={tool} scale={scale} onCancel={() => setTool(null)}
+                  onCommit={(r) => { ops.addShape(r); setTool(null); }} />
+              )}
               canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => { if (!preview) setSelected(null); } }}
             />
+            </SceneAssetContext>
             {!preview && <TrashTarget trashRef={trash.ref} over={trash.over} active={drag?.mode === "move" || !!newDrag?.moved} />}
           </div>
         </div>

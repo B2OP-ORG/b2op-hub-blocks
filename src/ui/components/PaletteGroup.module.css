@@ -17,6 +17,18 @@
   letter-spacing: 0.5px;
 }
 
+.titleButton {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.titleButton:hover { color: var(--p-text); }
+
 .chips { display: flex; flex-direction: column; gap: 4px; }
 
 .chip {
@@ -29,6 +41,16 @@
   color: var(--p-text);
   font-size: 12px;
   cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.chip:hover { border-color: var(--p-accent); }
+.icon { display: inline-flex; color: var(--p-accent); flex-shrink: 0; }
+.active {
+  border-color: var(--p-accent);
+  background: color-mix(in srgb, var(--p-accent) 18%, var(--p-surface));
+  cursor: pointer;
 }
 
 .hint { font-size: 12px; color: var(--p-dim-text); line-height: 1.5; white-space: pre-wrap; }

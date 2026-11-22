@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { splitBlocksHeader, withBlocksHeader, stripBlocksHeader, fileMode, hashContent, normalizeProject, newMultiFileProject } from "../src/project/format";
+import { splitBlocksHeader, withBlocksHeader, stripBlocksHeader, fileMode, fileHash, normalizeProject, newMultiFileProject } from "../src/project/format";
+import { sha256Hex } from "../src/project/assets";
 import { mergeEditorSettings, DEFAULT_MONACO_SETTINGS } from "../src/settings/editorSettings";
 import { DEFAULT_EDITOR_SETTINGS } from "../src/settings/editorSettings";
 import { pythonToBlocks } from "../src/codegen/pythonToBlocks";
 import { normalizeRelPath, uniqueName, ancestorDirs } from "../src/project/paths";
 import { loadWorkspace, saveProject, loadProject } from "../src/project/storage";
 import { projectToZip, zipToProject } from "../src/project/zip";
-import { zipSync, strToU8 } from "fflate";
+import { zipSync, strToU8, unzipSync } from "fflate";
 import { MockTransport } from "../src/device/sim/mockHub";
 import { DeviceClient } from "../src/device/deviceClient";
 import { useApp } from "../src/state/store";
@@ -110,11 +111,11 @@ describe("storage", () => {
 });
 
 describe("zip", () => {
-  it("round-trips files, folders, modes", () => {
+  it("round-trips files, folders, modes", async () => {
     const p = newMultiFileProject("Zippy", "blocks");
     p.files.push({ id: "x", name: "lib/util.py", content: "def f():\n    pass\n", mode: "python" });
     p.folders = ["empty", "lib"];
-    const { project, skipped } = zipToProject(projectToZip(p), "fallback");
+    const { project, skipped } = await zipToProject(projectToZip(p), "fallback", sha256Hex);
     expect(skipped).toEqual([]);
     expect(project.title).toBe("Zippy");
     expect(project.files.map((f) => f.name).sort()).toEqual(["lib/util.py", "main.py"]);
@@ -123,15 +124,40 @@ describe("zip", () => {
     expect(project.activeFileId).toBe(project.files.find((f) => f.name === "main.py")!.id);
   });
 
-  it("strips a single top-level folder and skips binary files", () => {
+  it("strips a single top-level folder and skips binary files", async () => {
     const data = zipSync({
       "proj/main.py": new Uint8Array(strToU8("print(1)")),
       "proj/img.bin": new Uint8Array([0xff, 0xfe, 0x00, 0x80]),
     });
-    const { project, skipped } = zipToProject(data, "Imported");
+    const { project, skipped } = await zipToProject(data, "Imported", sha256Hex);
     expect(project.title).toBe("proj");
     expect(project.files.map((f) => f.name)).toEqual(["main.py"]);
     expect(skipped).toEqual(["img.bin"]);
+  });
+
+  it("keeps images as assets on export and import", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const hash = await sha256Hex(png);
+    const p = newMultiFileProject("Pics", "python");
+    p.files.push({ id: "i", name: "images/logo.png", content: "", asset: { hash, type: "image/png", size: png.length } });
+    const zip = projectToZip(p, new Map([[hash, png]]));
+    const { project, assets, skipped } = await zipToProject(zip, "x", sha256Hex);
+    expect(skipped).toEqual([]);
+    const img = project.files.find((f) => f.name === "images/logo.png")!;
+    expect(img.asset).toEqual({ hash, type: "image/png", size: png.length });
+    expect(img.content).toBe("");
+    expect([...assets.get(hash)!]).toEqual([...png]);
+    expect(fileHash(img)).toBe(`asset:${hash}`);
+    // The original an image was cropped / scaled from travels along (hidden folder + manifest).
+    const orig = new Uint8Array([9, 8, 7, 6]);
+    const oh = await sha256Hex(orig);
+    const withSrc = { ...p, files: p.files.map((f) => (f.asset ? { ...f, asset: { ...f.asset, source: { hash: oh, type: "image/jpeg", size: 4, width: 300, height: 200, crop: { x: 1, y: 2, w: 30, h: 20 } } } } : f)) };
+    const back = await zipToProject(projectToZip(withSrc, new Map([[hash, png], [oh, orig]])), "x", sha256Hex);
+    expect(back.project.files.map((f) => f.name)).not.toContain(`.b2op-originals/${oh}`);
+    expect(back.project.files.find((f) => f.name === "images/logo.png")!.asset!.source).toEqual(withSrc.files.find((f) => f.asset)!.asset!.source);
+    expect([...back.assets.get(oh)!]).toEqual([...orig]);
+    // Without the bytes the file is left out rather than written empty.
+    expect(Object.keys(unzipSync(projectToZip(p)))).not.toContain("images/logo.png");
   });
 });
 

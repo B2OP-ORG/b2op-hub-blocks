@@ -1,11 +1,11 @@
 // Device → project: load files and folders from the hub's SD card.
 
-import { hashContent, newMultiFileProject } from "../../project/format";
+import { fileHash, newMultiFileProject } from "../../project/format";
 import { devBaseName, devJoin, relJoin } from "../../project/paths";
 import { CancelledError, deviceRelPath, projectRoot } from "../../run/deviceSync";
 import { type NewFileInput, useApp } from "../../state/store";
 import { showAlert } from "../dialog";
-import { addFilesWithPrompt, decodeText, modeFor } from "./common";
+import { addFilesWithPrompt, fileInputFromBytes } from "./common";
 import { pickProject } from "./project";
 
 // ── Device → project ─────────────────────────────────────────────────────────
@@ -45,12 +45,12 @@ async function reportDeviceError(action: string, e: unknown): Promise<void> {
 export async function loadDeviceFileIntoProject(path: string, projectId: string): Promise<void> {
   try {
     const bytes = await readDeviceFile(path);
-    const text = decodeText(bytes);
-    if (text === null) {
-      await showAlert("Not a text file", `"${devBaseName(path)}" isn't UTF-8 text and can't be edited here.`);
+    const input = await fileInputFromBytes(devBaseName(path), bytes);
+    if (!input) {
+      await showAlert("Not a text file", `"${devBaseName(path)}" isn't UTF-8 text or an image and can't be used here.`);
       return;
     }
-    const ids = await addFilesWithPrompt(projectId, [{ name: devBaseName(path), content: text, mode: modeFor(text) }]);
+    const ids = await addFilesWithPrompt(projectId, [input]);
     if (!ids) return;
     const s = useApp.getState();
     if (projectId === s.mfp.id && ids[0]) s.openFile(ids[0]);
@@ -85,9 +85,9 @@ export async function loadDeviceDirAsProject(dirPath: string): Promise<void> {
           await walk(childAbs, childRel);
         } else {
           const bytes = await readDeviceFile(childAbs);
-          const text = decodeText(bytes);
-          if (text === null) skipped.push(childRel);
-          else files.push({ name: childRel, content: text, mode: modeFor(text) });
+          const input = await fileInputFromBytes(childRel, bytes);
+          if (!input) skipped.push(childRel);
+          else files.push(input);
         }
       }
     };
@@ -100,7 +100,7 @@ export async function loadDeviceDirAsProject(dirPath: string): Promise<void> {
   const s = useApp.getState();
   const title = s.uniqueProjectTitle(devBaseName(dirPath) || "Imported");
   const base = newMultiFileProject(title);
-  const withIds = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, content: f.content, mode: f.mode }));
+  const withIds = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, content: f.content, mode: f.mode, ...(f.asset ? { asset: f.asset } : {}) }));
   const first = withIds.find((f) => f.name === "main.py") ?? withIds[0];
   const id = s.importProject({
     ...base,
@@ -114,11 +114,11 @@ export async function loadDeviceDirAsProject(dirPath: string): Promise<void> {
   const p = useApp.getState().getProject(id);
   if (p && projectRoot(p.title) === dirPath.replace(/\/+$/, "") && s.deviceName) {
     const hashes: Record<string, string> = {};
-    for (const f of p.files) if (deviceRelPath(f.name) === f.name) hashes[f.name] = hashContent(f.content);
+    for (const f of p.files) if (deviceRelPath(f.name) === f.name) hashes[f.name] = fileHash(f);
     useApp.getState().recordUpload(id, s.deviceName, hashes, true);
   }
   useApp.getState().persist();
   useApp.getState().openSidebarTab("explorer");
   useApp.getState().appendConsole("info", `[loaded ${dirPath} as project "${title}": ${files.length} file${files.length === 1 ? "" : "s"}]\n`);
-  if (skipped.length) await showAlert("Some files were skipped", <>Not text files:<ul>{skipped.map((x) => <li key={x}><code>{x}</code></li>)}</ul></>);
+  if (skipped.length) await showAlert("Some files were skipped", <>Not text or image files:<ul>{skipped.map((x) => <li key={x}><code>{x}</code></li>)}</ul></>);
 }

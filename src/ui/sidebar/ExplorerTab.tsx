@@ -75,7 +75,7 @@ export function ExplorerTab() {
   const fileMenu = (e: React.MouseEvent, f: ProjectFile) => {
     openContextMenu(e, [
       { label: "Open", onSelect: () => openFile(f.id) },
-      !isRemoteFile(f.name) && !isSceneFile(f) && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
+      !isRemoteFile(f.name) && !isSceneFile(f) && !f.asset && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(f.id) },
       "separator",
       { label: "Rename", icon: <Pencil size={13} />, hint: "F2", onSelect: () => rename.start({ kind: "file", id: f.id, value: baseName(f.name) }) },

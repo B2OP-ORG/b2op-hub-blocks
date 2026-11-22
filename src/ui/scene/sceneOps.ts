@@ -5,6 +5,7 @@ import { SCREEN_H, childrenOf, isContainer, makeWidget, subtree, withSceneHeader
 import { absolutePos, clampedPos, contentOffset, drawnSize } from "../../scene/geometry";
 import { sceneToPython } from "../../scene/codegen";
 import { moveWidget, type TreeDrop } from "../../scene/reorder";
+import type { DrawResult } from "./DrawOverlay";
 
 export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected: string | null, setSelected: (uid: string | null) => void) {
   const commitDoc = (next: SceneDoc) => useApp.getState().updateFile(fileId, withSceneHeader(next, sceneToPython(next, module)));
@@ -60,6 +61,26 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
     addAt: (kind: SceneKind, px: number, py: number, offX = 0, offY = 0) => {
       const c = containerAt(px, py);
       add(kind, Math.round(c.x - offX), Math.round(c.y - offY), c.parent, c.tab);
+    },
+
+    /** A shape drawn with a draw tool (screen coordinates), in the container under its top-left corner. */
+    addShape: (r: DrawResult) => {
+      if (r.kind === "line") {
+        const mx = Math.min(...r.points.map((q) => q[0])), my = Math.min(...r.points.map((q) => q[1]));
+        const c = containerAt(mx, my);
+        const w = makeWidget("line", 0, 0, doc, c.parent, c.tab);
+        // The drawing offsets points by half the line width: keep the stroke where it was drawn.
+        const off = Math.floor((w.width ?? 2) / 2);
+        Object.assign(w, { x: Math.round(c.x) - off, y: Math.round(c.y) - off, points: r.points.map(([x, y]) => [x - mx, y - my]) });
+        commit([...doc.widgets, w]);
+        setSelected(w.uid);
+        return;
+      }
+      const c = containerAt(r.x, r.y);
+      const w = makeWidget(r.kind, Math.round(c.x), Math.round(c.y), doc, c.parent, c.tab);
+      Object.assign(w, { w: Math.max(2, Math.round(r.w)), h: Math.max(2, Math.round(r.h)) });
+      commit([...doc.widgets, w]);
+      setSelected(w.uid);
     },
 
     /** Palette click: into the selected container (or the screen), below the lowest sibling if it fits. */

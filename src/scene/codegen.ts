@@ -512,6 +512,8 @@ export function sceneToPython(doc: SceneDoc, moduleName: string): string {
     `${I}${I}scr.get_child(i).add_flag(lv.obj.FLAG.HIDDEN)`,
     `${I}root.remove_flag(lv.obj.FLAG.HIDDEN)`,
     `${I}group.set_default()`,
+    `${I}if group.get_focused() is None:`,
+    `${I}${I}group.focus_next()  # widgets added while root was hidden have no focus yet`,
     ``,
     ``,
     `def hide():`,

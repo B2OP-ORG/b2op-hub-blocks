@@ -130,6 +130,7 @@ describe("scene codegen", () => {
     expect(py).toContain("root.add_flag(lv.obj.FLAG.HIDDEN)");
     expect(py).toContain("group = lv.group_create()");
     expect(py).toMatch(/def show\(\):[\s\S]*group\.set_default\(\)/);
+    expect(py).toMatch(/group\.set_default\(\)\n    if group\.get_focused\(\) is None:\n        group\.focus_next\(\)/);
   });
 
   it("creates every widget kind as a module global", () => {

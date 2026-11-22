@@ -33,16 +33,6 @@ export function headerStyles(dark: boolean) {
     danger: variant(["#4a1414", "rgba(190,30,30,0.55)"], ["#6a1c1c", "rgba(255,110,110,0.85)"], ["#ffb0b0", "#ffffff"]),
     warn: variant(["#3c1a04", "rgba(200,100,0,0.55)"], ["#78350f", "rgba(251,191,36,0.85)"], ["#fde68a", "#ffffff"]),
     indigo: variant(["#1e1b4b", "rgba(90,100,255,0.50)"], ["#3730a3", "rgba(150,160,255,0.80)"], ["#a5b4fc", "#ffffff"]),
-    blocksMode: variant(["#0c3040", "rgba(255,255,255,0.28)"], ["#155e75", "rgba(255,255,255,0.75)"], ["#67e8f9", "#ffffff"]),
-    pythonMode: variant(["#3c1a04", "rgba(200,100,0,0.50)"], ["#78350f", "rgba(251,191,36,0.80)"], ["#fde68a", "#ffffff"]),
-    liveActive: variant(["#3c2a05", "rgba(200,140,0,0.55)"], ["#92400e", "rgba(251,191,36,0.90)"], ["#fcd34d", "#ffffff"]),
-    divider: {
-      width: 1,
-      alignSelf: "stretch",
-      background: dark ? "#164e63" : "rgba(255,255,255,0.25)",
-      margin: "2px 2px",
-      flexShrink: 0,
-    } as React.CSSProperties,
     badgeBg: (k: StatusKind) =>
       dark
         ? k === "ok" ? "#0f3e21" : k === "err" ? "#4a1414" : k === "run" ? "#3a2a05" : "#111a20"
@@ -63,7 +53,7 @@ export function dis(base: React.CSSProperties, disabled: boolean): React.CSSProp
 
 /**
  * Compaction (see useCompactLevel): a label is shown until `compact` reaches
- * `hideAt` (1 = toggles, 2 = secondary actions, 3 = primary actions + mode).
+ * `hideAt` (1 = secondary actions, 2 = primary actions + board info).
  */
 export function labelShown(compact: number, hideAt: number): boolean {
   return compact < hideAt;

@@ -1,3 +1,5 @@
+import { newId } from "../utils/id";
+
 export type ProjectType = "blocks" | "python";
 
 export const PROJECT_FORMAT = "b2op-hub-blocks";
@@ -250,8 +252,8 @@ export function hashContent(s: string): string {
 
 export function newMainFile(kind: FileMode): ProjectFile {
   return kind === "blocks"
-    ? { id: crypto.randomUUID(), name: "main.py", content: withBlocksHeader(newBlocksProject().workspace, ""), mode: "blocks" }
-    : { id: crypto.randomUUID(), name: "main.py", content: "", mode: "python" };
+    ? { id: newId(), name: "main.py", content: withBlocksHeader(newBlocksProject().workspace, ""), mode: "blocks" }
+    : { id: newId(), name: "main.py", content: "", mode: "python" };
 }
 
 export function newMultiFileProject(title = "Untitled", kind: FileMode = "blocks"): MultiFileProject {
@@ -260,7 +262,7 @@ export function newMultiFileProject(title = "Untitled", kind: FileMode = "blocks
   return {
     format: "b2op-hub-v3",
     version: "3.0.0",
-    id: crypto.randomUUID(),
+    id: newId(),
     title,
     createdAt: now,
     updatedAt: now,
@@ -289,7 +291,7 @@ export function normalizeProject(raw: unknown): MultiFileProject | null {
   return {
     format: "b2op-hub-v3",
     version: "3.0.0",
-    id: typeof p.id === "string" ? p.id : crypto.randomUUID(),
+    id: typeof p.id === "string" ? p.id : newId(),
     title: typeof p.title === "string" && p.title.trim() ? p.title : "Untitled",
     createdAt: p.createdAt ?? now,
     updatedAt: p.updatedAt ?? p.createdAt ?? now,

@@ -96,8 +96,8 @@ export function ImageView({ file }: { file: ProjectFile }) {
         <Button size="sm" icon={<Download size={13} />} onClick={() => void downloadProjectFile(file.id)} title="Download this image">{c < 1 ? "Download" : null}</Button>
       </>}</Toolbar>
 
-      <div ref={canvasRef} tabIndex={0} {...cv.handlers} onKeyDown={(e) => { cv.onKeyDown(e); }}
-        style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", outline: "none", background: p.panelAltBg, cursor: panCursor, touchAction: "none" }}>
+      <div ref={canvasRef} tabIndex={0} className="pan-canvas" {...cv.handlers} onKeyDown={(e) => { cv.onKeyDown(e); }}
+        style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", outline: "none", background: p.panelAltBg, cursor: panCursor }}>
         {crop ? (
           <CropEditor source={crop.source} crop={crop.rect} onChange={(rect) => setCrop((c) => (c ? { ...c, rect } : c))} />
         ) : url === null ? (

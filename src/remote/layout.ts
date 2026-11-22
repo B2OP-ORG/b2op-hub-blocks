@@ -12,6 +12,7 @@
 // works on a list of files so more can be added later.
 
 import { REMOTE_MAX_NAME, RemoteType, type RemoteValue } from "../device/protocol";
+import { newId } from "../utils/id";
 
 export const REMOTE_EXT = ".remote";
 export const DEFAULT_REMOTE_FILE = "controller.remote";
@@ -122,9 +123,7 @@ export function tryParseLayout(content: string): RemoteLayout | null {
 }
 
 function newUid(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2);
+  return newId();
 }
 
 /** Kind-specific defaults (size + options). */

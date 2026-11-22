@@ -85,7 +85,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
     canvasRef,
     storageKey: `b2op.sceneZoom.${projectId}.${file.id}`,
     isControl: () => false,
-    onPanStart: () => widgetDrag.cancel(),
+    onPanStart: () => { widgetDrag.cancel(); bin.end(); },
   });
   const { zoom } = cv;
   const scale = zoom * BASE;
@@ -350,7 +350,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
                 <DrawOverlay tool={tool} scale={scale} onCancel={() => setTool(null)}
                   onCommit={(r) => { ops.addShape(r); setTool(null); }} />
               )}
-              canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => { if (!preview) setSelected(null); } }}
+              canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: (e) => { cv.handlers.onPointerDown(e); if (!preview) setSelected(null); } }}
             />
             </SceneAssetContext>
             {!preview && <TrashTarget trashRef={trash.ref} over={trash.over} active={drag?.mode === "move" || !!newDrag?.moved} />}

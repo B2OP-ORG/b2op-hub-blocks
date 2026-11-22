@@ -84,7 +84,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     canvasRef,
     storageKey: `b2op.remoteZoom.${projectId}.${file.id}`,
     isControl: (t) => showing && !!t.closest("[data-widget-body]"),
-    onPanStart: () => widgetDrag.cancel(),
+    onPanStart: () => { widgetDrag.cancel(); bin.end(); },
   });
   const { zoom, zoomRef } = cv;
   const rotateSnap = useRotateSnap();
@@ -301,7 +301,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
         <div style={{ flex: 1, minWidth: 0, position: "relative", display: "flex" }}>
           <RemoteCanvas
             canvasRef={canvasRef}
-            canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => setSelected(null) }}
+            canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: (e) => { cv.handlers.onPointerDown(e); setSelected(null); } }}
             showing={showing} bounds={bounds} zoom={zoom} panCursor={panCursor} empty={shown.length === 0 && !newDrag?.moved}
           >
             {shown.map((w) => (

@@ -53,7 +53,7 @@ export function applyPreviewKey(preview: PreviewState, key: PreviewKey, module: 
   const ev = (args: string) => `${module}.on("${w?.name}") → cb(${args})`;
   if (key === "left") return preview.editing ? { ...preview, editing: false, log: "left: leave edit mode" } : preview;
   if (preview.editing && w) {
-    const d = key === "up" ? -1 : key === "down" ? 1 : 0;
+    const d = key === "up" ? 1 : key === "down" ? -1 : 0;
     if (key === "enter") return { ...preview, editing: false, log: w.kind === "roller" || w.kind === "dropdown" ? ev(`${w.value ?? 0}, "${w.items?.[w.value ?? 0] ?? ""}"`) : "leave edit mode" };
     if (w.kind === "roller" || w.kind === "dropdown") {
       const v = Math.min(Math.max(0, (w.value ?? 0) + d), Math.max(0, (w.items?.length ?? 1) - 1));
@@ -68,7 +68,7 @@ export function applyPreviewKey(preview: PreviewState, key: PreviewKey, module: 
   }
   if (key === "up" || key === "down") {
     if (!stops.length) return preview;
-    const n = (preview.focus + (key === "down" ? 1 : -1) + stops.length) % stops.length;
+    const n = (preview.focus + (key === "up" ? 1 : -1) + stops.length) % stops.length;
     return { ...preview, focus: n };
   }
   if (!w || !st) return preview;

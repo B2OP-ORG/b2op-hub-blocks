@@ -1,20 +1,38 @@
 // Python ↔ Blocks switching for the active file, with the confirmation dialogs.
 
+import { Code2, Layers } from "lucide-react";
 import { useApp } from "../../state/store";
-import { fileMode, splitBlocksHeader, withBlocksHeader } from "../../project/format";
+import { fileMode, splitBlocksHeader, withBlocksHeader, type ProjectFile } from "../../project/format";
+import { isSceneFile } from "../../scene/project";
 import { checkTranslation, emptyWorkspace, pythonFromWorkspace, samePython } from "../../codegen/translate";
 import { showChoice, showConfirm } from "../dialog";
 import { Callout } from "../components/Callout";
+import type { MenuItem } from "../components/menuStore";
 
 let switching = false;
 
-export async function switchActiveFileMode(): Promise<void> {
+/** A .py file (not a scene) that can flip between Blocks and Python. */
+export function canSwitchFileMode(file: ProjectFile): boolean {
+  return /\.py$/i.test(file.name) && !isSceneFile(file) && !file.asset;
+}
+
+/** Context-menu entry switching `file` to the other mode, or `false` when it can't switch. */
+export function fileModeMenuItem(file: ProjectFile): MenuItem | false {
+  if (!canSwitchFileMode(file)) return false;
+  return fileMode(file) === "blocks"
+    ? { label: "Switch to Python", icon: <Code2 size={13} />, onSelect: () => void switchFileMode(file.id) }
+    : { label: "Switch to Blocks", icon: <Layers size={13} />, onSelect: () => void switchFileMode(file.id) };
+}
+
+/** Switch a file between Blocks and Python. Opens it first so the result is visible. */
+export async function switchFileMode(fileId: string): Promise<void> {
   if (switching) return;
   switching = true;
   try {
     const s = useApp.getState();
-    const file = s.mfp.files.find((f) => f.id === s.activeFileId);
-    if (!file) return;
+    const file = s.mfp.files.find((f) => f.id === fileId);
+    if (!file || !canSwitchFileMode(file)) return;
+    if (s.activeFileId !== fileId || s.activeExtraTab) s.openFile(fileId);
     if (fileMode(file) === "blocks") await blocksToPython(file.id, file.content);
     else await pythonToBlocksSwitch(file.id, file.content);
   } finally {

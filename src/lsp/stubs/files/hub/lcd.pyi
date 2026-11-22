@@ -9,9 +9,9 @@ The hub buttons work as an LVGL encoder input device, so focusable
 widgets (buttons, lists, rollers, sliders, dropdowns, checkboxes,
 switches, scrollable containers) can be used without a touchscreen:
 
-- up / down: move focus to the previous / next widget. While a widget is
-  being edited they decrease / increase its value or scroll it instead.
-  Holding repeats.
+- up / down: move focus to the next / previous widget. While a widget is
+  being edited, up increases its value (next roller / dropdown item,
+  scroll down) and down decreases it. Holding repeats.
 - center (or right): click the focused widget. On rollers, sliders,
   dropdowns and scrollable containers it switches edit mode on and off.
 - left: leave edit mode (and send ``lvgl.EVENT.CANCEL``).
@@ -19,7 +19,9 @@ switches, scrollable containers) can be used without a touchscreen:
 Input goes to LVGL's *default* group. Make a group the default with
 ``group.set_default()`` and add widgets to it with ``group.add_obj(w)``
 (widgets created while a group is the default join it automatically).
-Each program starts with an empty default group. Callbacks registered
+If the default group has no focused widget (for example because its
+widgets were added while their parent was hidden), the first visible one
+gets the focus. Each program starts with an empty default group. Callbacks registered
 with ``hub.buttons.on()`` still run as well.
 
 Functions marked *Advanced* talk to the screen hardware directly and

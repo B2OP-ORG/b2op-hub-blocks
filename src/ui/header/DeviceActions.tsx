@@ -1,4 +1,4 @@
-import { Bluetooth, Play, Plug, Power, RotateCw, Square, Upload, Usb, Zap } from "lucide-react";
+import { Bluetooth, Play, Plug, Power, RotateCw, Square, Upload, Usb } from "lucide-react";
 import { bleUnavailable } from "../../device/transport/ble";
 import { serialSupported } from "../../device/transport/serial";
 import { useApp } from "../../state/store";
@@ -7,7 +7,7 @@ import { openContextMenu, openMenuAt } from "../components/menuStore";
 import { dis, iconPad, labelShown, type HeaderStyles } from "./headerStyles";
 import type { ConnectKind } from "./useDeviceConnection";
 
-/** Connect, or (when connected) Disconnect · Run · Reload · Stop · Upload · Live. */
+/** Connect, or (when connected) Disconnect · Run · Reload · Stop · Upload. */
 export function DeviceActions({ s, compact, busy, onConnect, onDisconnect, onStop }: {
   s: HeaderStyles;
   compact: number;
@@ -20,7 +20,6 @@ export function DeviceActions({ s, compact, busy, onConnect, onDisconnect, onSto
   const running = useApp((st) => st.running);
   const projectId = useApp((st) => st.mfp.id);
   const activeFile = useApp((st) => st.mfp.files.find((f) => f.id === st.activeFileId));
-  const liveMode = useApp((st) => st.project.settings.liveMode);
   const show = (hideAt: number) => labelShown(compact, hideAt);
   const pad = (hideAt: number) => iconPad(compact, hideAt);
 
@@ -48,58 +47,47 @@ export function DeviceActions({ s, compact, busy, onConnect, onDisconnect, onSto
     return (
       <button
         type="button"
-        style={{ ...dis(s.primary, busy || !canConnect), ...pad(3) }}
+        style={{ ...dis(s.primary, busy || !canConnect), ...pad(2) }}
         disabled={busy || !canConnect}
         onClick={(e) => connectMenu(e.currentTarget)}
         title={canConnect ? "Connect via Bluetooth or USB" : "Neither Web Bluetooth nor Web Serial is available"}
       >
-        <Plug size={13} />{show(3) && " Connect"}
+        <Plug size={13} />{show(2) && " Connect"}
       </button>
     );
   }
 
   return (
     <>
-      {/* Primary actions — text hides at level 3 */}
-      <button type="button" style={{ ...dis(s.warn, busy), ...pad(3) }} disabled={busy} onClick={onDisconnect}
+      {/* Primary actions — text hides at level 2 */}
+      <button type="button" style={{ ...dis(s.warn, busy), ...pad(2) }} disabled={busy} onClick={onDisconnect}
         title="Disconnect device">
-        <Power size={13} />{show(3) && " Disconnect"}
+        <Power size={13} />{show(2) && " Disconnect"}
       </button>
-      <button type="button" style={{ ...dis(s.success, busy || running), ...pad(3) }} disabled={busy || running}
+      <button type="button" style={{ ...dis(s.success, busy || running), ...pad(2) }} disabled={busy || running}
         onClick={() => void runProject()} onContextMenu={(e) => { if (!busy && !running) runMenu(e); else e.preventDefault(); }}
         title={running ? "Stop the running program first" : "Upload changed files and run main.py · right-click for more"}>
-        <Play size={13} />{show(3) && " Run"}
+        <Play size={13} />{show(2) && " Run"}
       </button>
       {running && (
-        <button type="button" style={{ ...dis(s.btn, busy), ...pad(2) }} disabled={busy}
+        <button type="button" style={{ ...dis(s.btn, busy), ...pad(1) }} disabled={busy}
           onClick={() => void reloadProgram()}
           title="Reload: stop the program, upload changed files and run it again">
-          <RotateCw size={13} />{show(2) && " Reload"}
+          <RotateCw size={13} />{show(1) && " Reload"}
         </button>
       )}
-      <button type="button" style={{ ...dis(s.danger, busy || !running), ...pad(3) }} disabled={busy || !running}
+      <button type="button" style={{ ...dis(s.danger, busy || !running), ...pad(2) }} disabled={busy || !running}
         onClick={onStop} title={!running ? "No program running" : "Stop program"}>
-        <Square size={13} />{show(3) && " Stop"}
+        <Square size={13} />{show(2) && " Stop"}
       </button>
       {!running && (
-        <button type="button" style={{ ...dis(s.indigo, busy), ...pad(2) }} disabled={busy}
+        <button type="button" style={{ ...dis(s.indigo, busy), ...pad(1) }} disabled={busy}
           onClick={() => void uploadProject(projectId, "changed")}
           onContextMenu={(e) => { if (!busy) uploadMenu(e); else e.preventDefault(); }}
           title="Upload changed project files to the SD card · right-click for more">
-          <Upload size={13} />{show(3) && " Upload"}
+          <Upload size={13} />{show(1) && " Upload"}
         </button>
       )}
-
-      <div style={s.divider} />
-
-      {/* Toggles — text hides at level 1 */}
-      <button type="button"
-        style={{ ...dis(liveMode ? s.liveActive : s.btn, busy), ...pad(1) }}
-        disabled={busy}
-        onClick={() => useApp.getState().updateSettings({ liveMode: !liveMode })}
-        title="Toggle Pyodide live mode for this file">
-        <Zap size={13} />{show(1) && " Live"}
-      </button>
     </>
   );
 }

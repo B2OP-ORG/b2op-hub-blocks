@@ -5,7 +5,7 @@
 //
 // Only `lvgl` is imported, so the module also works from plain Python files.
 
-import { ARC_MODES, BAR_MODES, LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
+import { ARC_MODES, BAR_MODES, chartPointCount, chartStartValues, LONG_MODES, SCREEN_H, SCREEN_W, creationOrder, hexColor, type SceneDoc, type SceneWidget } from "./model";
 import { arcStretch, contentOffset, effectiveCrop, linePoints, QR_CAPACITY_M, triangulate, widgetAngle } from "./geometry";
 
 const I = "    ";
@@ -206,11 +206,11 @@ function widgetLines(doc: SceneDoc, w: SceneWidget): string[] {
       L(`set_qr(${py(v)}, ${py(w.text ?? "")})`);
       break;
     case "chart": {
-      const values = w.values ?? [];
+      const values = chartStartValues(w);
       L(`${v} = lv.chart(${parent})`);
       pos(); size();
       if (w.chartType === "bar") L(`${v}.set_type(lv.chart.TYPE.BAR)`);
-      L(`${v}.set_point_count(${Math.max(values.length, 2)})`);
+      L(`${v}.set_point_count(${chartPointCount(w)})`);
       L(`${v}.set_axis_range(lv.chart.AXIS.PRIMARY_Y, ${num(w.min, 0)}, ${num(w.max, 100)})`);
       L(`${v}_series = ${v}.add_series(${color(w.color, "0x2196F3")}, lv.chart.AXIS.PRIMARY_Y)`);
       if (values.length) L(`for _v in [${values.map((x) => num(x, 0)).join(", ")}]:\n${I}${v}.set_next_value(${v}_series, _v)`);
@@ -512,6 +512,8 @@ export function sceneToPython(doc: SceneDoc, moduleName: string): string {
     `${I}${I}scr.get_child(i).add_flag(lv.obj.FLAG.HIDDEN)`,
     `${I}root.remove_flag(lv.obj.FLAG.HIDDEN)`,
     `${I}group.set_default()`,
+    `${I}if group.get_focused() is None:`,
+    `${I}${I}group.focus_next()  # widgets added while root was hidden have no focus yet`,
     ``,
     ``,
     `def hide():`,

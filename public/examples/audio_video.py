@@ -30,9 +30,6 @@ import hub, time
 
 VIDEO_FILE = "/sd/demo.avi"
 
-hub.lcd.on()
-hub.lcd.backlight(200)
-
 exit_requested = False
 
 @hub.buttons.on("center")

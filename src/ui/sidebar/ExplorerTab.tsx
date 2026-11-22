@@ -24,6 +24,7 @@ import { useDeviceAvailability } from "../hooks/useDeviceAvailability";
 import { useInlineRename } from "../hooks/useInlineRename";
 import { openRemoteController } from "../remote/actions";
 import { newSceneFlow } from "../scene/actions";
+import { fileModeMenuItem } from "../editor/modeSwitch";
 import { FileIcon } from "./FileIcon";
 import { buildTree, type DirNode, type TreeNode } from "./tree";
 
@@ -75,6 +76,7 @@ export function ExplorerTab() {
   const fileMenu = (e: React.MouseEvent, f: ProjectFile) => {
     openContextMenu(e, [
       { label: "Open", onSelect: () => openFile(f.id) },
+      fileModeMenuItem(f),
       !isRemoteFile(f.name) && !isSceneFile(f) && !f.asset && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(f.id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(f.id) },
       "separator",

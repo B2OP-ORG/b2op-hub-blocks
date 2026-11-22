@@ -15,7 +15,7 @@ export function usageFor(w: SceneWidget, module: string): string {
     case "qrcode": return `${module}.set_qr("${w.name}", "https://example.com")`;
     case "led": return `${v}.on()\n${v}.off()`;
     case "list": case "roller": case "dropdown": return [`${module}.set_items("${w.name}", ["A", "B"])`, `${module}.selected_text("${w.name}")`, ...ev].join("\n");
-    case "chart": return `${v}.set_next_value(${v}_series, 42)`;
+    case "chart": return `${v}.set_next_value(${v}_series, 42)\n${v}.set_point_count(20)`;
     case "tabview": return [`${v}.set_active(1, False)`, ...ev].join("\n");
     case "switch": return [`${v}.add_state(lv.STATE.CHECKED)`, ...ev].join("\n");
     default: return `${v}.add_flag(lv.obj.FLAG.HIDDEN)`;

@@ -154,6 +154,8 @@ export const SCENE_BLOCKS = [
     tooltip: "Move the button focus to this widget (its scene must be shown)." },
   { type: "scene_chart_add", message0: "add %1 to chart %2", args0: [{ type: "input_value", name: "VALUE", check: "Number" }, widget("chart")], ...stmt,
     extensions: ["scene_ref_warning"], tooltip: "Add a value to the right of a chart (the oldest one scrolls out)." },
+  { type: "scene_chart_points", message0: "set number of points of chart %1 to %2", args0: [widget("chart"), { type: "input_value", name: "COUNT", check: "Number" }], ...stmt,
+    extensions: ["scene_ref_warning"], tooltip: "How many points / bars the chart shows (at least 2)." },
   {
     type: "scene_on_event",
     message0: "when %1 is used %2 %3",

@@ -7,6 +7,7 @@ import { type NewFileInput, useApp } from "../../state/store";
 import { showAlert } from "../dialog";
 import { addFilesWithPrompt, fileInputFromBytes } from "./common";
 import { pickProject } from "./project";
+import { newId } from "../../utils/id";
 
 // ── Device → project ─────────────────────────────────────────────────────────
 
@@ -100,7 +101,7 @@ export async function loadDeviceDirAsProject(dirPath: string): Promise<void> {
   const s = useApp.getState();
   const title = s.uniqueProjectTitle(devBaseName(dirPath) || "Imported");
   const base = newMultiFileProject(title);
-  const withIds = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, content: f.content, mode: f.mode, ...(f.asset ? { asset: f.asset } : {}) }));
+  const withIds = files.map((f) => ({ id: newId(), name: f.name, content: f.content, mode: f.mode, ...(f.asset ? { asset: f.asset } : {}) }));
   const first = withIds.find((f) => f.name === "main.py") ?? withIds[0];
   const id = s.importProject({
     ...base,

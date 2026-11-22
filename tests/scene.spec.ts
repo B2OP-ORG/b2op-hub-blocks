@@ -107,6 +107,17 @@ describe("QR code size", () => {
     expect(py).toContain('set_qr("qrcode0", "hi")');
     expect(py).toContain("qr.set_size((17 + 4 * v) * scale)");
   });
+
+  it("sets a chart's point count and keeps the newest start values", () => {
+    const doc = emptyScene();
+    const chart = { ...makeWidget("chart", 0, 0, doc), values: [1, 2, 3, 4], pointCount: 3 };
+    const py = sceneToPython({ ...doc, widgets: [chart] }, "s");
+    expect(py).toContain("chart0.set_point_count(3)");
+    expect(py).toContain("for _v in [2, 3, 4]:");
+    // Older charts without a count follow the number of start values.
+    const old = { ...chart, pointCount: undefined };
+    expect(sceneToPython({ ...doc, widgets: [old] }, "s")).toContain("chart0.set_point_count(4)");
+  });
 });
 
 describe("scene codegen", () => {
@@ -130,6 +141,7 @@ describe("scene codegen", () => {
     expect(py).toContain("root.add_flag(lv.obj.FLAG.HIDDEN)");
     expect(py).toContain("group = lv.group_create()");
     expect(py).toMatch(/def show\(\):[\s\S]*group\.set_default\(\)/);
+    expect(py).toMatch(/group\.set_default\(\)\n    if group\.get_focused\(\) is None:\n        group\.focus_next\(\)/);
   });
 
   it("creates every widget kind as a module global", () => {

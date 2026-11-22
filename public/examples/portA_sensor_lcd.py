@@ -20,9 +20,6 @@ _COLOR_NAMES = {
     lpf2.color.NONE: "none",
 }
 
-hub.lcd.on()
-hub.lcd.backlight(200)
-
 scr = lv.screen_active()
 scr.set_style_bg_color(lv.color_hex(0x000000), 0)
 scr.clean()

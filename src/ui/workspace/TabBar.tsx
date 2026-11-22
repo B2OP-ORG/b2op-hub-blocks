@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { BookOpen, Download, Eye, Pencil, Play, Upload, X } from "lucide-react";
+import { BookOpen, Download, Eye, FileCode, Pencil, Play, Upload, X } from "lucide-react";
 import { useApp } from "../../state/store";
 import { isFileUnsynced, runProjectFile, uploadFile } from "../../run/deviceSync";
 import { baseName } from "../../project/format";
@@ -13,7 +13,10 @@ import { openContextMenu } from "../components/menuStore";
 import { InlineInput } from "../components/InlineInput";
 import { useDeviceAvailability } from "../hooks/useDeviceAvailability";
 import { useInlineRename } from "../hooks/useInlineRename";
+import { fileModeMenuItem } from "../editor/modeSwitch";
+import { fileHasPythonPanel } from "./pythonPanel";
 import { EditorTab, TabLabel } from "./EditorTab";
+import { FileIcon } from "../sidebar/FileIcon";
 
 const TAB_DND_TYPE = "application/x-b2op-editor-tab";
 type TabGroup = "file" | "extra";
@@ -74,6 +77,7 @@ export function TabBar() {
   const deviceName = useApp((s) => s.deviceName);
   const openFile = useApp((s) => s.openFile);
   const closeFile = useApp((s) => s.closeFile);
+  const pyOpen = useApp((s) => s.pyPanel.open);
   const extraTabs = useApp((s) => s.extraTabs);
   const activeExtraTab = useApp((s) => s.activeExtraTab);
   const { canDevice, deviceHint } = useDeviceAvailability();
@@ -93,7 +97,16 @@ export function TabBar() {
   const tabMenu = (e: React.MouseEvent, id: string) => {
     const f = mfp.files.find((x) => x.id === id);
     if (!f) return;
+    // The preview panel is shared by all editors; showing it from a background tab opens that tab too.
+    const togglePython = () => {
+      const st = useApp.getState();
+      if (!pyOpen && (st.activeFileId !== id || st.activeExtraTab)) st.openFile(id);
+      st.setPyPanel({ open: !pyOpen });
+    };
     openContextMenu(e, [
+      fileModeMenuItem(f),
+      fileHasPythonPanel(f) && { label: pyOpen ? "Hide Python preview" : "Show Python preview", icon: <FileCode size={13} />, onSelect: togglePython },
+      "separator",
       !isRemoteFile(f.name) && !isSceneFile(f) && !f.asset && { label: "Run this file", icon: <Play size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => runProjectFile(id) },
       { label: "Upload this file", icon: <Upload size={13} />, disabled: !canDevice, hint: deviceHint, onSelect: () => uploadFile(id) },
       "separator",
@@ -141,6 +154,7 @@ export function TabBar() {
             drag={isRenaming ? undefined : reorder.handlers("file", fileId)}
             dropSide={reorder.dropSide("file", fileId)}
           >
+            <FileIcon file={file} size={12} />
             {isRenaming && rename.inputProps ? <InlineInput {...rename.inputProps} /> : <TabLabel>{baseName(file.name)}</TabLabel>}
           </EditorTab>
         );
@@ -152,7 +166,7 @@ export function TabBar() {
             key={t.id}
             active={t.id === activeExtraTab}
             title={t.kind === "example" ? `Example preview (read-only): ${t.ref}` : `Docs: ${t.title}`}
-            italic padLeft={9} gap={5}
+            italic
             onClick={() => useApp.getState().openExtraTab(t)}
             onClose={close}
             drag={reorder.handlers("extra", t.id)}

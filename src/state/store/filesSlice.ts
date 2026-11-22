@@ -4,6 +4,7 @@ import { deriveProject, mergeFiles, pathTaken, touch, withFolders } from "../../
 import { isWithin, normalizeRelPath, relJoin, uniqueName } from "../../project/paths";
 import { projectHelpers, reorder } from "./helpers";
 import type { AppState } from "./types";
+import { newId } from "../../utils/id";
 
 /** File management inside the active project. */
 export interface FilesSlice {
@@ -93,8 +94,8 @@ export const createFilesSlice: StateCreator<AppState, [], [], FilesSlice> = (set
       const base = normalizeRelPath(relJoin(dir, name ?? "untitled.py")) ?? "untitled.py";
       const finalName = uniqueName(base, (c) => pathTaken(s.mfp, c));
       const file: ProjectFile = kind === "blocks"
-        ? { id: crypto.randomUUID(), name: finalName, content: withBlocksHeader(newBlocksProject().workspace, ""), mode: "blocks" }
-        : { id: crypto.randomUUID(), name: finalName, content: "", mode: "python" };
+        ? { id: newId(), name: finalName, content: withBlocksHeader(newBlocksProject().workspace, ""), mode: "blocks" }
+        : { id: newId(), name: finalName, content: "", mode: "python" };
       const mfp = touch(s.mfp, { files: [...s.mfp.files, file], folders: withFolders(s.mfp.folders, [finalName]) });
       set({
         mfp,

@@ -1,5 +1,5 @@
 import {
-  ARC_MODES, CHECK_KINDS, FONT_SIZES, ITEM_KINDS, KIND_LABEL, LONG_MODES, TEXT_KINDS, isContainer, nameProblem,
+  ARC_MODES, CHECK_KINDS, chartPointCount, FONT_SIZES, ITEM_KINDS, KIND_LABEL, LONG_MODES, TEXT_KINDS, isContainer, nameProblem,
   type ArcMode, type FontSize, type LongMode, type SceneDoc, type SceneKind, type SceneWidget, type TextAlign,
 } from "../../scene/model";
 import { LV_ARC_WIDTH, sweepOf, clampedPos, drawnSize, effectiveCrop, isOutside, normalizeLine, rotateLine, widgetAngle } from "../../scene/geometry";
@@ -112,7 +112,10 @@ export function WidgetProperties({ doc, w, module, scenePath, selPath, folds, on
         {k === "image" && <ImageField w={w} scenePath={scenePath} onChange={onChange} />}
         {k === "chart" && (
           <>
-            <SelectField grow label="Type" value={w.chartType ?? "line"} options={[["line", "Line"], ["bar", "Bars"]]} onChange={(v) => onChange({ chartType: v as "line" | "bar" })} />
+            <FieldRow>
+              <SelectField grow label="Type" value={w.chartType ?? "line"} options={[["line", "Line"], ["bar", "Bars"]]} onChange={(v) => onChange({ chartType: v as "line" | "bar" })} />
+              {num(w.chartType === "bar" ? "Bars" : "Points", chartPointCount(w), (pointCount) => ({ pointCount }), 2, 1000)}
+            </FieldRow>
             <TextField label="Start values (comma separated)" value={(w.values ?? []).join(", ")}
               onCommit={(v) => onChange({ values: v.split(/[,\s]+/).filter(Boolean).map(Number).filter(Number.isFinite).map(Math.round) })} />
           </>

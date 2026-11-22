@@ -169,6 +169,12 @@ export function registerSceneGenerators(gen: PythonGenerator): void {
     return `${r.w}.set_next_value(${r.w}_series, int(${val(block, "VALUE")}))\n`;
   };
 
+  gen.forBlock["scene_chart_points"] = (block: Block) => {
+    const r = ref(block);
+    if (!r.name) return missing(block);
+    return `${r.w}.set_point_count(max(2, int(${val(block, "COUNT")})))\n`;
+  };
+
   // Top-level hat: emitted by workspaceToPython (like the button hats).
   gen.forBlock["scene_on_event"] = () => "";
   gen.forBlock["scene_event_index"] = () => ["ev_index", Order.ATOMIC];

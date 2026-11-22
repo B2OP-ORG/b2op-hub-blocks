@@ -120,6 +120,8 @@ export interface SceneWidget {
   /** chart: initial values (one series). */
   values?: number[];
   chartType?: "line" | "bar";
+  /** chart: number of points / bars shown (absent = number of start values, at least 2). */
+  pointCount?: number;
   /** scale: total ticks / major tick every n. */
   ticks?: number;
   majorEvery?: number;
@@ -299,7 +301,7 @@ export function defaultsFor(kind: SceneKind): Partial<SceneWidget> {
     case "spinner": return { w: 32, h: 32, width: 4 };
     case "image": return { w: 32, h: 32, src: "image.png" };
     case "qrcode": return { w: 64, h: 64, text: "https://example.com" };
-    case "chart": return { w: 120, h: 60, min: 0, max: 100, values: [10, 40, 30, 70, 50], chartType: "line" };
+    case "chart": return { w: 120, h: 60, min: 0, max: 100, values: [10, 40, 30, 70, 50], chartType: "line", pointCount: 5 };
     case "scale": return { w: 120, h: 24, min: 0, max: 100, ticks: 11, majorEvery: 5 };
     case "table": return { w: 140, h: 60, cells: [["A", "1"], ["B", "2"]] };
     case "textarea": return { w: 140, h: 48, text: "Line 1\nLine 2" };
@@ -330,6 +332,16 @@ const PY_KEYWORDS = new Set([
 export const MODULE_NAMES = new Set([
   "lv", "root", "group", "show", "hide", "is_shown", "on", "set_items", "selected_index", "selected_text", "set_qr",
 ]);
+
+/** How many points / bars a chart shows (LVGL point count, at least 2). */
+export function chartPointCount(w: Pick<SceneWidget, "values" | "pointCount">): number {
+  return Math.max(2, Math.round(w.pointCount ?? w.values?.length ?? 0));
+}
+
+/** The start values a chart keeps: the last `chartPointCount` ones (older ones would scroll out). */
+export function chartStartValues(w: Pick<SceneWidget, "values" | "pointCount">): number[] {
+  return (w.values ?? []).slice(-chartPointCount(w));
+}
 
 /** Extra module globals a widget brings along (besides its own name). */
 export function helperGlobals(w: Pick<SceneWidget, "kind" | "name">): string[] {

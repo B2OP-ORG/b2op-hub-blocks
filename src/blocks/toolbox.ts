@@ -100,6 +100,7 @@ export function sceneFlyout(): object[] {
   withWidget("scene_set_checked", "check");
   withWidget("scene_is_checked", "checked");
   withWidget("scene_chart_add", "chart");
+  withWidget("scene_chart_points", "chart");
   withWidget("scene_set_color", "any");
   withWidget("scene_set_visible", "any");
   withWidget("scene_move", "any");
@@ -149,6 +150,7 @@ const INPUT_DEFAULTS: Record<string, Record<string, ShadowState>> = {
   scene_set_color: { COLOR: color("RED") },
   scene_move: { X: num(10), Y: num(10) },
   scene_chart_add: { VALUE: num(50) },
+  scene_chart_points: { COUNT: num(20) },
   // Motor
   motor_start_speed: { SPEED: num(50) },
   motor_start_power: { POWER: num(50) },

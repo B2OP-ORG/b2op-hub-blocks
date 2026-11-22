@@ -6,7 +6,7 @@
 import { useContext, type CSSProperties } from "react";
 import { useAssetUrl } from "../hooks/useAssetUrl";
 import { SceneAssetContext } from "./sceneAssets";
-import { LONG_MODES, type SceneWidget } from "../../scene/model";
+import { LONG_MODES, chartPointCount, chartStartValues, type SceneWidget } from "../../scene/model";
 import { LV_ARC_WIDTH, arcStretch, lineSize, linePoints, lvArcCircle, qrLayout, triangulate } from "../../scene/geometry";
 import { CARD, FONT_FAMILY, LV, align, arcAngles, arcPath, boxCss, fill, fontCss, frac, lineHeightOf } from "./lvStyle";
 
@@ -190,9 +190,12 @@ export function SceneWidgetBody({ w, focused, focusItem, editing }: { w: SceneWi
     }
     case "chart": {
       // Card (2 px border) + 8 px padding; 3 horizontal / 5 vertical division lines
-      // across the content area; 2 px series line with 7 px points.
-      const vals = w.values ?? [];
-      const n = Math.max(vals.length, 2);
+      // placed in the content area but drawn across the whole widget (as LVGL does);
+      // 2 px series line with 7 px points. Start values fill the rightmost points
+      // (set_next_value shifts them in), the rest stay empty.
+      const n = chartPointCount(w);
+      const vals = chartStartValues(w);
+      const first = n - vals.length;
       const min = w.min ?? 0, max = w.max ?? 100;
       const border = w.border ?? CARD.border;
       const pad = LV.padSmall + border;
@@ -205,13 +208,13 @@ export function SceneWidgetBody({ w, focused, focusItem, editing }: { w: SceneWi
         <svg width={w.w} height={w.h} style={{ position: "absolute", left: 0, top: 0 }}>
           <rect x={border / 2} y={border / 2} width={w.w - border} height={w.h - border} rx={w.radius ?? CARD.radius}
             fill={w.bg ?? CARD.bg} stroke={border ? w.borderColor ?? CARD.borderColor : "none"} strokeWidth={border} />
-          {[0, 1, 2].map((i) => <line key={`h${i}`} x1={pad} x2={pad + iw} y1={pad + (ih * i) / 2 + 0.5} y2={pad + (ih * i) / 2 + 0.5} stroke={LV.track} strokeWidth={1} />)}
-          {[0, 1, 2, 3, 4].map((i) => <line key={`v${i}`} y1={pad} y2={pad + ih} x1={pad + (iw * i) / 4 + 0.5} x2={pad + (iw * i) / 4 + 0.5} stroke={LV.track} strokeWidth={1} />)}
+          {[0, 1, 2].map((i) => <line key={`h${i}`} x1={0} x2={w.w} y1={pad + (ih * i) / 2 + 0.5} y2={pad + (ih * i) / 2 + 0.5} stroke={LV.track} strokeWidth={1} />)}
+          {[0, 1, 2, 3, 4].map((i) => <line key={`v${i}`} y1={0} y2={w.h} x1={pad + (iw * i) / 4 + 0.5} x2={pad + (iw * i) / 4 + 0.5} stroke={LV.track} strokeWidth={1} />)}
           {w.chartType === "bar"
-            ? vals.map((v, i) => <rect key={i} x={pad + i * (bw + gap)} y={y(v)} width={bw} height={pad + ih - y(v)} rx={2} fill={c} />)
+            ? vals.map((v, i) => <rect key={i} x={pad + (first + i) * (bw + gap)} y={y(v)} width={bw} height={pad + ih - y(v)} rx={2} fill={c} />)
             : <>
-                <polyline fill="none" stroke={c} strokeWidth={2} strokeLinejoin="round" points={vals.map((v, i) => `${pad + (iw * i) / (n - 1)},${y(v)}`).join(" ")} />
-                {vals.map((v, i) => <rect key={i} x={pad + (iw * i) / (n - 1) - 3.5} y={y(v) - 3.5} width={7} height={7} rx={2} fill={c} />)}
+                <polyline fill="none" stroke={c} strokeWidth={2} strokeLinejoin="round" points={vals.map((v, i) => `${pad + (iw * (first + i)) / (n - 1)},${y(v)}`).join(" ")} />
+                {vals.map((v, i) => <rect key={i} x={pad + (iw * (first + i)) / (n - 1) - 3.5} y={y(v) - 3.5} width={7} height={7} rx={2} fill={c} />)}
               </>}
         </svg>
       );

@@ -5,6 +5,7 @@ import type { WidgetDrag } from "../hooks/useWidgetDrag";
 import { MARGIN } from "./constants";
 import type { PreviewState, Stop } from "./preview";
 import { SceneWidgetBody } from "./widgets";
+import { DragHeatTint } from "../components/DragGhost";
 
 /** What every widget node needs to draw itself and start drags. */
 export interface SceneNodeContext {
@@ -84,9 +85,7 @@ function SceneLevel({ ctx, parent, tab }: { ctx: SceneNodeContext; parent?: stri
                 <SceneLevel ctx={ctx} parent={w.uid} tab={w.kind === "tabview" ? tabShown(ctx, w) : undefined} />
               </div>
             )}
-            {drag?.uid === w.uid && drag.mode === "move" && ctx.dragHeat > 0 && (
-              <div style={{ position: "absolute", inset: 0, background: "#ef4444", opacity: ctx.dragHeat * 0.65, pointerEvents: "none" }} />
-            )}
+            {drag?.uid === w.uid && drag.mode === "move" && <DragHeatTint heat={ctx.dragHeat} />}
             {isSel && w.kind === "line" && <LineHandles ctx={ctx} w={w} w0={w0} />}
             {isSel && w.crop && (w.kind === "arc" || w.kind === "arcline") && <CropHandles ctx={ctx} w={w} w0={w0} />}
             {isSel && w.kind !== "line" && (

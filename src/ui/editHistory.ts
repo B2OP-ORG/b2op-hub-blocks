@@ -1,17 +1,18 @@
-// Undo / redo of scene edits. One history per scene file, kept in memory while
-// the editor is open (survives tab switches, not reloads). Snapshots are whole
-// file contents (header + generated Python) plus the selection at that point.
+// Undo / redo of the visual editors (scene, remote controller). One history
+// per file, kept in memory while the app is open (survives tab switches, not
+// reloads). Snapshots are whole file contents plus the selection at that point.
+// The editor wiring (toolbar buttons, Ctrl Z / Ctrl Y) is hooks/useUndoRedo.ts.
 
 import { useSyncExternalStore } from "react";
 
-export interface SceneSnapshot {
+export interface EditSnapshot {
   content: string;
   selected: string | null;
 }
 
 interface History {
-  past: SceneSnapshot[];
-  future: SceneSnapshot[];
+  past: EditSnapshot[];
+  future: EditSnapshot[];
   /** Coalescing key and time of the last recorded edit. */
   lastKey?: string;
   lastAt: number;
@@ -37,7 +38,7 @@ function hist(fileId: string): History {
  * same `coalesceKey` in quick succession (nudges, colour-picker drags) share
  * one undo step.
  */
-export function recordSceneEdit(fileId: string, before: SceneSnapshot, coalesceKey?: string): void {
+export function recordEdit(fileId: string, before: EditSnapshot, coalesceKey?: string): void {
   const h = hist(fileId);
   const now = Date.now();
   const merge = coalesceKey !== undefined && coalesceKey === h.lastKey && now - h.lastAt < COALESCE_MS && h.past.length > 0 && h.future.length === 0;
@@ -51,7 +52,7 @@ export function recordSceneEdit(fileId: string, before: SceneSnapshot, coalesceK
 }
 
 /** Step back: returns the snapshot to restore (and remembers `current` for redo), or null. */
-export function undoScene(fileId: string, current: SceneSnapshot): SceneSnapshot | null {
+export function undoEdit(fileId: string, current: EditSnapshot): EditSnapshot | null {
   const h = hist(fileId);
   const prev = h.past.pop();
   if (!prev) return null;
@@ -62,7 +63,7 @@ export function undoScene(fileId: string, current: SceneSnapshot): SceneSnapshot
 }
 
 /** Step forward again: returns the snapshot to restore, or null. */
-export function redoScene(fileId: string, current: SceneSnapshot): SceneSnapshot | null {
+export function redoEdit(fileId: string, current: EditSnapshot): EditSnapshot | null {
   const h = hist(fileId);
   const next = h.future.pop();
   if (!next) return null;
@@ -75,7 +76,7 @@ export function redoScene(fileId: string, current: SceneSnapshot): SceneSnapshot
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 
 /** Whether `fileId` has steps to undo / redo (re-renders when that changes). */
-export function useSceneHistory(fileId: string): { canUndo: boolean; canRedo: boolean } {
+export function useEditHistory(fileId: string): { canUndo: boolean; canRedo: boolean } {
   useSyncExternalStore(subscribe, () => version);
   const h = histories.get(fileId);
   return { canUndo: !!h?.past.length, canRedo: !!h?.future.length };

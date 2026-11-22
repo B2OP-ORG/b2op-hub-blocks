@@ -1,10 +1,14 @@
 import type { RemoteValue } from "../../device/protocol";
 import { KIND_LABEL, type Widget } from "../../remote/layout";
 import { usePalette } from "../theme";
+import { DragGhost, DragHeatTint } from "../components/DragGhost";
 import { WidgetBody } from "./widgets";
 
+const CARD_RADIUS = 8;
+const noop = () => {};
+
 /** One widget on the remote canvas: header line, live body, resize handle when selected. */
-export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, panCursor, live, values, indicatorValue, onChange, onBeginDrag, onDragMove, onDragEnd }: {
+export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, panCursor, live, values, indicatorValue, overTrash = false, heat = 0, onChange, onBeginDrag, onDragMove, onDragEnd }: {
   w: Widget;
   /** Run / preview: finished look, controls react. */
   showing: boolean;
@@ -17,6 +21,10 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, pan
   live: boolean;
   values: Record<string, RemoteValue>;
   indicatorValue: RemoteValue | undefined;
+  /** Being moved over a bin: released, it is deleted (faded). */
+  overTrash?: boolean;
+  /** 0..1: being moved towards the toolbox bin (tinted red). */
+  heat?: number;
   onChange: (name: string, value: RemoteValue, merge?: boolean) => void;
   onBeginDrag: (e: React.PointerEvent, w: Widget, mode: "move" | "resize") => void;
   onDragMove: (e: React.PointerEvent) => void;
@@ -32,7 +40,7 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, pan
       style={{
         position: "absolute", left: w.x, top: w.y, width: w.w, height: w.h, boxSizing: "border-box",
         display: "flex", flexDirection: "column", padding: showing ? "6px 12px 8px" : "6px 10px 8px",
-        background: p.surface, borderRadius: 8,
+        background: p.surface, borderRadius: CARD_RADIUS, opacity: overTrash ? 0.3 : 1,
         border: `${selected || conflict ? 2 : 1}px solid ${conflict ? p.danger : selected ? p.accent : p.border}`,
         boxShadow: dragging ? p.shadow : "0 1px 2px rgba(0,0,0,.08)",
         cursor: panCursor ?? (showing ? "default" : dragging ? "grabbing" : "grab"),
@@ -55,6 +63,7 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, pan
       <div data-widget-body style={{ flex: 1, minHeight: 0, pointerEvents: showing && !panCursor ? "auto" : "none" }}>
         <WidgetBody w={w} p={p} live={live} values={values} value={indicatorValue} onChange={onChange} />
       </div>
+      <DragHeatTint heat={heat} radius={CARD_RADIUS} />
       {selected && (
         <span
           onPointerDown={(e) => onBeginDrag(e, w, "resize")}
@@ -63,5 +72,17 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, pan
         />
       )}
     </div>
+  );
+}
+
+/** A remote widget following the pointer (palette drag, or dragged out of the canvas), centred on client (x, y). */
+export function RemoteWidgetGhost({ w, x, y, zoom, overTrash, heat }: {
+  w: Widget; x: number; y: number; zoom: number; overTrash: boolean; heat?: number;
+}) {
+  return (
+    <DragGhost x={x} y={y} width={w.w} height={w.h} scale={zoom} overTrash={overTrash} heat={heat} radius={CARD_RADIUS}>
+      <RemoteWidgetCard w={{ ...w, x: 0, y: 0 }} showing={false} selected={false} conflict={false} dragging panCursor={undefined}
+        live={false} values={{}} indicatorValue={undefined} onChange={noop} onBeginDrag={noop} onDragMove={noop} onDragEnd={noop} />
+    </DragGhost>
   );
 }

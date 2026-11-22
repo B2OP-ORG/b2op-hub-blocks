@@ -6,10 +6,10 @@
 // Modes: Edit (drag / resize / properties) and Preview, where the arrow keys
 // and Enter act like the hub buttons (focus order, edit mode, events) on a
 // local copy of the scene (preview.ts). Pan / zoom: see hooks/useCanvasView.ts.
-// Undo / redo (toolbar, Ctrl Z / Ctrl Shift Z / Ctrl Y): see sceneHistory.ts.
+// Undo / redo (toolbar, Ctrl Z / Ctrl Shift Z / Ctrl Y): see editHistory.ts.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Monitor, PanelLeft, PanelRight, Pencil, Redo2, Undo2 } from "lucide-react";
+import { Eye, Monitor, PanelLeft, PanelRight, Pencil } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { PanelTool } from "../../settings/panelLayout";
@@ -21,7 +21,6 @@ import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
 import { FileLoadError } from "../components/FileLoadError";
-import { IconButton } from "../components/IconButton";
 import { ModeToggle } from "../components/ModeToggle";
 import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
 import { PanelToggle } from "../components/PanelToggle";
@@ -30,18 +29,21 @@ import { useToolPanels } from "../hooks/useToolPanels";
 import { useFoldState } from "../hooks/useFoldState";
 import { Toolbar } from "../components/Toolbar";
 import { ZoomControls } from "../components/ZoomControls";
+import { ToolboxBin, TrashTarget } from "../components/TrashTarget";
+import { UndoRedoButtons } from "../components/UndoRedoButtons";
+import { useBinDrag } from "../hooks/useBinDrag";
+import { usePaletteDrag, type NewDrag } from "../hooks/usePaletteDrag";
+import { useUndoRedo } from "../hooks/useUndoRedo";
+import type { EditSnapshot } from "../editHistory";
 import { BASE, DRAW_TOOLS, PROP_FOLDED_BY_DEFAULT, KIND_HINT, KIND_ICON, MARGIN, PALETTE_CATEGORIES, PALETTE_LABEL, type DrawTool } from "./constants";
 import { DrawOverlay } from "./DrawOverlay";
 import { fitSceneImage } from "./imageUpload";
-import { redoScene, undoScene, useSceneHistory, type SceneSnapshot } from "./sceneHistory";
 import { OUTLINE_ROOT, Outline } from "./Outline";
 import { PaletteDragGhost } from "./PaletteDragGhost";
 import { PREVIEW_KEYS, applyPreviewKey, focusStops, startPreviewState, type PreviewState } from "./preview";
 import { SceneCanvas, type SceneNodeContext } from "./SceneCanvas";
 import { sceneOps } from "./sceneOps";
 import { SceneProperties } from "./SceneProperties";
-import { ToolboxBin, TrashTarget } from "./TrashTarget";
-import { usePaletteDrag, useTrash, type NewDrag } from "./usePaletteDrag";
 import { WidgetProperties } from "./WidgetProperties";
 import { SceneAssetContext } from "./sceneAssets";
 
@@ -67,25 +69,14 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const files = useApp((s) => s.mfp.files);
   const canvasRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
-  const trash = useTrash();
   const widgetDrag = useWidgetDrag<SceneWidget>(canvasRef);
   // Refreshed every render below (needs the current scene).
-  const dropNew = useRef<(d: NewDrag) => void>(() => {});
+  const dropNew = useRef<(d: NewDrag<SceneKind>) => void>(() => {});
   const paletteRef = useRef<HTMLDivElement>(null);
-  /** Moving a widget: 0..1 as the pointer nears the toolbox (1 = over it: drop deletes). */
-  const [toolboxHeat, setToolboxHeat] = useState(0);
-  /** Moving a widget: its client rect follows the pointer from where it was at the start. */
-  const dragRect = useRef<{ rect: DOMRect; x: number; y: number } | null>(null);
-  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
-  const paletteDrag = usePaletteDrag(trash, (d) => dropNew.current(d),
+  const bin = useBinDrag({ paletteRef, canvasRef });
+  const { trash } = bin;
+  const paletteDrag = usePaletteDrag<SceneKind>(trash, (d) => dropNew.current(d),
     () => paletteRef.current?.getBoundingClientRect());
-  /** 0..1 as client point (x, y) nears the toolbox (1 = over it). */
-  const heatAt = (x: number, y: number) => {
-    const pr = paletteRef.current?.getBoundingClientRect();
-    if (!pr) return 0;
-    const dist = Math.hypot(Math.max(pr.left - x, 0, x - pr.right), Math.max(pr.top - y, 0, y - pr.bottom));
-    return Math.max(0, Math.min(1, 1 - dist / 120));
-  };
   const { newDrag } = paletteDrag;
   const projectId = useApp((s) => s.mfp.id);
   const cv = useCanvasView({
@@ -97,27 +88,20 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const { zoom } = cv;
   const scale = zoom * BASE;
   const tp = useToolPanels("scene", SCENE_TOOLS);
-  const history = useSceneHistory(file.id);
   const rootRef = useRef<HTMLDivElement>(null);
-  // Refreshed every render below (null while undo / redo can't run, e.g. in preview).
-  const historyStep = useRef<((redo: boolean) => void) | null>(null);
-
-  // Ctrl Z = undo, Ctrl Shift Z / Ctrl Y = redo: anywhere in the scene view
-  // (or with nothing focused), except text fields, which keep their own undo.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k !== "z" && !(k === "y" && !e.shiftKey)) return;
-      const t = e.target as HTMLElement;
-      if (t !== document.body && !rootRef.current?.contains(t)) return;
-      if (t.closest("textarea,[contenteditable],input:not([type=checkbox],[type=radio],[type=color],[type=range],[type=button])")) return;
-      e.preventDefault();
-      historyStep.current?.(k === "y" || e.shiftKey);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  const history = useUndoRedo({
+    fileId: file.id, rootRef, selected,
+    enabled: !!parsed.doc && !preview && !widgetDrag.drag,
+    restore: (s: EditSnapshot) => {
+      useApp.getState().updateFile(file.id, s.content);
+      const restored = splitSceneHeader(s.content).doc;
+      setSelected(restored?.widgets.some((w) => w.uid === s.selected) ? s.selected : null);
+      // Image PNGs follow their widget's size (a no-op when they already match).
+      for (const w of restored?.widgets ?? []) {
+        if (w.kind === "image") fitSceneImage(file.name, w.uid).catch((e: Error) => useApp.getState().appendConsole("err", `[image resize failed: ${e.message}]\n`));
+      }
+    },
+  });
 
   // Keep the generated Python in step (e.g. after a codegen update or a renamed file).
   const doc0 = parsed.doc;
@@ -139,7 +123,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
   }
 
   if (!parsed.doc) {
-    historyStep.current = null;
     return (
       <FileLoadError fileName={file.name} error={parsed.error ?? ""} resetLabel="Replace with an empty scene"
         onReset={() => { const d = emptyScene(); useApp.getState().updateFile(file.id, withSceneHeader(d, sceneToPython(d, module))); }} />
@@ -163,7 +146,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   /** The widget a palette drag would add (for the ghost and the drop maths). */
   const template = newDrag ? makeWidget(newDrag.kind, 0, 0, doc) : null;
   // A new widget taken back to the toolbox is put back (shown like the bin).
-  const newHeat = newDrag?.moved && newDrag.away ? heatAt(newDrag.x, newDrag.y) : 0;
+  const newHeat = newDrag?.moved && newDrag.away ? bin.heatAt(newDrag.x, newDrag.y) : 0;
   dropNew.current = (d) => {
     if (!d.moved) { ops.addDefault(d.kind); return; } // a click
     if (trash.overRef.current) return;
@@ -182,7 +165,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const beginDrag = (e: React.PointerEvent, w: SceneWidget, mode: "move" | "resize" | "point" | "crop", point?: number) => {
     if (preview || tool || e.button !== 0) return;
     setSelected(w.uid);
-    dragRect.current = mode === "move" ? { rect: (e.currentTarget as HTMLElement).getBoundingClientRect(), x: e.clientX, y: e.clientY } : null;
+    if (mode === "move") bin.begin(e);
     widgetDrag.begin(e, w, mode, point);
   };
   const removePoint = (w: SceneWidget, i: number) => {
@@ -191,12 +174,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   };
   const onDragMove = (e: React.PointerEvent) => {
     if (!drag) return;
-    if (drag.mode === "move") {
-      trash.set(trash.hit(e.clientX, e.clientY));
-      // Toolbox as a bin: red-hot as the pointer comes within 120 px of it.
-      setToolboxHeat(heatAt(e.clientX, e.clientY));
-      setPointer({ x: e.clientX, y: e.clientY });
-    }
+    if (drag.mode === "move") bin.move(e);
     const step = e.shiftKey ? 4 : 1;
     const sn = (v: number) => Math.round(v / step) * step;
     widgetDrag.move(e, scale, (o, mode, dx, dy, point) => mode === "crop"
@@ -217,10 +195,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const endDrag = () => {
     const d = widgetDrag.end();
     if (!d) return;
-    const heat = toolboxHeat;
-    setToolboxHeat(0);
-    setPointer(null);
-    if (d.mode === "move" && (trash.overRef.current || heat >= 1)) { trash.set(false); ops.remove(d.orig.uid); return; }
+    if (bin.end() && d.mode === "move") { ops.remove(d.orig.uid); return; }
     const { cur } = d;
     if (d.mode === "crop") {
       if (JSON.stringify(d.orig.crop) !== JSON.stringify(cur.crop)) ops.update(cur.uid, { crop: cur.crop });
@@ -260,29 +235,12 @@ export function SceneView({ file }: { file: ProjectFile }) {
     if (m) { e.preventDefault(); ops.update(w.uid, { x: w.x + m[0], y: w.y + m[1] }, true); }
   };
 
-  // ── Undo / redo ─────────────────────────────────────────────────────────────
-  const restore = (s: SceneSnapshot) => {
-    useApp.getState().updateFile(file.id, s.content);
-    const restored = splitSceneHeader(s.content).doc;
-    setSelected(restored?.widgets.some((w) => w.uid === s.selected) ? s.selected : null);
-    // Image PNGs follow their widget's size (a no-op when they already match).
-    for (const w of restored?.widgets ?? []) {
-      if (w.kind === "image") fitSceneImage(file.name, w.uid).catch((e: Error) => useApp.getState().appendConsole("err", `[image resize failed: ${e.message}]\n`));
-    }
-  };
-  const step = (redo: boolean) => {
-    const current: SceneSnapshot = { content: useApp.getState().mfp.files.find((f) => f.id === file.id)?.content ?? file.content, selected };
-    const s = redo ? redoScene(file.id, current) : undoScene(file.id, current);
-    if (s) restore(s);
-  };
-  historyStep.current = preview || drag ? null : step;
-
   const fitAll = () => cv.fit(0, 0, (SCREEN_W + MARGIN * 2) * BASE, (SCREEN_H + MARGIN * 2) * BASE);
   const panCursor = cv.panning ? "grabbing" : cv.spaceHeld ? "grab" : undefined;
   const sel = preview ? undefined : doc.widgets.find((w) => w.uid === selected);
 
   const nodeCtx: SceneNodeContext = {
-    doc, shownDoc, preview, selected, stop, drag, scale, panCursor, overTrash: trash.over || toolboxHeat >= 1, dragHeat: toolboxHeat,
+    doc, shownDoc, preview, selected, stop, drag, scale, panCursor, overTrash: bin.over, dragHeat: bin.heat,
     onBeginDrag: beginDrag, onDragMove, onDragEnd: endDrag, onRemovePoint: removePoint,
   };
   /** Image widget src → its project image (resolved next to the scene file). */
@@ -296,12 +254,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
     if (next) setSelected(null);
     canvasRef.current?.focus();
   };
-  const chipProps = (k: SceneKind): React.ButtonHTMLAttributes<HTMLButtonElement> => ({
-    onPointerDown: (e) => { if (e.button !== 0) return; e.preventDefault(); paletteDrag.start(k, e.clientX, e.clientY); },
-    // Keyboard activation only (detail 0): pointer clicks are handled by the drag.
-    onClick: (e) => { if (e.detail === 0) ops.addDefault(k); },
-    style: { touchAction: "none", userSelect: "none" },
-  });
+  const chipProps = (k: SceneKind) => paletteDrag.chipProps(k, ops.addDefault);
   const paletteGroup = (id: string, title: string, kinds: SceneKind[]) => (
     <PaletteGroup key={id} title={title} kinds={kinds} label={(k) => PALETTE_LABEL[k] ?? KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the screen or click to add`}
       chipProps={chipProps} icon={(k) => { const I = KIND_ICON[k]; return <I size={14} />; }}
@@ -350,10 +303,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
             { value: "preview", label: "Preview", title: "Try the hub buttons: ↑ ↓ = up / down, Enter = center, ← = left", icon: <Eye size={13} /> },
           ]}
         />
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-          <IconButton variant="toolbar" title="Undo (Ctrl Z)" onClick={() => step(false)} disabled={!!preview || !history.canUndo}><Undo2 size={14} /></IconButton>
-          <IconButton variant="toolbar" title="Redo (Ctrl Shift Z)" onClick={() => step(true)} disabled={!!preview || !history.canRedo}><Redo2 size={14} /></IconButton>
-        </div>
+        <UndoRedoButtons history={history} />
         <ZoomControls
           percent={scale * 100}
           canZoomOut={zoom > MIN_ZOOM} canZoomIn={zoom < MAX_ZOOM}
@@ -387,13 +337,11 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
         {newDrag?.moved && template && <PaletteDragGhost widget={template} x={newDrag.x} y={newDrag.y} scale={scale} overTrash={trash.over} heat={newHeat} />}
         {/* A widget dragged out of the canvas (towards the toolbox) keeps following the pointer. */}
-        {drag?.mode === "move" && pointer && dragRect.current && (() => {
-          const c = canvasRef.current?.getBoundingClientRect();
-          if (!c || (pointer.x >= c.left && pointer.x <= c.right && pointer.y >= c.top && pointer.y <= c.bottom)) return null;
-          const st = dragRect.current, r = st.rect;
-          return <PaletteDragGhost widget={drag.cur} x={r.left + r.width / 2 + pointer.x - st.x} y={r.top + r.height / 2 + pointer.y - st.y} scale={scale} overTrash={trash.over} heat={toolboxHeat} />;
+        {drag?.mode === "move" && (() => {
+          const g = bin.outsideGhost();
+          return g && <PaletteDragGhost widget={drag.cur} x={g.x} y={g.y} scale={scale} overTrash={trash.over} heat={bin.heat} />;
         })()}
-        {Math.max(toolboxHeat, newHeat) > 0 && <ToolboxBin rect={paletteRef.current?.getBoundingClientRect()} heat={Math.max(toolboxHeat, newHeat)} putBack={newHeat > 0} />}
+        {Math.max(bin.heat, newHeat) > 0 && <ToolboxBin rect={paletteRef.current?.getBoundingClientRect()} heat={Math.max(bin.heat, newHeat)} putBack={newHeat > 0} />}
 
         <ToolColumns tp={tp} side="right" nodes={tools} emptyHint="Properties can be edited in edit mode." />
       </div>

@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { SceneKind } from "../../scene/model";
 
 /** A widget being dragged in from the palette (client coordinates). */
-export type NewDrag = {
-  kind: SceneKind; startX: number; startY: number; x: number; y: number; moved: boolean;
+export type NewDrag<K extends string = string> = {
+  kind: K; startX: number; startY: number; x: number; y: number; moved: boolean;
   /** The pointer has been outside the toolbox (so coming back over it means "put it back"). */
   away: boolean;
 };
@@ -29,17 +28,19 @@ export function useTrash() {
   };
 }
 
+export type Trash = ReturnType<typeof useTrash>;
+
 /**
  * Palette drag: pointer events on the window (the chip stays put), the widget
  * itself follows the pointer. `onDrop` is read at drop time, so it may change
  * every render (it needs the current scene); the listeners only change per drag.
  */
-export function usePaletteDrag(trash: ReturnType<typeof useTrash>, onDrop: (d: NewDrag) => void,
+export function usePaletteDrag<K extends string>(trash: Trash, onDrop: (d: NewDrag<K>) => void,
   /** Client rect of the toolbox the drag started in. */
   homeRect?: () => DOMRect | undefined) {
-  const [newDrag, setNewDragState] = useState<NewDrag | null>(null);
-  const newDragRef = useRef<NewDrag | null>(null);
-  const setNewDrag = (d: NewDrag | null) => { newDragRef.current = d; setNewDragState(d); };
+  const [newDrag, setNewDragState] = useState<NewDrag<K> | null>(null);
+  const newDragRef = useRef<NewDrag<K> | null>(null);
+  const setNewDrag = (d: NewDrag<K> | null) => { newDragRef.current = d; setNewDragState(d); };
   const dropRef = useRef(onDrop);
   dropRef.current = onDrop;
   const trashRef = useRef(trash);
@@ -79,9 +80,20 @@ export function usePaletteDrag(trash: ReturnType<typeof useTrash>, onDrop: (d: N
     };
   }, [dragging]);
 
+  const start = (kind: K, x: number, y: number) => setNewDrag({ kind, startX: x, startY: y, x, y, moved: false, away: false });
   return {
     newDrag,
     /** Pointer pressed on a palette chip (a release without moving counts as a click). */
-    start: (kind: SceneKind, x: number, y: number) => setNewDrag({ kind, startX: x, startY: y, x, y, moved: false, away: false }),
+    start,
+    /**
+     * Props of a palette chip: pointer drag (a click is a drop without moving,
+     * handled by `onDrop`); keyboard activation calls `onKeyboardAdd`.
+     */
+    chipProps: (k: K, onKeyboardAdd: (k: K) => void): React.ButtonHTMLAttributes<HTMLButtonElement> => ({
+      onPointerDown: (e) => { if (e.button !== 0) return; e.preventDefault(); start(k, e.clientX, e.clientY); },
+      // Keyboard activation only (detail 0): pointer clicks are handled by the drag.
+      onClick: (e) => { if (e.detail === 0) onKeyboardAdd(k); },
+      style: { touchAction: "none", userSelect: "none" },
+    }),
   };
 }

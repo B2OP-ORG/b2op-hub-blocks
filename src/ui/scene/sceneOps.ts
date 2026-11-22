@@ -1,23 +1,16 @@
 // Edits of a scene document, written back to its file (header + generated Python).
 
-import { useApp } from "../../state/store";
 import { SCREEN_H, childrenOf, isContainer, makeWidget, subtree, withSceneHeader, type SceneDoc, type SceneKind, type SceneWidget } from "../../scene/model";
 import { absolutePos, clampedPos, contentOffset, drawnSize } from "../../scene/geometry";
 import { sceneToPython } from "../../scene/codegen";
 import { moveWidget, type TreeDrop } from "../../scene/reorder";
 import type { DrawResult } from "./DrawOverlay";
-import { recordSceneEdit } from "./sceneHistory";
+import { commitEdit } from "../hooks/useUndoRedo";
 
 export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected: string | null, setSelected: (uid: string | null) => void) {
-  /** Write `next` to the file as one undo step (`coalesceKey`: merge quick repeats, see sceneHistory). */
-  const commitDoc = (next: SceneDoc, coalesceKey?: string) => {
-    const st = useApp.getState();
-    const before = st.mfp.files.find((f) => f.id === fileId)?.content;
-    const content = withSceneHeader(next, sceneToPython(next, module));
-    if (content === before) return;
-    if (before !== undefined) recordSceneEdit(fileId, { content: before, selected }, coalesceKey);
-    st.updateFile(fileId, content);
-  };
+  /** Write `next` to the file as one undo step (`coalesceKey`: merge quick repeats, see editHistory). */
+  const commitDoc = (next: SceneDoc, coalesceKey?: string) =>
+    commitEdit(fileId, withSceneHeader(next, sceneToPython(next, module)), selected, coalesceKey);
   const commit = (widgets: SceneWidget[], coalesceKey?: string) => commitDoc({ ...doc, widgets }, coalesceKey);
 
   /**

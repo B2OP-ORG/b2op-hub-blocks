@@ -1,7 +1,5 @@
 import { GRID, type Widget } from "../../remote/layout";
 
-/** dataTransfer type of a palette chip being dragged onto the canvas. */
-export const DND_TYPE = "application/x-b2op-remote-widget";
 export const MIN_W = 64;
 export const MIN_H = 48;
 

@@ -356,6 +356,25 @@ describe("scene blocks", () => {
     expect(py).toMatch(/if False:\n {4}menu\.led0\.on\(\)\nelse:\n {4}menu\.led0\.off\(\)/);
   });
 
+  it("skips deleted / not yet created scenes and widgets", () => {
+    const py = run([
+      main({
+        type: "scene_show", fields: { SCENE: "gone" },
+        next: { block: { type: "scene_set_text", fields: { WIDGET: "gone.label0" }, inputs: { TEXT: text("Hi") },
+          next: { block: { type: "scene_set_text", fields: { WIDGET: "menu.label9" }, inputs: { TEXT: text("Hi") },
+            next: { block: { type: "text_print", inputs: { TEXT: { block: { type: "scene_get_value", fields: { WIDGET: "menu.bar9" } } } } } } } } } },
+      }),
+      { type: "scene_on_event", fields: { WIDGET: "menu.button9" }, inputs: { DO: { block: { type: "text_print", inputs: { TEXT: text("x") } } } } },
+    ]);
+    expect(py).not.toMatch(/^import (gone|menu)$/m);
+    expect(py).toContain('pass  # scene "gone" not found');
+    expect(py).toContain('pass  # scene widget "gone.label0" not found');
+    expect(py).toContain('pass  # scene widget "menu.label9" not found');
+    expect(py).toContain("print(0)");
+    expect(py).not.toContain("_on_menu_button9");
+    expect(py).not.toContain("menu.on(");
+  });
+
   it("offers blocks for the project's scenes in the flyout", () => {
     const fly = sceneFlyout() as { type?: string; fields?: Record<string, string> }[];
     expect(fly.find((b) => b.type === "scene_show")?.fields?.SCENE).toBe("menu");

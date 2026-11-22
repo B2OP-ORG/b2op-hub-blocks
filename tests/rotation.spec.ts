@@ -5,6 +5,7 @@ import { DEFAULT_ROTATE_SNAP, mergeEditorSettings } from "../src/settings/editor
 import { emptyScene, makeWidget } from "../src/scene/model";
 import { clampedPos, isOutside, rotateLine, widgetAngle } from "../src/scene/geometry";
 import { sceneToPython } from "../src/scene/codegen";
+import { uprightFrame } from "../src/ui/remote/widgetUtils";
 
 const close = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-9);
 
@@ -42,7 +43,7 @@ describe("rotation maths", () => {
   });
 
   it("snaps to big steps near the widget, small steps far away", () => {
-    const snap = DEFAULT_ROTATE_SNAP;
+    const snap = { near: 30, far: 5, distance: 80 };
     // Handle at the top-right corner of a 100x100 box; turn the pointer by ~20°.
     const pivot = { x: 50, y: -50 };
     const turn = (deg: number, r: number) => {
@@ -111,5 +112,16 @@ describe("scene rotation", () => {
     expect(py).toContain(`${name}_clip.set_style_transform_pivot_x(20, 0)`);
     expect(py).toContain(`${name}_clip.set_style_transform_pivot_y(30, 0)`);
     expect(py).toContain(`${name}_clip.set_style_transform_rotation(300, 0)`);
+  });
+});
+
+describe("remote card contents", () => {
+  it("turn back by the nearest quarter and swap the box on odd quarters", () => {
+    expect(uprightFrame({ w: 240, h: 72 })).toEqual({ quarter: 0, tilt: 0, w: 240, h: 72 });
+    expect(uprightFrame({ w: 240, h: 72, angle: 90 })).toEqual({ quarter: 1, tilt: 0, w: 72, h: 240 });
+    expect(uprightFrame({ w: 240, h: 72, angle: 180 })).toEqual({ quarter: 2, tilt: 0, w: 240, h: 72 });
+    expect(uprightFrame({ w: 240, h: 72, angle: 300 })).toEqual({ quarter: 3, tilt: 30, w: 72, h: 240 });
+    expect(uprightFrame({ w: 240, h: 72, angle: 30 })).toEqual({ quarter: 0, tilt: 30, w: 240, h: 72 });
+    expect(uprightFrame({ w: 240, h: 72, angle: 60 })).toEqual({ quarter: 1, tilt: -30, w: 72, h: 240 });
   });
 });

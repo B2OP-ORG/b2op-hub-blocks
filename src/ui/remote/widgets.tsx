@@ -107,7 +107,8 @@ function Switch({ w, p, live, values, onChange }: WidgetProps) {
     ? { left: "50%", transform: "translateX(-50%)", top: on ? `${INSET}px` : end, transition: "top .15s" }
     : { top: "50%", transform: "translateY(-50%)", left: on ? end : `${INSET}px`, transition: "left .15s" };
   const labelPos: React.CSSProperties = vertical
-    ? { left: "50%", transform: "translate(-50%, -50%)", top: on ? `calc(100% - ${KNOB} / 2 - ${INSET}px - ${KNOB} / 2)` : `calc(${KNOB} + ${INSET}px + ${KNOB} / 2)` }
+    // Centred in the free part of the track (the knob is at the top when on, at the bottom when off).
+    ? { left: "50%", transform: "translate(-50%, -50%)", top: on ? `calc((100% + ${INSET}px + ${KNOB}) / 2)` : `calc((100% - ${INSET}px - ${KNOB}) / 2)` }
     : { top: "50%", transform: "translateY(-50%)", ...(on ? { left: labelAt } : { right: labelAt }) };
   return (
     <button

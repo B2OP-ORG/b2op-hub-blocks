@@ -4,9 +4,21 @@ import { usePalette } from "../theme";
 import { DragGhost, DragHeatTint } from "../components/DragGhost";
 import { RotateHandle } from "../components/RotateHandle";
 import { WidgetBody } from "./widgets";
+import { uprightFrame } from "./widgetUtils";
 
 const CARD_RADIUS = 8;
 const noop = () => {};
+
+/**
+ * The card's own corners after 0..3 quarter turns, clockwise from its top-right
+ * (top-right, bottom-right, bottom-left, top-left on screen at 0°). Handles stay
+ * on them: the rotate handle on corner `quarter`, resize on `quarter + 1`.
+ */
+const CORNERS = [["right", "top"], ["right", "bottom"], ["left", "bottom"], ["left", "top"]] as const;
+const at = (i: number, off: number): React.CSSProperties => {
+  const [h, v] = CORNERS[i % 4];
+  return { [h]: -off, [v]: -off };
+};
 
 /** One widget on the remote canvas: header line, live body, resize handle when selected. */
 export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, rotating = false, panCursor, live, values, indicatorValue, overTrash = false, heat = 0, onChange, onBeginDrag, onDragMove, onDragEnd }: {
@@ -34,6 +46,11 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, rot
   onDragEnd: () => void;
 }) {
   const p = usePalette();
+  // Contents turn back by the nearest quarter turn (text upright, title on top) and lay out for the box as it stands.
+  // The card is drawn as that upright box (same centre), turned only by what is left (`tilt`): no transform at
+  // 0 / 90 / 180 / 270°, so text stays crisp. Its rounded frame looks the same either way.
+  const f = uprightFrame(w);
+  const shown: Widget = f.quarter ? { ...w, w: f.w, h: f.h, angle: f.tilt } : w;
   return (
     <div
       onPointerDown={(e) => onBeginDrag(e, w, "move")}
@@ -41,8 +58,8 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, rot
       onPointerUp={onDragEnd}
       onPointerCancel={onDragEnd}
       style={{
-        position: "absolute", left: w.x, top: w.y, width: w.w, height: w.h, boxSizing: "border-box",
-        transform: w.angle ? `rotate(${w.angle}deg)` : undefined,
+        position: "absolute", left: w.x + (w.w - f.w) / 2, top: w.y + (w.h - f.h) / 2, width: f.w, height: f.h, boxSizing: "border-box",
+        transform: f.tilt ? `rotate(${f.tilt}deg)` : undefined,
         display: "flex", flexDirection: "column", padding: showing ? "6px 12px 8px" : "6px 10px 8px",
         background: p.surface, borderRadius: CARD_RADIUS, opacity: overTrash ? 0.3 : 1,
         border: `${selected || conflict ? 2 : 1}px solid ${conflict ? p.danger : selected ? p.accent : p.border}`,
@@ -51,32 +68,32 @@ export function RemoteWidgetCard({ w, showing, selected, conflict, dragging, rot
         touchAction: "none", userSelect: "none",
       }}
     >
-      {showing ? (
-        // Finished look: just the name (a button carries its name itself).
-        w.kind !== "button" && (
-          <div style={{ fontSize: 14, lineHeight: 1.25, fontWeight: 600, color: p.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
-            {w.name}
+        {showing ? (
+          // Finished look: just the name (a button carries its name itself).
+          w.kind !== "button" && (
+            <div style={{ fontSize: 14, lineHeight: 1.25, fontWeight: 600, color: p.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
+              {w.name}
+            </div>
+          )
+        ) : (
+          <div style={{ fontSize: 11, color: p.dimText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
+            {w.kind === "button" ? KIND_LABEL[w.kind] : w.name}
+            <span style={{ opacity: 0.7 }}> · {w.kind === "joystick" ? `#${w.id}/${w.idY ?? w.id + 1}` : `#${w.id}`}</span>
           </div>
-        )
-      ) : (
-        <div style={{ fontSize: 11, color: p.dimText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 2 }}>
-          {w.kind === "button" ? KIND_LABEL[w.kind] : w.name}
-          <span style={{ opacity: 0.7 }}> · {w.kind === "joystick" ? `#${w.id}/${w.idY ?? w.id + 1}` : `#${w.id}`}</span>
+        )}
+        <div data-widget-body style={{ flex: 1, minHeight: 0, pointerEvents: showing && !panCursor ? "auto" : "none" }}>
+          <WidgetBody w={shown} p={p} live={live} values={values} value={indicatorValue} onChange={onChange} />
         </div>
-      )}
-      <div data-widget-body style={{ flex: 1, minHeight: 0, pointerEvents: showing && !panCursor ? "auto" : "none" }}>
-        <WidgetBody w={w} p={p} live={live} values={values} value={indicatorValue} onChange={onChange} />
-      </div>
       <DragHeatTint heat={heat} radius={CARD_RADIUS} />
       {selected && (
-        <RotateHandle size={16} offset={7} onPointerDown={(e) => onBeginDrag(e, w, "rotate")}
-          label={rotating ? `${w.angle ?? 0}°` : undefined} unrotate={w.angle ?? 0} />
+        <RotateHandle size={16} offset={7} corner={at(f.quarter, 7)} onPointerDown={(e) => onBeginDrag(e, w, "rotate")}
+          label={rotating ? `${w.angle ?? 0}°` : undefined} unrotate={f.tilt} />
       )}
       {selected && (
         <span
           onPointerDown={(e) => onBeginDrag(e, w, "resize")}
           title="Resize"
-          style={{ position: "absolute", right: -5, bottom: -5, width: 12, height: 12, borderRadius: 3, background: p.accent, cursor: "nwse-resize" }}
+          style={{ position: "absolute", ...at(f.quarter + 1, 5), width: 12, height: 12, borderRadius: 3, background: p.accent, cursor: f.quarter % 2 ? "nesw-resize" : "nwse-resize" }}
         />
       )}
     </div>
@@ -88,8 +105,9 @@ export function RemoteWidgetGhost({ w, x, y, zoom, overTrash, heat }: {
   w: Widget; x: number; y: number; zoom: number; overTrash: boolean; heat?: number;
 }) {
   return (
-    <DragGhost x={x} y={y} width={w.w} height={w.h} scale={zoom} angle={w.angle} overTrash={overTrash} heat={heat} radius={CARD_RADIUS}>
-      <RemoteWidgetCard w={{ ...w, x: 0, y: 0, angle: undefined }} showing={false} selected={false} conflict={false} dragging panCursor={undefined}
+    <DragGhost x={x} y={y} width={w.w} height={w.h} scale={zoom} overTrash={overTrash} heat={heat} radius={CARD_RADIUS}>
+      {/* The card turns itself (keeping its contents upright). */}
+      <RemoteWidgetCard w={{ ...w, x: 0, y: 0 }} showing={false} selected={false} conflict={false} dragging panCursor={undefined}
         live={false} values={{}} indicatorValue={undefined} onChange={noop} onBeginDrag={noop} onDragMove={noop} onDragEnd={noop} />
     </DragGhost>
   );

@@ -10,9 +10,11 @@ import { usePalette } from "../theme";
  * `label` (e.g. the angle while rotating) shows next to it, turned back by
  * `unrotate` degrees so it reads upright.
  */
-export function RotateHandle({ size, offset, label, unrotate = 0, onPointerDown }: {
+export function RotateHandle({ size, offset, corner, label, unrotate = 0, onPointerDown }: {
   size: number;
   offset: number;
+  /** Placement instead of the top-right corner (e.g. { right: -7, bottom: -7 }). */
+  corner?: React.CSSProperties;
   label?: string;
   unrotate?: number;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -21,7 +23,7 @@ export function RotateHandle({ size, offset, label, unrotate = 0, onPointerDown 
   return (
     <span onPointerDown={onPointerDown} title="Rotate (close to the widget: big steps, further away: small steps)"
       style={{
-        position: "absolute", right: -offset, top: -offset, width: size, height: size, boxSizing: "border-box",
+        position: "absolute", ...(corner ?? { right: -offset, top: -offset }), width: size, height: size, boxSizing: "border-box",
         display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%",
         background: p.accent, color: "#fff", cursor: "grab", touchAction: "none",
       }}>

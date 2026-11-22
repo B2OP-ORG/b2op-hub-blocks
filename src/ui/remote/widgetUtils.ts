@@ -51,3 +51,18 @@ export function localPoint(el: HTMLElement, clientX: number, clientY: number, an
   const [x, y] = rotateVec((clientX - (r.left + r.width / 2)) / scale, (clientY - (r.top + r.height / 2)) / scale, -angle);
   return { x: x + ow / 2, y: y + oh / 2 };
 }
+
+/**
+ * How a rotated card lays out its contents: they turn back by the nearest
+ * quarter turn (`quarter`, 0..3) so text stays upright (title on top) at
+ * 0 / 90 / 180 / 270°, and are laid out for the box as it then stands (width
+ * and height swapped on odd quarters). `tilt`: what is left of the rotation on
+ * screen, -45..45°.
+ */
+export function uprightFrame(w: Pick<Widget, "w" | "h" | "angle">): { quarter: number; tilt: number; w: number; h: number } {
+  const a = w.angle ?? 0;
+  const turns = Math.round(a / 90);
+  const quarter = ((turns % 4) + 4) % 4;
+  const odd = quarter % 2 === 1;
+  return { quarter, tilt: a - turns * 90, w: odd ? w.h : w.w, h: odd ? w.w : w.h };
+}

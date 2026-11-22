@@ -8,9 +8,10 @@
 // local copy of the scene (preview.ts). Pan / zoom: see hooks/useCanvasView.ts.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Monitor, Pencil } from "lucide-react";
+import { Eye, Monitor, PanelLeft, PanelRight, Pencil } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
+import type { PanelTool } from "../../settings/panelLayout";
 import { DISPLAY_KINDS, INPUT_KINDS, KIND_LABEL, SCREEN_H, SCREEN_W, emptyScene, makeWidget, moduleOfPath, splitSceneHeader, subtree, withSceneHeader, type SceneKind, type SceneWidget } from "../../scene/model";
 import { drawnSize } from "../../scene/geometry";
 import { sceneToPython } from "../../scene/codegen";
@@ -19,11 +20,14 @@ import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvas
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
 import { FileLoadError } from "../components/FileLoadError";
 import { ModeToggle } from "../components/ModeToggle";
-import { PaletteGroup } from "../components/PaletteGroup";
-import { Toolbar, ToolbarHint, ToolbarSeparator, ToolbarTitle } from "../components/Toolbar";
+import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
+import { PanelToggle } from "../components/PanelToggle";
+import { ToolColumns, type ToolNodes } from "../components/ToolPanels";
+import { useToolPanels } from "../hooks/useToolPanels";
+import { Toolbar } from "../components/Toolbar";
 import { ZoomControls } from "../components/ZoomControls";
 import { BASE, KIND_HINT, MARGIN } from "./constants";
-import { Outline } from "./Outline";
+import { OUTLINE_ROOT, Outline } from "./Outline";
 import { PaletteDragGhost } from "./PaletteDragGhost";
 import { PREVIEW_KEYS, applyPreviewKey, focusStops, startPreviewState, type PreviewState } from "./preview";
 import { SceneCanvas, type SceneNodeContext } from "./SceneCanvas";
@@ -33,11 +37,20 @@ import { TrashTarget } from "./TrashTarget";
 import { usePaletteDrag, useTrash, type NewDrag } from "./usePaletteDrag";
 import { WidgetProperties } from "./WidgetProperties";
 
+const SCENE_TOOLS: PanelTool[] = ["outline", "properties", "palette"];
+
 export function SceneView({ file }: { file: ProjectFile }) {
   const p = usePalette();
   const module = moduleOfPath(file.name);
   const parsed = useMemo(() => splitSceneHeader(file.content), [file.content]);
   const [selected, setSelected] = useState<string | null>(null);
+  /** Folded outline nodes (kept here: the outline remounts when the panels change). */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCollapsed = (id: string) => setCollapsed((c) => {
+    const next = new Set(c);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -56,6 +69,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   });
   const { zoom } = cv;
   const scale = zoom * BASE;
+  const tp = useToolPanels("scene", SCENE_TOOLS);
 
   // Keep the generated Python in step (e.g. after a codegen update or a renamed file).
   const doc0 = parsed.doc;
@@ -64,6 +78,17 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const want = withSceneHeader(doc0, sceneToPython(doc0, module));
     if (want !== file.content) useApp.getState().updateFile(file.id, want);
   }, [doc0, module, file.id, file.content]);
+
+  // Unfold the outline down to a newly selected widget (e.g. picked on the canvas).
+  // Only when the selection changes, so folding the selected widget's parent sticks.
+  const [unfoldedFor, setUnfoldedFor] = useState<string | null>(null);
+  if (selected !== unfoldedFor) {
+    setUnfoldedFor(selected);
+    const widgets = parsed.doc?.widgets ?? [];
+    const path = [OUTLINE_ROOT];
+    for (let w = widgets.find((x) => x.uid === selected); w?.parent; w = widgets.find((x) => x.uid === w!.parent)) path.push(w.parent);
+    if (selected && path.some((id) => collapsed.has(id))) setCollapsed(new Set([...collapsed].filter((id) => !path.includes(id))));
+  }
 
   if (!parsed.doc) {
     return (
@@ -157,13 +182,36 @@ export function SceneView({ file }: { file: ProjectFile }) {
     <PaletteGroup title={title} kinds={kinds} label={(k) => KIND_LABEL[k]} hint={(k) => `${KIND_HINT[k]} — drag onto the screen or click to add`} chipProps={chipProps} />
   );
 
+  const tools: ToolNodes = {
+    outline: <Outline doc={doc} selected={preview ? null : selected} collapsed={collapsed} onToggle={toggleCollapsed}
+      editable={!preview} onDropWidget={ops.moveTo} onSelect={(u) => { setPreview(null); setSelected(u); }} onMove={ops.moveZ} />,
+    properties: preview ? null : sel
+      ? <WidgetProperties key={sel.uid} doc={doc} w={sel} module={module} selPath={subtree(doc, sel.uid)}
+          onChange={(patch) => ops.update(sel.uid, patch)} onDelete={() => ops.remove(sel.uid)} />
+      : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch })} />,
+    palette: (
+      <PalettePanel>
+        {preview ? (
+          <PaletteHint>{preview.log}</PaletteHint>
+        ) : (
+          <>
+            {paletteGroup("Display", DISPLAY_KINDS)}
+            {paletteGroup("Buttons", INPUT_KINDS)}
+          </>
+        )}
+      </PalettePanel>
+    ),
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
-      <Toolbar>
-        <Monitor size={16} color={p.accent} />
-        <ToolbarTitle>{file.name}</ToolbarTitle>
-        <code style={{ fontSize: 11, color: p.dimText }}>import {module}</code>
+      {/* Compacts when narrow: 1 hides the import line, 2 the mode labels, 3 the zoom % and icon. */}
+      <Toolbar maxCompact={3}>{(c) => <>
+        {tp.has("left") && <PanelToggle open={tp.isOpen("left")} onToggle={() => tp.toggle("left")} title={tp.toggleTitle("left")} icon={<PanelLeft size={15} />} />}
+        {c < 3 && <Monitor size={15} color={p.accent} />}
+        {c < 1 && <code style={{ fontSize: 11, color: p.dimText }}>import {module}</code>}
         <ModeToggle
+          iconOnly={c >= 2}
           value={preview ? "preview" : "edit"}
           onChange={(m) => (m === "edit" ? setPreview(null) : startPreview())}
           options={[
@@ -175,24 +223,13 @@ export function SceneView({ file }: { file: ProjectFile }) {
           percent={scale * 100}
           canZoomOut={zoom > MIN_ZOOM} canZoomIn={zoom < MAX_ZOOM}
           onZoomOut={() => cv.zoomTo(zoom / ZOOM_STEP)} onZoomIn={() => cv.zoomTo(zoom * ZOOM_STEP)} onReset={() => cv.zoomTo(1)}
-          onFit={fitAll} fitTitle="Fit the screen into view"
+          onFit={fitAll} fitTitle="Fit the screen into view" hidePercent={c >= 3}
         />
-      </Toolbar>
-
-      <Toolbar variant="palette">
-        {preview ? (
-          <ToolbarHint>{preview.log}</ToolbarHint>
-        ) : (
-          <>
-            {paletteGroup("Display", DISPLAY_KINDS)}
-            <ToolbarSeparator />
-            {paletteGroup("Buttons", INPUT_KINDS)}
-          </>
-        )}
-      </Toolbar>
+        {tp.has("right") && <PanelToggle open={tp.isOpen("right")} onToggle={() => tp.toggle("right")} title={tp.toggleTitle("right")} icon={<PanelRight size={15} />} />}
+      </>}</Toolbar>
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <Outline doc={doc} selected={preview ? null : selected} onSelect={(u) => { setPreview(null); setSelected(u); }} onMove={ops.moveZ} />
+        <ToolColumns tp={tp} side="left" nodes={tools} emptyHint="Properties can be edited in edit mode." />
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
@@ -209,10 +246,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
 
         {newDrag?.moved && template && <PaletteDragGhost widget={template} x={newDrag.x} y={newDrag.y} scale={scale} overTrash={trash.over} />}
 
-        {!preview && (sel
-          ? <WidgetProperties key={sel.uid} doc={doc} w={sel} module={module} selPath={subtree(doc, sel.uid)}
-              onChange={(patch) => ops.update(sel.uid, patch)} onDelete={() => ops.remove(sel.uid)} />
-          : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch })} />)}
+        <ToolColumns tp={tp} side="right" nodes={tools} emptyHint="Properties can be edited in edit mode." />
       </div>
     </div>
   );

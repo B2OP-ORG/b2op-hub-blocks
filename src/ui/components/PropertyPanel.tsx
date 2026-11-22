@@ -2,9 +2,8 @@ import { Trash2 } from "lucide-react";
 import { Button } from "./Button";
 import styles from "./PropertyPanel.module.css";
 
-/** Right-hand inspector column of the scene / remote editors. */
-export function PropertyPanel({ width, title, subtitle, children }: {
-  width: number;
+/** Inspector of the scene / remote editors; fills its side panel and scrolls. */
+export function PropertyPanel({ title, subtitle, children }: {
   /** Bold header line (e.g. the widget kind); omit for a header-less panel. */
   title?: React.ReactNode;
   /** Muted text after the title, prefixed with "·". */
@@ -12,7 +11,7 @@ export function PropertyPanel({ width, title, subtitle, children }: {
   children: React.ReactNode;
 }) {
   return (
-    <div className={styles.panel} style={{ width }}>
+    <div className={styles.panel}>
       {title !== undefined && (
         <div className={styles.header}>
           {title}

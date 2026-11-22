@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import { SIDEBAR_TAB_IDS, type SidebarTabId } from "../../settings/editorSettings";
-import { loadSidebarLayout, saveSidebarLayout } from "../../settings/storage";
+import { loadPythonPreview, loadSidebarLayout, savePythonPreview, saveSidebarLayout, type PythonPreviewLayout } from "../../settings/storage";
 import { reorder } from "./helpers";
 import { EXAMPLE_PREVIEW_ID, type AppState, type ExtraTab } from "./types";
 
@@ -14,6 +14,10 @@ export interface UiSlice {
   openSidebarTab: (t: SidebarTabId) => void;
   setSidebarCollapsed: (v: boolean) => void;
   setSidebarWidth: (w: number) => void;
+
+  /** Read-only Python panel right of the blocks / scene editor. */
+  pyPanel: PythonPreviewLayout;
+  setPyPanel: (patch: Partial<PythonPreviewLayout>) => void;
 
   // ── Extra (non-file) editor tabs: doc pages, example previews ───────────
   /** Session-only; not stored in the project. */
@@ -45,6 +49,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get)
     openSidebarTab: (sidebarTab) => { set({ sidebarTab, sidebarCollapsed: false }); saveLayout(); },
     setSidebarCollapsed: (sidebarCollapsed) => { set({ sidebarCollapsed }); saveLayout(); },
     setSidebarWidth: (sidebarWidth) => { set({ sidebarWidth }); saveLayout(); },
+
+    pyPanel: loadPythonPreview(),
+    setPyPanel: (patch) => {
+      const pyPanel = { ...get().pyPanel, ...patch };
+      set({ pyPanel });
+      savePythonPreview(pyPanel);
+    },
 
     extraTabs: [],
     activeExtraTab: null,

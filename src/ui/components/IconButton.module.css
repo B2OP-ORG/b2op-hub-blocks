@@ -10,8 +10,8 @@
 }
 .btn:disabled { cursor: default; opacity: 0.4; }
 
-/* Editor toolbars (scene / remote): fixed 26×24 hit box. */
-.toolbar { width: 26px; height: 24px; padding: 0; color: var(--p-text); }
+/* Editor toolbars (scene / remote): fixed 24×22 hit box. */
+.toolbar { width: 24px; height: 22px; padding: 0; color: var(--p-text); }
 
 /* Panel headers and rows: muted icon, hover highlight. */
 .subtle { padding: 3px; color: var(--p-dim-text); }

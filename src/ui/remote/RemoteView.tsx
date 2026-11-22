@@ -12,17 +12,21 @@
 // useCanvasBounds.ts). Pan / zoom: see hooks/useCanvasView.ts.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Gamepad2, Pencil } from "lucide-react";
+import { Eye, Gamepad2, PanelLeft, PanelRight, Pencil } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { RemoteValue } from "../../device/protocol";
+import type { PanelTool } from "../../settings/panelLayout";
 import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
 import { FileLoadError } from "../components/FileLoadError";
 import { ModeToggle } from "../components/ModeToggle";
-import { PaletteGroup } from "../components/PaletteGroup";
-import { Toolbar, ToolbarHint, ToolbarSeparator, ToolbarTitle } from "../components/Toolbar";
+import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
+import { PanelToggle } from "../components/PanelToggle";
+import { ToolColumns, type ToolNodes } from "../components/ToolPanels";
+import { useToolPanels } from "../hooks/useToolPanels";
+import { Toolbar } from "../components/Toolbar";
 import { ZoomControls } from "../components/ZoomControls";
 import { KIND_HINT } from "./actions";
 import { DND_TYPE, MARGIN, MIN_H, MIN_W } from "./bounds";
@@ -38,6 +42,8 @@ import {
 import { messageByName, setControl, useRemoteSession } from "../../remote/session";
 
 const NO_WIDGETS: Widget[] = [];
+/** The remote editor has no outline. */
+const REMOTE_TOOLS: PanelTool[] = ["properties", "palette"];
 
 export function RemoteView({ file }: { file: ProjectFile }) {
   const p = usePalette();
@@ -68,6 +74,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
     onPanStart: () => widgetDrag.cancel(),
   });
   const { zoom, zoomRef } = cv;
+  const tp = useToolPanels("remote", REMOTE_TOOLS);
   const { bounds, origin } = useCanvasBounds({ canvasRef, widgets: parsed.layout?.widgets ?? NO_WIDGETS, hasLayout: parsed.layout !== null, zoom, zoomRef });
 
   // Symbols of the whole project (names / ids must be unique across layouts).
@@ -168,12 +175,43 @@ export function RemoteView({ file }: { file: ProjectFile }) {
       })} />
   );
 
+  const tools: ToolNodes = {
+    properties: sel ? (
+      <RemoteProperties
+        key={sel.uid} w={sel} fileName={file.name}
+        others={allSymbols.filter((s) => !(s.uid === sel.uid && s.file === file.name))}
+        onChange={(patch) => update(sel.uid, patch)}
+        onDelete={() => remove(sel.uid)}
+      />
+    ) : (
+      <PalettePanel>
+        <PaletteHint>{showing ? "Properties can be edited in edit mode." : "Select a widget to edit its properties."}</PaletteHint>
+      </PalettePanel>
+    ),
+    palette: (
+      <PalettePanel>
+        {live ? (
+          <PaletteHint>Controls are live while the program runs. <b>Stop</b> the program to edit.</PaletteHint>
+        ) : preview ? (
+          <PaletteHint>Preview: the controls react, but nothing is sent. Indicators show sample values.</PaletteHint>
+        ) : (
+          <>
+            {paletteGroup("Controls", CONTROL_KINDS)}
+            {paletteGroup("Indicators", INDICATOR_KINDS)}
+          </>
+        )}
+      </PalettePanel>
+    ),
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
-      <Toolbar>
-        <Gamepad2 size={16} color={p.accent} />
-        <ToolbarTitle>{file.name}</ToolbarTitle>
+      {/* Compacts when narrow: 1 hides the status text (still the icon's tooltip), 2 the mode labels, 3 the zoom % and icon. */}
+      <Toolbar maxCompact={3}>{(c) => <>
+        {tp.has("left") && <PanelToggle open={tp.isOpen("left")} onToggle={() => tp.toggle("left")} title={tp.toggleTitle("left")} icon={<PanelLeft size={15} />} />}
+        {c < 3 && <span title={status} style={{ display: "flex" }}><Gamepad2 size={15} color={p.accent} /></span>}
         <ModeToggle
+          iconOnly={c >= 2}
           value={live ? null : preview ? "preview" : "edit"}
           disabled={live}
           onChange={(m) => (m === "edit" ? setPreviewValues(null) : startPreview())}
@@ -182,32 +220,20 @@ export function RemoteView({ file }: { file: ProjectFile }) {
             { value: "preview", label: "Preview", title: "Preview: try the controller without a hub; nothing is sent", icon: <Eye size={13} /> },
           ]}
         />
-        <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>
+        {c < 1 && <span style={{ color: live ? p.okText : p.dimText, fontSize: 12 }}>{status}</span>}
         <ZoomControls
           percent={zoom * 100}
           canZoomOut={zoom > MIN_ZOOM} canZoomIn={zoom < MAX_ZOOM}
           onZoomOut={() => cv.zoomTo(zoom / ZOOM_STEP)} onZoomIn={() => cv.zoomTo(zoom * ZOOM_STEP)} onReset={() => cv.zoomTo(1)}
           resetTitle="Reset zoom to 100% (Ctrl 0)"
-          onFit={fitAll} fitTitle="Fit: move the widgets to the top-left and zoom to show them all"
+          onFit={fitAll} fitTitle="Fit: move the widgets to the top-left and zoom to show them all" hidePercent={c >= 3}
         />
-      </Toolbar>
-
-      {/* Palette (edit mode); same bar in run / preview so the canvas doesn't jump */}
-      <Toolbar variant="palette">
-        {live ? (
-          <ToolbarHint>Controls are live while the program runs. <b>Stop</b> the program to edit.</ToolbarHint>
-        ) : preview ? (
-          <ToolbarHint>Preview: the controls react, but nothing is sent. Indicators show sample values.</ToolbarHint>
-        ) : (
-          <>
-            {paletteGroup("Controls", CONTROL_KINDS)}
-            <ToolbarSeparator />
-            {paletteGroup("Indicators", INDICATOR_KINDS)}
-          </>
-        )}
-      </Toolbar>
+        {tp.has("right") && <PanelToggle open={tp.isOpen("right")} onToggle={() => tp.toggle("right")} title={tp.toggleTitle("right")} icon={<PanelRight size={15} />} />}
+      </>}</Toolbar>
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <ToolColumns tp={tp} side="left" nodes={tools} />
+
         <RemoteCanvas
           canvasRef={canvasRef}
           canvasProps={{ onKeyDown, ...cv.handlers, onPointerDown: () => setSelected(null) }}
@@ -230,15 +256,7 @@ export function RemoteView({ file }: { file: ProjectFile }) {
           ))}
         </RemoteCanvas>
 
-        {/* Properties (edit mode) */}
-        {sel && (
-          <RemoteProperties
-            key={sel.uid} w={sel} fileName={file.name}
-            others={allSymbols.filter((s) => !(s.uid === sel.uid && s.file === file.name))}
-            onChange={(patch) => update(sel.uid, patch)}
-            onDelete={() => remove(sel.uid)}
-          />
-        )}
+        <ToolColumns tp={tp} side="right" nodes={tools} />
       </div>
     </div>
   );

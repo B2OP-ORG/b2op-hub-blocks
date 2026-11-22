@@ -1,10 +1,11 @@
 import type { AutoReloadMode, AutoReloadSettings } from "../../settings/editorSettings";
 
-export type Section = "general" | "sidebar" | "blocks" | "code" | "lsp" | "device" | "run";
+export type Section = "general" | "sidebar" | "visual" | "blocks" | "code" | "lsp" | "device" | "run";
 
 export const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
   { id: "sidebar", label: "Sidebar" },
+  { id: "visual", label: "Scene & remote" },
   { id: "blocks", label: "Blocks editor" },
   { id: "code", label: "Code editor" },
   { id: "lsp", label: "Python language server" },

@@ -4,7 +4,7 @@ import { DND_TYPE, type Bounds } from "./bounds";
 
 /**
  * Scrollable, zoomable remote canvas. Accepts palette chips dropped from the
- * toolbar (`onDropKind` gets layout coordinates); `children` are the widget cards.
+ * palette panel (`onDropKind` gets layout coordinates); `children` are the widget cards.
  */
 export function RemoteCanvas({ canvasRef, canvasProps, showing, bounds, zoom, panCursor, empty, onDropKind, children }: {
   canvasRef: React.RefObject<HTMLDivElement | null>;

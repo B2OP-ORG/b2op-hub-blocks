@@ -4,6 +4,7 @@ import { useApp } from "../../state/store";
 import { SCREEN_H, childrenOf, isContainer, makeWidget, subtree, withSceneHeader, type SceneDoc, type SceneKind, type SceneWidget } from "../../scene/model";
 import { absolutePos, clampedPos, contentOffset, drawnSize } from "../../scene/geometry";
 import { sceneToPython } from "../../scene/codegen";
+import { moveWidget, type TreeDrop } from "../../scene/reorder";
 
 export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected: string | null, setSelected: (uid: string | null) => void) {
   const commitDoc = (next: SceneDoc) => useApp.getState().updateFile(fileId, withSceneHeader(next, sceneToPython(next, module)));
@@ -73,6 +74,12 @@ export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected
       const fits = bottom + 4 + (makeWidget(kind, 0, 0, doc).h || 0) <= h;
       const n = sibs.length;
       add(kind, fits ? 4 : 4 + (n % 8) * 6, fits ? (sibs.length ? bottom + 4 : 4) : 4 + (n % 8) * 6, parent?.uid, tab);
+    },
+
+    /** Outline drag & drop: reorder and / or move into another container. */
+    moveTo: (uid: string, drop: TreeDrop) => {
+      const next = moveWidget(doc, uid, drop);
+      if (next) commitDoc(next);
     },
 
     /** Swap a widget with its previous / next sibling (draw + focus order). */

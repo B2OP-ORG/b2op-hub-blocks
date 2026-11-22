@@ -50,6 +50,40 @@ export function saveSidebarLayout(l: SidebarLayout): void {
   try { localStorage.setItem(KEY_SIDEBAR, JSON.stringify(l)); } catch { /* ignore */ }
 }
 
+// ── Python preview panel (per-browser UI state) ──────────────────────────────
+
+export interface PythonPreviewLayout {
+  open: boolean;
+  /** Width when open (kept while closed). */
+  width: number;
+}
+
+const KEY_PY_PREVIEW = "b2op.pythonPreview";
+/** Older drawer size: a number, 0 = closed. */
+const KEY_PY_PREVIEW_OLD = "drawer.python";
+export const DEFAULT_PY_PREVIEW_WIDTH = 360;
+
+export function loadPythonPreview(): PythonPreviewLayout {
+  const def: PythonPreviewLayout = { open: false, width: DEFAULT_PY_PREVIEW_WIDTH };
+  try {
+    const raw = localStorage.getItem(KEY_PY_PREVIEW);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<PythonPreviewLayout>;
+      return {
+        open: typeof p.open === "boolean" ? p.open : def.open,
+        width: typeof p.width === "number" && Number.isFinite(p.width) && p.width > 0 ? p.width : def.width,
+      };
+    }
+    const old = Number(localStorage.getItem(KEY_PY_PREVIEW_OLD));
+    if (Number.isFinite(old) && old > 0) return { open: true, width: old };
+  } catch { /* corrupt / unavailable storage */ }
+  return def;
+}
+
+export function savePythonPreview(l: PythonPreviewLayout): void {
+  try { localStorage.setItem(KEY_PY_PREVIEW, JSON.stringify(l)); } catch { /* ignore */ }
+}
+
 // ── Editor settings ───────────────────────────────────────────────────────────
 
 export function loadEditorSettings(): EditorSettings {

@@ -1,19 +1,14 @@
+import { useRef } from "react";
+import { useCompactLevel } from "../hooks/useCompactLevel";
 import styles from "./Toolbar.module.css";
 
-/** Horizontal editor bar. `main` = title bar, `palette` = the widget palette row below it. */
-export function Toolbar({ variant = "main", children }: { variant?: "main" | "palette"; children: React.ReactNode }) {
-  return <div className={`${styles.bar} ${styles[variant]}`}>{children}</div>;
-}
-
-export function ToolbarTitle({ children }: { children: React.ReactNode }) {
-  return <span className={styles.title}>{children}</span>;
-}
-
-/** Muted one-line message shown in a palette bar instead of the palette. */
-export function ToolbarHint({ children }: { children: React.ReactNode }) {
-  return <span className={styles.hint}>{children}</span>;
-}
-
-export function ToolbarSeparator() {
-  return <span className={styles.separator} />;
+/**
+ * One-line title bar of an editor (mode toggle, zoom, panel toggles). Never
+ * wraps: like the app header, items compact step by step when it gets too
+ * narrow. `children` gets the compaction level 0…`maxCompact`.
+ */
+export function Toolbar({ maxCompact, children }: { maxCompact: number; children: (compact: number) => React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const compact = useCompactLevel(ref, maxCompact);
+  return <div ref={ref} className={styles.bar}>{children(compact)}</div>;
 }

@@ -36,7 +36,7 @@ export function WidgetProperties({ doc, w, module, selPath, onChange, onDelete }
   const textish = has("label", "button", "checkbox", "textarea", "list", "roller", "dropdown", "table", "tabview", "panel", "scrollbox", "scale", "arc");
 
   return (
-    <PropertyPanel width={260} title={KIND_LABEL[k]}>
+    <PropertyPanel title={KIND_LABEL[k]}>
       <TextField label="Name (Python variable)" value={w.name} validate={(v) => nameProblem(v.trim(), doc, w.uid, k)} onCommit={(v) => onChange({ name: v.trim() })} />
       <FieldRow>
         <NumberField label="X" value={w.x} int onCommit={(v) => onChange({ x: v })} />

@@ -34,7 +34,7 @@ export function RemoteProperties({ w, fileName, others, onChange, onDelete }: {
     : `remote.create_message(${w.id}, "${w.name}", ${typeConst})\nremote.send(${w.id}, value)`;
 
   return (
-    <PropertyPanel width={250} title={KIND_LABEL[w.kind]} subtitle={role}>
+    <PropertyPanel title={KIND_LABEL[w.kind]} subtitle={role}>
       <TextField label={w.kind === "joystick" ? "Name (sends name_x, name_y)" : "Name"} value={w.name} error={nameErr} onCommit={(v) => onChange({ name: v.trim() })} />
       <FieldRow>
         <NumberField label={w.kind === "joystick" ? "X id" : "Id"} value={w.id} min={0} max={255} int onCommit={(v) => onChange({ id: v })} />

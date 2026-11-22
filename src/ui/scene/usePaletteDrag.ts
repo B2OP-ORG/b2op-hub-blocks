@@ -19,16 +19,12 @@ export function useTrash() {
     /** Current value, safe to read in event handlers of the same tick. */
     overRef,
     set: (v: boolean) => { overRef.current = v; setOver(v); },
-    /**
-     * Pointer (x, y) near the bin, or the dragged thing's client `rect`
-     * touching it: the bin accepts in a generous range.
-     */
-    hit: (x: number, y: number, rect?: { left: number; top: number; right: number; bottom: number } | null) => {
+    /** Pointer (x, y) over the bin, or within a small margin of it. */
+    hit: (x: number, y: number) => {
       const r = ref.current?.getBoundingClientRect();
       if (!r) return false;
       const m = 16;
-      if (x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m) return true;
-      return !!rect && rect.right >= r.left && rect.left <= r.right && rect.bottom >= r.top && rect.top <= r.bottom;
+      return x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m;
     },
   };
 }
@@ -39,8 +35,6 @@ export function useTrash() {
  * every render (it needs the current scene); the listeners only change per drag.
  */
 export function usePaletteDrag(trash: ReturnType<typeof useTrash>, onDrop: (d: NewDrag) => void,
-  /** Client rect the dragged widget's ghost covers with the pointer at (x, y). */
-  ghostRect?: (d: NewDrag, x: number, y: number) => { left: number; top: number; right: number; bottom: number } | null,
   /** Client rect of the toolbox the drag started in. */
   homeRect?: () => DOMRect | undefined) {
   const [newDrag, setNewDragState] = useState<NewDrag | null>(null);
@@ -50,8 +44,6 @@ export function usePaletteDrag(trash: ReturnType<typeof useTrash>, onDrop: (d: N
   dropRef.current = onDrop;
   const trashRef = useRef(trash);
   trashRef.current = trash;
-  const ghostRef = useRef(ghostRect);
-  ghostRef.current = ghostRect;
   const homeRef = useRef(homeRect);
   homeRef.current = homeRect;
 
@@ -65,7 +57,7 @@ export function usePaletteDrag(trash: ReturnType<typeof useTrash>, onDrop: (d: N
       const h = homeRef.current?.();
       const inHome = !!h && e.clientX >= h.left && e.clientX <= h.right && e.clientY >= h.top && e.clientY <= h.bottom;
       setNewDrag({ ...d, x: e.clientX, y: e.clientY, moved, away: d.away || (moved && !inHome) });
-      trashRef.current.set(moved && trashRef.current.hit(e.clientX, e.clientY, ghostRef.current?.(d, e.clientX, e.clientY)));
+      trashRef.current.set(moved && trashRef.current.hit(e.clientX, e.clientY));
     };
     const up = () => {
       const d = newDragRef.current;

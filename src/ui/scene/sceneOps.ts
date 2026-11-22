@@ -6,19 +6,31 @@ import { absolutePos, clampedPos, contentOffset, drawnSize } from "../../scene/g
 import { sceneToPython } from "../../scene/codegen";
 import { moveWidget, type TreeDrop } from "../../scene/reorder";
 import type { DrawResult } from "./DrawOverlay";
+import { recordSceneEdit } from "./sceneHistory";
 
 export function sceneOps(doc: SceneDoc, fileId: string, module: string, selected: string | null, setSelected: (uid: string | null) => void) {
-  const commitDoc = (next: SceneDoc) => useApp.getState().updateFile(fileId, withSceneHeader(next, sceneToPython(next, module)));
-  const commit = (widgets: SceneWidget[]) => commitDoc({ ...doc, widgets });
+  /** Write `next` to the file as one undo step (`coalesceKey`: merge quick repeats, see sceneHistory). */
+  const commitDoc = (next: SceneDoc, coalesceKey?: string) => {
+    const st = useApp.getState();
+    const before = st.mfp.files.find((f) => f.id === fileId)?.content;
+    const content = withSceneHeader(next, sceneToPython(next, module));
+    if (content === before) return;
+    if (before !== undefined) recordSceneEdit(fileId, { content: before, selected }, coalesceKey);
+    st.updateFile(fileId, content);
+  };
+  const commit = (widgets: SceneWidget[], coalesceKey?: string) => commitDoc({ ...doc, widgets }, coalesceKey);
 
-  /** Merge `patch` into a widget; `undefined` values remove the key. */
-  const update = (uid: string, patch: Partial<SceneWidget>) =>
+  /**
+   * Merge `patch` into a widget; `undefined` values remove the key. `coalesce`:
+   * quick repeats of the same change (nudges, colour drags) are one undo step.
+   */
+  const update = (uid: string, patch: Partial<SceneWidget>, coalesce = false) =>
     commit(doc.widgets.map((w) => {
       if (w.uid !== uid) return w;
       const n = { ...w, ...patch };
       for (const k of Object.keys(patch) as (keyof SceneWidget)[]) if (patch[k] === undefined) delete n[k];
       return n;
-    }));
+    }), coalesce ? `${uid}:${Object.keys(patch).sort().join(",")}` : undefined);
 
   /** Delete a widget and everything inside it. */
   const remove = (uid: string) => {

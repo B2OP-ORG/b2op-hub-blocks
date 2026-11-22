@@ -6,9 +6,10 @@
 // Modes: Edit (drag / resize / properties) and Preview, where the arrow keys
 // and Enter act like the hub buttons (focus order, edit mode, events) on a
 // local copy of the scene (preview.ts). Pan / zoom: see hooks/useCanvasView.ts.
+// Undo / redo (toolbar, Ctrl Z / Ctrl Shift Z / Ctrl Y): see sceneHistory.ts.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Monitor, PanelLeft, PanelRight, Pencil } from "lucide-react";
+import { Eye, Monitor, PanelLeft, PanelRight, Pencil, Redo2, Undo2 } from "lucide-react";
 import { useApp } from "../../state/store";
 import type { ProjectFile } from "../../project/format";
 import type { PanelTool } from "../../settings/panelLayout";
@@ -20,6 +21,7 @@ import { usePalette } from "../theme";
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, useCanvasView } from "../hooks/useCanvasView";
 import { boxChanged, useWidgetDrag } from "../hooks/useWidgetDrag";
 import { FileLoadError } from "../components/FileLoadError";
+import { IconButton } from "../components/IconButton";
 import { ModeToggle } from "../components/ModeToggle";
 import { PaletteGroup, PaletteHint, PalettePanel } from "../components/PaletteGroup";
 import { PanelToggle } from "../components/PanelToggle";
@@ -31,6 +33,7 @@ import { ZoomControls } from "../components/ZoomControls";
 import { BASE, DRAW_TOOLS, PROP_FOLDED_BY_DEFAULT, KIND_HINT, KIND_ICON, MARGIN, PALETTE_CATEGORIES, PALETTE_LABEL, type DrawTool } from "./constants";
 import { DrawOverlay } from "./DrawOverlay";
 import { fitSceneImage } from "./imageUpload";
+import { redoScene, undoScene, useSceneHistory, type SceneSnapshot } from "./sceneHistory";
 import { OUTLINE_ROOT, Outline } from "./Outline";
 import { PaletteDragGhost } from "./PaletteDragGhost";
 import { PREVIEW_KEYS, applyPreviewKey, focusStops, startPreviewState, type PreviewState } from "./preview";
@@ -94,6 +97,27 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const { zoom } = cv;
   const scale = zoom * BASE;
   const tp = useToolPanels("scene", SCENE_TOOLS);
+  const history = useSceneHistory(file.id);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Refreshed every render below (null while undo / redo can't run, e.g. in preview).
+  const historyStep = useRef<((redo: boolean) => void) | null>(null);
+
+  // Ctrl Z = undo, Ctrl Shift Z / Ctrl Y = redo: anywhere in the scene view
+  // (or with nothing focused), except text fields, which keep their own undo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== "z" && !(k === "y" && !e.shiftKey)) return;
+      const t = e.target as HTMLElement;
+      if (t !== document.body && !rootRef.current?.contains(t)) return;
+      if (t.closest("textarea,[contenteditable],input:not([type=checkbox],[type=radio],[type=color],[type=range],[type=button])")) return;
+      e.preventDefault();
+      historyStep.current?.(k === "y" || e.shiftKey);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Keep the generated Python in step (e.g. after a codegen update or a renamed file).
   const doc0 = parsed.doc;
@@ -115,6 +139,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   }
 
   if (!parsed.doc) {
+    historyStep.current = null;
     return (
       <FileLoadError fileName={file.name} error={parsed.error ?? ""} resetLabel="Replace with an empty scene"
         onReset={() => { const d = emptyScene(); useApp.getState().updateFile(file.id, withSceneHeader(d, sceneToPython(d, module))); }} />
@@ -126,8 +151,8 @@ export function SceneView({ file }: { file: ProjectFile }) {
   // Image widgets: a new size re-renders their PNG at that size (the hub draws it 1:1).
   const ops = {
     ...ops0,
-    update: (uid: string, patch: Partial<SceneWidget>) => {
-      ops0.update(uid, patch);
+    update: (uid: string, patch: Partial<SceneWidget>, coalesce = false) => {
+      ops0.update(uid, patch, coalesce);
       if ((patch.w !== undefined || patch.h !== undefined) && doc.widgets.find((x) => x.uid === uid)?.kind === "image") {
         fitSceneImage(file.name, uid).catch((e: Error) => useApp.getState().appendConsole("err", `[image resize failed: ${e.message}]\n`));
       }
@@ -232,8 +257,25 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const step = e.shiftKey ? 8 : 1;
     const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     const m = moves[e.key];
-    if (m) { e.preventDefault(); ops.update(w.uid, { x: w.x + m[0], y: w.y + m[1] }); }
+    if (m) { e.preventDefault(); ops.update(w.uid, { x: w.x + m[0], y: w.y + m[1] }, true); }
   };
+
+  // ── Undo / redo ─────────────────────────────────────────────────────────────
+  const restore = (s: SceneSnapshot) => {
+    useApp.getState().updateFile(file.id, s.content);
+    const restored = splitSceneHeader(s.content).doc;
+    setSelected(restored?.widgets.some((w) => w.uid === s.selected) ? s.selected : null);
+    // Image PNGs follow their widget's size (a no-op when they already match).
+    for (const w of restored?.widgets ?? []) {
+      if (w.kind === "image") fitSceneImage(file.name, w.uid).catch((e: Error) => useApp.getState().appendConsole("err", `[image resize failed: ${e.message}]\n`));
+    }
+  };
+  const step = (redo: boolean) => {
+    const current: SceneSnapshot = { content: useApp.getState().mfp.files.find((f) => f.id === file.id)?.content ?? file.content, selected };
+    const s = redo ? redoScene(file.id, current) : undoScene(file.id, current);
+    if (s) restore(s);
+  };
+  historyStep.current = preview || drag ? null : step;
 
   const fitAll = () => cv.fit(0, 0, (SCREEN_W + MARGIN * 2) * BASE, (SCREEN_H + MARGIN * 2) * BASE);
   const panCursor = cv.panning ? "grabbing" : cv.spaceHeld ? "grab" : undefined;
@@ -272,8 +314,8 @@ export function SceneView({ file }: { file: ProjectFile }) {
       editable={!preview} onDropWidget={ops.moveTo} onSelect={(u) => { setPreview(null); setSelected(u); }} onMove={ops.moveZ} />,
     properties: preview ? null : sel
       ? <WidgetProperties key={sel.uid} doc={doc} w={sel} module={module} scenePath={file.name} selPath={subtree(doc, sel.uid)} folds={propFolds}
-          onChange={(patch) => ops.update(sel.uid, patch)} onDelete={() => ops.remove(sel.uid)} />
-      : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch })} />,
+          onChange={(patch) => ops.update(sel.uid, patch, true)} onDelete={() => ops.remove(sel.uid)} />
+      : <SceneProperties doc={doc} module={module} onChange={(patch) => ops.commitDoc({ ...doc, ...patch }, `scene:${Object.keys(patch).sort().join(",")}`)} />,
     palette: (
       <PalettePanel ref={paletteRef}>
         {preview ? (
@@ -293,7 +335,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", height: "100%", color: p.text, fontSize: 13 }}>
       {/* Compacts when narrow: 1 hides the import line, 2 the mode labels, 3 the zoom % and icon. */}
       <Toolbar maxCompact={3}>{(c) => <>
         {tp.has("left") && <PanelToggle open={tp.isOpen("left")} onToggle={() => tp.toggle("left")} title={tp.toggleTitle("left")} icon={<PanelLeft size={15} />} />}
@@ -308,6 +350,10 @@ export function SceneView({ file }: { file: ProjectFile }) {
             { value: "preview", label: "Preview", title: "Try the hub buttons: ↑ ↓ = up / down, Enter = center, ← = left", icon: <Eye size={13} /> },
           ]}
         />
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+          <IconButton variant="toolbar" title="Undo (Ctrl Z)" onClick={() => step(false)} disabled={!!preview || !history.canUndo}><Undo2 size={14} /></IconButton>
+          <IconButton variant="toolbar" title="Redo (Ctrl Shift Z)" onClick={() => step(true)} disabled={!!preview || !history.canRedo}><Redo2 size={14} /></IconButton>
+        </div>
         <ZoomControls
           percent={scale * 100}
           canZoomOut={zoom > MIN_ZOOM} canZoomIn={zoom < MAX_ZOOM}

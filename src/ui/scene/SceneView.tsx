@@ -39,8 +39,6 @@ import { sceneOps } from "./sceneOps";
 import { SceneProperties } from "./SceneProperties";
 import { ToolboxBin, TrashTarget } from "./TrashTarget";
 import { usePaletteDrag, useTrash, type NewDrag } from "./usePaletteDrag";
-
-type DOMRectLike = { left: number; top: number; right: number; bottom: number };
 import { WidgetProperties } from "./WidgetProperties";
 import { SceneAssetContext } from "./sceneAssets";
 
@@ -76,8 +74,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   /** Moving a widget: its client rect follows the pointer from where it was at the start. */
   const dragRect = useRef<{ rect: DOMRect; x: number; y: number } | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
-  const ghostRectFn = useRef<(d: NewDrag, x: number, y: number) => DOMRectLike | null>(() => null);
-  const paletteDrag = usePaletteDrag(trash, (d) => dropNew.current(d), (d, x, y) => ghostRectFn.current(d, x, y),
+  const paletteDrag = usePaletteDrag(trash, (d) => dropNew.current(d),
     () => paletteRef.current?.getBoundingClientRect());
   /** 0..1 as client point (x, y) nears the toolbox (1 = over it). */
   const heatAt = (x: number, y: number) => {
@@ -154,11 +151,6 @@ export function SceneView({ file }: { file: ProjectFile }) {
     const lineOff = w.kind === "line" ? (w.width ?? 2) / 2 : 0;
     ops.addAt(d.kind, (d.x - scr.left) / scale, (d.y - scr.top) / scale, size.w / 2 - lineOff, size.h / 2 - lineOff);
   };
-  ghostRectFn.current = (d, x, y) => {
-    const size = drawnSize(makeWidget(d.kind, 0, 0, doc));
-    const w = size.w * scale, h = size.h * scale;
-    return { left: x - w / 2, top: y - h / 2, right: x + w / 2, bottom: y + h / 2 };
-  };
 
   // ── Widget drag (move / resize) ─────────────────────────────────────────────
   const { drag } = widgetDrag;
@@ -175,9 +167,7 @@ export function SceneView({ file }: { file: ProjectFile }) {
   const onDragMove = (e: React.PointerEvent) => {
     if (!drag) return;
     if (drag.mode === "move") {
-      const st = dragRect.current;
-      const rect = st && { left: st.rect.left + e.clientX - st.x, top: st.rect.top + e.clientY - st.y, right: st.rect.right + e.clientX - st.x, bottom: st.rect.bottom + e.clientY - st.y };
-      trash.set(trash.hit(e.clientX, e.clientY, rect));
+      trash.set(trash.hit(e.clientX, e.clientY));
       // Toolbox as a bin: red-hot as the pointer comes within 120 px of it.
       setToolboxHeat(heatAt(e.clientX, e.clientY));
       setPointer({ x: e.clientX, y: e.clientY });

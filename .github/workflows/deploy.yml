@@ -26,10 +26,10 @@ jobs:
       artifact: blocks-html
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -45,7 +45,7 @@ jobs:
           tar -C dist -czf blocks-html.tar.gz .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blocks-html
           path: blocks-html.tar.gz
@@ -85,13 +85,13 @@ jobs:
 
       - name: Checkout (for receiver script)
         if: steps.gate.outputs.ready == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: deploy
 
       - name: Download build artifact
         if: steps.gate.outputs.ready == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: blocks-html
           path: .
